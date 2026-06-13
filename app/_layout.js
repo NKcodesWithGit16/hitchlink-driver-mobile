@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { View, useWindowDimensions } from 'react-native';
+import { useEffect, Component } from 'react';
+import { View, useWindowDimensions, Text } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -15,6 +15,22 @@ import { AlertProvider } from '../src/context/AlertContext';
 import { WeatherToast, WeatherAlertModalGlobal } from '../src/components/ui/WeatherToast';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
+
+class ErrorBoundary extends Component {
+  state = { error: null };
+  static getDerivedStateFromError(e) { return { error: e }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <View style={{ flex: 1, backgroundColor: '#0A0E14', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <Text style={{ color: '#FF4D4F', fontSize: 16, fontWeight: 'bold', marginBottom: 12 }}>Startup Error</Text>
+          <Text style={{ color: '#F2F6FB', fontSize: 13, textAlign: 'center' }}>{String(this.state.error)}</Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function RouteGate() {
   const { ready, signedIn, onboarded } = useAuth();
@@ -66,14 +82,16 @@ export default function RootLayout() {
   if (!loaded && !error) return null;
 
   return (
-    <SafeAreaProvider style={{ flex: 1, minWidth: 0, maxWidth: '100%' }}>
-      <ThemeProvider>
-        <AlertProvider>
-          <AuthProvider>
-            <ThemedShell />
-          </AuthProvider>
-        </AlertProvider>
-      </ThemeProvider>
-    </SafeAreaProvider>
+    <ErrorBoundary>
+      <SafeAreaProvider style={{ flex: 1, minWidth: 0, maxWidth: '100%' }}>
+        <ThemeProvider>
+          <AlertProvider>
+            <AuthProvider>
+              <ThemedShell />
+            </AuthProvider>
+          </AlertProvider>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    </ErrorBoundary>
   );
 }
