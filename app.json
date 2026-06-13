@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "HitchLink Driver",
+    "slug": "hitchlink-driver",
+    "scheme": "hitchlinkdriver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#0A0E14",
+    "newArchEnabled": true,
+    "plugins": [
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "HitchLink uses the camera to capture proof-of-delivery photos.",
+          "photosPermission": "HitchLink uses your photos to attach proof-of-delivery."
+        }
+      ],
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "backgroundColor": "#04285A"
+        }
+      ],
+      "expo-audio",
+      "expo-secure-store"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "userInterfaceStyle": "automatic"
+    },
+    "android": {
+      "edgeToEdgeEnabled": true,
+      "userInterfaceStyle": "automatic",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#04285A"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
