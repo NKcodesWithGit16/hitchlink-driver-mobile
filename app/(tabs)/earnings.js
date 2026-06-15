@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Animated } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, Animated, RefreshControl } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,6 +7,7 @@ import Icon from '../../src/components/ui/Icon';
 import CountUp from '../../src/components/ui/CountUp';
 import FadeInView from '../../src/components/ui/FadeInView';
 import Skeleton from '../../src/components/ui/Skeleton';
+import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { fetchEarnings } from '../../src/api/main';
@@ -23,10 +24,27 @@ export default function EarningsScreen() {
   const [data, setData]   = useState(null);
   const [range, setRange] = useState('week');
   const [expanded, setExpanded] = useState(null);
+  const [error, setError] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    fetchEarnings(userId).then(setData).catch(() => {});
+  const loadData = useCallback(async () => {
+    try {
+      const res = await fetchEarnings(userId);
+      setData(res);
+      setError(false);
+    } catch {
+      // Don't leave the skeleton spinning forever — surface a retry instead.
+      setError(true);
+    }
   }, [userId]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData();
+    setRefreshing(false);
+  }, [loadData]);
 
   const d = data?.[range];
   const delta = useMemo(() => (d ? Math.round(((d.net - d.prevNet) / d.prevNet) * 100) : 0), [d]);
@@ -65,6 +83,11 @@ export default function EarningsScreen() {
             <Text style={styles.heroCompare}>vs {money(d.prevNet)} last {range}</Text>
             <AnimatedChart bars={d.bars} colors={colors} styles={styles} range={range} />
           </>
+        ) : error ? (
+          <View style={{ marginTop: space[3], gap: 4 }}>
+            <Text style={styles.heroValue}>—</Text>
+            <Text style={styles.heroCompare}>Pay data unavailable right now</Text>
+          </View>
         ) : (
           <View style={{ marginTop: space[3], gap: space[3] }}>
             <Skeleton width={210} height={52} radius={radius.md} style={{ backgroundColor: 'rgba(255,255,255,0.20)' }} />
@@ -78,6 +101,7 @@ export default function EarningsScreen() {
         contentContainerStyle={{ padding: space[4], paddingBottom: 120, gap: space[4] }}
         showsVerticalScrollIndicator={false}
         style={{ backgroundColor: colors.bg }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.teal} />}
       >
         {d ? (
           <>
@@ -147,6 +171,23 @@ export default function EarningsScreen() {
               </FadeInView>
             ))}
           </>
+        ) : error ? (
+          <View style={styles.errorBox}>
+            <View style={[styles.errorIcon, { backgroundColor: colors.cautionFill }]}>
+              <Icon name="wifi-off" size={26} color={colors.caution} />
+            </View>
+            <Text style={[styles.errorTitle, { color: colors.textPrimary }]}>Couldn't load your pay</Text>
+            <Text style={[styles.errorSub, { color: colors.textSecondary }]}>Check your signal — your earnings are safe and will load the moment you reconnect.</Text>
+            <Pressable
+              onPress={onRefresh}
+              style={[styles.retryBtn, { borderColor: colors.teal }]}
+              accessibilityRole="button"
+              accessibilityLabel="Try loading earnings again"
+            >
+              <Icon name="refresh-cw" size={15} color={colors.teal} />
+              <Text style={[styles.retryText, { color: colors.teal }]}>Try again</Text>
+            </Pressable>
+          </View>
         ) : (
           <EarningsBodySkeleton colors={colors} styles={styles} />
         )}
@@ -196,7 +237,15 @@ function Segmented({ value, onChange, colors, styles }) {
   return (
     <View style={styles.segment}>
       {['week', 'month'].map((k) => (
-        <Pressable key={k} onPress={() => onChange(k)} style={[styles.segBtn, value === k && styles.segActive]}>
+        <Pressable
+          key={k}
+          onPress={() => onChange(k)}
+          style={[styles.segBtn, value === k && styles.segActive]}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityState={{ selected: value === k }}
+          accessibilityLabel={k === 'week' ? 'Show this week' : 'Show this month'}
+        >
           <Text style={[styles.segText, value === k && styles.segTextActive]}>{k === 'week' ? 'Week' : 'Month'}</Text>
         </Pressable>
       ))}
@@ -205,23 +254,29 @@ function Segmented({ value, onChange, colors, styles }) {
 }
 
 function AnimatedChart({ bars, colors, styles, range }) {
+  const reduce = useReduceMotion();
   const anims = useRef(bars.map(() => new Animated.Value(0))).current;
   const max = Math.max(...bars.map(b => b.v), 1);
   const peakIdx = bars.findIndex(b => b.v === max);
 
   useEffect(() => {
-    // Reset then animate
+    const finals = bars.map(b => (b.v > 0 ? b.v / max : 0));
+    if (reduce) {
+      // Respect OS reduce-motion: snap straight to final heights, no growth.
+      anims.forEach((a, i) => a.setValue(finals[i]));
+      return;
+    }
     anims.forEach(a => a.setValue(0));
     const seq = bars.map((b, i) =>
       Animated.timing(anims[i], {
-        toValue: b.v > 0 ? b.v / max : 0,
+        toValue: finals[i],
         duration: 520,
         delay: i * 55,
         useNativeDriver: false,
       })
     );
     Animated.parallel(seq).start();
-  }, [range]);
+  }, [range, reduce]);
 
   return (
     <View style={styles.chart}>
@@ -305,6 +360,9 @@ function LoadCard({ load, expanded, onToggle, colors, styles }) {
     <Pressable
       onPress={onToggle}
       style={[styles.loadCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
+      accessibilityRole="button"
+      accessibilityState={{ expanded }}
+      accessibilityLabel={`${load.from} to ${load.to}, took home ${money(load.net)}. ${expanded ? 'Tap to hide' : 'Tap to show'} breakdown`}
     >
       {/* green left accent stripe */}
       <View style={[styles.loadStripe, { backgroundColor: colors.go }]} />
@@ -412,4 +470,12 @@ const makeStyles = (c) => StyleSheet.create({
   loadNet: { fontSize: 18, fontFamily: FONT.black, letterSpacing: -0.3 },
   dpmBadge: { borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 7, paddingVertical: 3 },
   dpmText: { fontSize: 10, fontFamily: FONT.black },
+
+  /* Error / retry */
+  errorBox: { alignItems: 'center', justifyContent: 'center', gap: space[3], paddingVertical: space[10], paddingHorizontal: space[4] },
+  errorIcon: { width: 64, height: 64, borderRadius: 999, alignItems: 'center', justifyContent: 'center', marginBottom: space[1] },
+  errorTitle: { fontSize: 18, fontFamily: FONT.black, textAlign: 'center' },
+  errorSub: { ...type.caption, textAlign: 'center', lineHeight: 20, maxWidth: 300 },
+  retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: space[1], paddingHorizontal: space[5], paddingVertical: space[3], borderRadius: radius.pill, borderWidth: 1 },
+  retryText: { ...type.bodyStrong, fontSize: 15 },
 });

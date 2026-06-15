@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, Pressable,
-  KeyboardAvoidingView, Platform, Linking, Animated,
+  KeyboardAvoidingView, Platform, Linking, Animated, Image,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -66,6 +67,15 @@ export default function MessagesScreen() {
 
   const sendVoice = useCallback(({ uri, durationSec }) => append({ kind: 'voice', uri, durationSec }), [append]);
 
+  const pickAttachment = useCallback(async () => {
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({ quality: 0.6 });
+      if (res.canceled) return;
+      const uri = res.assets?.[0]?.uri;
+      if (uri) append({ kind: 'image', uri });
+    } catch {}
+  }, [append]);
+
   return (
     <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
 
@@ -95,6 +105,8 @@ export default function MessagesScreen() {
           <Pressable
             onPress={() => dispatcher?.phone && Linking.openURL(`tel:${dispatcher.phone}`).catch(() => {})}
             style={[styles.headerBtn, { backgroundColor: colors.goFill, borderColor: colors.go }]}
+            accessibilityRole="button"
+            accessibilityLabel={`Call ${dispatcher?.name || 'dispatcher'}`}
           >
             <Icon name="phone-call" size={17} color={colors.go} />
           </Pressable>
@@ -143,6 +155,8 @@ export default function MessagesScreen() {
                   { borderColor: pressed ? colors.teal : colors.border,
                     backgroundColor: pressed ? colors.tealFill : colors.surface2 },
                 ]}
+                accessibilityRole="button"
+                accessibilityLabel={`Send quick reply: ${label}`}
               >
                 <Icon name={icon} size={12} color={colors.teal} />
                 <Text style={[styles.chipText, { color: colors.textSecondary }]}>{label}</Text>
@@ -154,7 +168,13 @@ export default function MessagesScreen() {
         {/* ── Composer ── */}
         <View style={[styles.composerOuter, { backgroundColor: colors.surface, borderTopColor: colors.border, paddingBottom: Math.max(insets.bottom, space[3]) }]}>
           <View style={[styles.composerInner, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
-            <Pressable style={styles.attachBtn} hitSlop={8}>
+            <Pressable
+              onPress={pickAttachment}
+              style={styles.attachBtn}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Attach a photo"
+            >
               <Icon name="paperclip" size={18} color={colors.textMuted} />
             </Pressable>
             <TextInput
@@ -256,9 +276,12 @@ function Bubble({ msg, prev, next, colors, styles }) {
 function BubbleBody({ msg, mine, colors, styles }) {
   const ink = mine ? colors.onAccent : colors.textPrimary;
   const isVoice = msg.kind === 'voice';
+  const isImage = msg.kind === 'image';
   return (
     <>
-      {isVoice ? (
+      {isImage ? (
+        <Image source={{ uri: msg.uri }} style={styles.bubbleImage} resizeMode="cover" accessibilityLabel="Attached photo" />
+      ) : isVoice ? (
         msg.uri
           ? <VoicePlayable uri={msg.uri} durationSec={msg.durationSec} mine={mine} colors={colors} styles={styles} />
           : <VoiceStatic durationSec={msg.durationSec} mine={mine} colors={colors} styles={styles} />
@@ -383,7 +406,7 @@ const makeStyles = (c) => StyleSheet.create({
   statusDot: { width: 7, height: 7, borderRadius: 999 },
   statusText: { ...type.caption },
   headerActions: { flexDirection: 'row', gap: space[2], marginLeft: space[3] },
-  headerBtn: { width: 40, height: 40, borderRadius: 999, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  headerBtn: { width: 44, height: 44, borderRadius: 999, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
 
   /* Load banner */
   loadBanner: {
@@ -418,6 +441,7 @@ const makeStyles = (c) => StyleSheet.create({
   tailTheirs: { borderBottomLeftRadius:  6 },
 
   bubbleText: { ...type.body, lineHeight: 22 },
+  bubbleImage: { width: 200, height: 150, borderRadius: radius.md, marginBottom: 2 },
   meta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 3, marginTop: 1 },
   metaTime: { fontSize: 10, fontFamily: FONT.medium },
 
@@ -435,7 +459,7 @@ const makeStyles = (c) => StyleSheet.create({
   /* Quick replies */
   quickWrap: { borderTopWidth: 1 },
   quick: { paddingHorizontal: space[4], paddingVertical: space[3], gap: 0, flexDirection: 'row' },
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: space[3], paddingVertical: 7, marginRight: space[2] },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 44, borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: space[3], paddingVertical: 7, marginRight: space[2] },
   chipText: { fontSize: 12, fontFamily: FONT.bold },
 
   /* Composer */
@@ -445,7 +469,7 @@ const makeStyles = (c) => StyleSheet.create({
     borderRadius: radius.xl, borderWidth: 1,
     paddingLeft: space[3], paddingRight: space[2], paddingVertical: space[2],
   },
-  attachBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  input: { flex: 1, minHeight: 36, maxHeight: 110, paddingVertical: 6, ...type.body },
-  sendBtn: { width: 38, height: 38, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  attachBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  input: { flex: 1, minHeight: 44, maxHeight: 110, paddingVertical: 6, ...type.body },
+  sendBtn: { width: 44, height: 44, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
 });

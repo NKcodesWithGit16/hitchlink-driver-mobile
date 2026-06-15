@@ -23,7 +23,7 @@ export default function HOSPill({ driveMinutesLeft, onPress }) {
       accessibilityLabel={`Hours of service: ${hm(driveMinutesLeft)} of drive time left`}
     >
       <Icon name="clock" size={13} color={t.solid} />
-      <Text style={[styles.label, { color: t.solid }]}>HOS</Text>
+      <Text style={[styles.label, { color: t.solid }]}>DRIVE</Text>
       <Text style={[styles.value, { color: colors.textPrimary }, type.num]}>{hm(driveMinutesLeft)}</Text>
     </Pressable>
   );

@@ -26,6 +26,7 @@ import BrandLogo from '../../src/components/BrandLogo';
 import OfflineBanner from '../../src/components/ui/OfflineBanner';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import GlassView from '../../src/components/ui/GlassView';
+import UndoToast from '../../src/components/ui/UndoToast';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useNetworkStatus } from '../../src/hooks/useNetworkStatus';
 import { enqueue, flush, queueCount } from '../../src/lib/offlineQueue';
@@ -37,7 +38,7 @@ import { fetchActiveLoad, updateLoadStatus } from '../../src/api/main';
 import { hos, weatherNow } from '../../src/data/mock';
 import { nextAction, statusChip, nextStop, isPrePickup } from '../../src/lib/load';
 import { money, num, rpm } from '../../src/lib/format';
-import { space, type, radius, FONT, shadow, toneOf } from '../../src/theme/tokens';
+import { space, type, radius, FONT, shadow, toneOf, tap } from '../../src/theme/tokens';
 import { photos } from '../../src/theme/photos';
 
 export default function LoadScreen() {
@@ -58,11 +59,19 @@ export default function LoadScreen() {
   const [expanded, setExpanded] = useState(false);
   const [podUri, setPodUri] = useState(null);
   const [pendingAction, setPendingAction] = useState(null);
+  const [error, setError] = useState(false);
+  const [undo, setUndo] = useState(null); // { prevStatus, message }
 
   const loadData = useCallback(async () => {
-    const d = await fetchActiveLoad(user?.id).catch(() => null);
-    setLoad(d);
-    setStatus(d?.status ?? null);
+    try {
+      const d = await fetchActiveLoad(user?.id);
+      setLoad(d);
+      setStatus(d?.status ?? null);
+      setError(false);
+    } catch {
+      // A failed fetch must NOT look like a happy "no load" — flag it.
+      setError(true);
+    }
   }, [user?.id]);
 
   useEffect(() => {
@@ -124,11 +133,24 @@ export default function LoadScreen() {
     const action = pendingAction;
     setPendingAction(null);
     haptics.success();
+    const prevStatus = status;
     if (action.pod) {
       const uri = await capturePod();
       if (uri) setPodUri(uri);
     }
     advance(action.next);
+    // Offer a take-back for every step except the final "Delivered" (which
+    // shows the celebration card and may have captured paperwork).
+    if (action.next !== 'Delivered') {
+      setUndo({ prevStatus, message: 'Update sent to dispatcher' });
+    }
+  };
+
+  const handleUndo = () => {
+    if (!undo) return;
+    haptics.tap();
+    advance(undo.prevStatus);
+    setUndo(null);
   };
 
   if (loading) {
@@ -137,6 +159,30 @@ export default function LoadScreen() {
         <View style={styles.center}>
           <Icon name="loader" size={26} color={colors.textMuted} />
           <Text style={styles.muted}>Getting your day ready…</Text>
+        </View>
+      </ScreenFade>
+    );
+  }
+
+  if (error && !load) {
+    return (
+      <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+        <Header colors={colors} styles={styles} name={user?.firstName} unread={unread} onBell={openAlert} />
+        <View style={[styles.center, { flex: 1, paddingHorizontal: space[6] }]}>
+          <View style={[styles.errorIcon, { backgroundColor: colors.cautionFill, borderColor: colors.bg }]}>
+            <Icon name="wifi-off" size={34} color={colors.caution} />
+          </View>
+          <Text style={styles.emptyTitle}>Can't reach HitchLink</Text>
+          <Text style={styles.emptySub}>We couldn't load your trip just now. Check your signal — your last update is safe and nothing was lost.</Text>
+          <Pressable
+            onPress={onRefresh}
+            style={[styles.refreshBtn, { borderColor: colors.caution }]}
+            accessibilityRole="button"
+            accessibilityLabel="Try loading your trip again"
+          >
+            <Icon name="refresh-cw" size={16} color={colors.caution} />
+            <Text style={[styles.refreshText, { color: colors.caution }]}>Try again</Text>
+          </Pressable>
         </View>
       </ScreenFade>
     );
@@ -155,7 +201,12 @@ export default function LoadScreen() {
           </View>
           <Text style={styles.emptyTitle}>You're all caught up</Text>
           <Text style={styles.emptySub}>No load right now — enjoy the quiet. Your dispatcher will send your next one straight here.</Text>
-          <Pressable onPress={onRefresh} style={styles.refreshBtn}>
+          <Pressable
+            onPress={onRefresh}
+            style={styles.refreshBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Check for new loads"
+          >
             <Icon name="refresh-cw" size={16} color={colors.teal} />
             <Text style={styles.refreshText}>Check again</Text>
           </Pressable>
@@ -238,7 +289,13 @@ export default function LoadScreen() {
         </Card>
 
         {/* ── LOAD DETAILS (collapsible) ── */}
-        <Pressable onPress={() => setExpanded((v) => !v)} style={styles.expandHead}>
+        <Pressable
+          onPress={() => setExpanded((v) => !v)}
+          style={styles.expandHead}
+          accessibilityRole="button"
+          accessibilityState={{ expanded }}
+          accessibilityLabel={`Load details for ${load.id}. ${expanded ? 'Tap to hide' : 'Tap to show'}`}
+        >
           <SectionLabel style={{ margin: 0 }}>Load details · {load.id}</SectionLabel>
           <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textMuted} />
         </Pressable>
@@ -263,6 +320,13 @@ export default function LoadScreen() {
         onConfirm={confirmAndAdvance}
         onCancel={() => setPendingAction(null)}
       />
+
+      <UndoToast
+        visible={!!undo}
+        message={undo?.message}
+        onUndo={handleUndo}
+        onHide={() => setUndo(null)}
+      />
     </ScreenFade>
   );
 }
@@ -275,7 +339,13 @@ function Header({ colors, styles, name, unread, onBell }) {
       <BrandLogo size={26} layout="horizontal" />
       <View style={styles.headerRight}>
         {/* Bell with badge */}
-        <Pressable onPress={onBell} style={styles.iconBtn} hitSlop={8}>
+        <Pressable
+          onPress={onBell}
+          style={styles.iconBtn}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={unread ? 'New weather alert — open' : 'Alerts'}
+        >
           <Icon name="bell" size={20} color={unread ? colors.caution : colors.textSecondary} />
           {unread ? <View style={[styles.badge, { backgroundColor: colors.caution }]} /> : null}
         </Pressable>
@@ -364,6 +434,8 @@ function ConfirmActionModal({ visible, action, load, colors, styles, onConfirm, 
           <Pressable
             onPress={onConfirm}
             style={({ pressed }) => [styles.confirmBtn, { backgroundColor: t.solid, opacity: pressed ? 0.88 : 1 }, shadow.glow(t.solid)]}
+            accessibilityRole="button"
+            accessibilityLabel={`Confirm: ${action.label}`}
           >
             <Icon name="check" size={20} color={t.ink} />
             <Text style={[styles.confirmBtnText, { color: t.ink }]}>Yes, confirm</Text>
@@ -371,6 +443,8 @@ function ConfirmActionModal({ visible, action, load, colors, styles, onConfirm, 
           <Pressable
             onPress={onCancel}
             style={({ pressed }) => [styles.cancelBtn, { borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel and go back"
           >
             <Text style={[styles.cancelBtnText, { color: colors.textMuted }]}>Cancel — go back</Text>
           </Pressable>
@@ -390,7 +464,7 @@ const makeStyles = (c) => StyleSheet.create({
     paddingHorizontal: space[5], paddingTop: space[2], paddingBottom: space[3],
   },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: space[3] },
-  iconBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  iconBtn: { width: tap.icon, height: tap.icon, alignItems: 'center', justifyContent: 'center' },
   badge: { position: 'absolute', top: 6, right: 6, width: 9, height: 9, borderRadius: 999, borderWidth: 1.5, borderColor: c.bg },
   avatar: { width: 38, height: 38, borderRadius: 999, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
   avatarText: { ...type.bodyStrong, color: c.textPrimary },
@@ -400,6 +474,7 @@ const makeStyles = (c) => StyleSheet.create({
 
   emptyHero: { height: 200, width: '100%' },
   emptyIcon: { width: 84, height: 84, borderRadius: 999, backgroundColor: c.goFill, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: c.bg },
+  errorIcon: { width: 84, height: 84, borderRadius: 999, alignItems: 'center', justifyContent: 'center', borderWidth: 3, marginBottom: space[2] },
   emptyTitle: { ...type.h1, color: c.textPrimary, textAlign: 'center' },
   emptySub: { ...type.body, color: c.textSecondary, textAlign: 'center', lineHeight: 24 },
   refreshBtn: {

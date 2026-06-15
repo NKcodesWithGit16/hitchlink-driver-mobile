@@ -1,7 +1,7 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
-  Modal, Animated, Alert,
+  Modal, Animated, Alert, RefreshControl,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import ScreenFade from '../../src/components/ui/ScreenFade';
@@ -9,6 +9,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import Icon from '../../src/components/ui/Icon';
 import FadeInView from '../../src/components/ui/FadeInView';
+import Skeleton from '../../src/components/ui/Skeleton';
+import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { fetchDocuments } from '../../src/api/main';
@@ -30,11 +32,32 @@ export default function DocumentsScreen() {
   const [docs, setDocs]     = useState([]);
   const [open, setOpen]     = useState(null);
   const [filter, setFilter] = useState('all');
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadData = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const d = await fetchDocuments(userId);
+      setDocs(d || []);
+      setError(false);
+    } catch {
+      setError(true);
+    }
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
-    fetchDocuments(userId).then(setDocs).catch(() => {});
-  }, [userId]);
+    setLoading(true);
+    loadData().finally(() => setLoading(false));
+  }, [userId, loadData]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData();
+    setRefreshing(false);
+  }, [loadData]);
 
   const counts = useMemo(() => {
     const c = { valid: 0, expiring: 0, expired: 0 };
@@ -132,21 +155,45 @@ export default function DocumentsScreen() {
       <ScrollView
         contentContainerStyle={{ padding: space[4], paddingBottom: 120, gap: space[3] }}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.teal} />}
       >
-        {visible.map((doc, i) => (
-          <FadeInView key={doc.id} delay={i * 70}>
-            <DocCard doc={doc} onPress={() => setOpen(doc)} colors={colors} styles={styles} />
-          </FadeInView>
-        ))}
-        {visible.length === 0 && (
-          <View style={styles.empty}>
-            <Icon name="folder" size={40} color={colors.textMuted} />
-            <Text style={[styles.emptyText, { color: colors.textMuted }]}>No {filter} documents</Text>
+        {loading ? (
+          [0, 1, 2, 3].map((i) => <DocCardSkeleton key={i} colors={colors} styles={styles} />)
+        ) : error ? (
+          <View style={styles.errorBox}>
+            <View style={[styles.errorIcon, { backgroundColor: colors.cautionFill }]}>
+              <Icon name="wifi-off" size={26} color={colors.caution} />
+            </View>
+            <Text style={[styles.errorTitle, { color: colors.textPrimary }]}>Couldn't load documents</Text>
+            <Text style={[styles.errorSub, { color: colors.textSecondary }]}>Check your signal and try again — files you've already saved stay available offline.</Text>
+            <Pressable
+              onPress={onRefresh}
+              style={[styles.retryBtn, { borderColor: colors.teal }]}
+              accessibilityRole="button"
+              accessibilityLabel="Try loading documents again"
+            >
+              <Icon name="refresh-cw" size={15} color={colors.teal} />
+              <Text style={[styles.retryText, { color: colors.teal }]}>Try again</Text>
+            </Pressable>
           </View>
+        ) : (
+          <>
+            {visible.map((doc, i) => (
+              <FadeInView key={doc.id} delay={i * 70}>
+                <DocCard doc={doc} onPress={() => setOpen(doc)} colors={colors} styles={styles} />
+              </FadeInView>
+            ))}
+            {visible.length === 0 && (
+              <View style={styles.empty}>
+                <Icon name="folder" size={40} color={colors.textMuted} />
+                <Text style={[styles.emptyText, { color: colors.textMuted }]}>No {filter} documents</Text>
+              </View>
+            )}
+            <Text style={[styles.hint, { color: colors.textMuted }]}>
+              Documents are cached offline — accessible at weigh stations with no signal.
+            </Text>
+          </>
         )}
-        <Text style={[styles.hint, { color: colors.textMuted }]}>
-          Documents are cached offline — accessible at weigh stations with no signal.
-        </Text>
       </ScrollView>
 
       <DocViewer doc={open} onClose={() => setOpen(null)} colors={colors} styles={styles} insets={insets} />
@@ -157,6 +204,7 @@ export default function DocumentsScreen() {
 /* ─────────── Doc Card ─────────── */
 
 function DocCard({ doc, onPress, colors, styles }) {
+  const reduce  = useReduceMotion();
   const status  = expiryStatus(doc.expires);
   const days    = daysUntil(doc.expires);
   const t       = toneOf(colors, status.tone);
@@ -164,13 +212,14 @@ function DocCard({ doc, onPress, colors, styles }) {
   const barAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    if (reduce) { barAnim.setValue(barFill); return; }
     Animated.timing(barAnim, {
       toValue: barFill,
       duration: 700,
       delay: 200,
       useNativeDriver: false,
     }).start();
-  }, [barFill]);
+  }, [barFill, reduce]);
 
   const daysLabel =
     days == null  ? '' :
@@ -246,6 +295,27 @@ function DocCard({ doc, onPress, colors, styles }) {
 
       <Icon name="chevron-right" size={16} color={colors.textMuted} style={{ alignSelf: 'center', marginRight: space[3] }} />
     </Pressable>
+  );
+}
+
+/* ─────────── Loading skeleton ─────────── */
+
+function DocCardSkeleton({ colors, styles }) {
+  return (
+    <View style={[styles.docCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <View style={[styles.stripe, { backgroundColor: colors.surfaceHi }]} />
+      <View style={styles.docBody}>
+        <View style={styles.docTop}>
+          <Skeleton width={44} height={44} radius={radius.md} />
+          <View style={{ flex: 1, gap: 6 }}>
+            <Skeleton width="55%" height={14} />
+            <Skeleton width="35%" height={11} />
+          </View>
+          <Skeleton width={68} height={22} radius={radius.pill} />
+        </View>
+        <Skeleton width="100%" height={5} radius={999} style={{ marginTop: space[2] }} />
+      </View>
+    </View>
   );
 }
 
@@ -499,4 +569,12 @@ const makeStyles = (c) => StyleSheet.create({
     gap: 10, borderRadius: radius.lg, paddingVertical: 16, borderWidth: 1,
   },
   actionBtnText: { fontSize: 15, fontFamily: FONT.bold },
+
+  /* Error / retry */
+  errorBox: { alignItems: 'center', justifyContent: 'center', gap: space[3], paddingVertical: space[10], paddingHorizontal: space[4] },
+  errorIcon: { width: 64, height: 64, borderRadius: 999, alignItems: 'center', justifyContent: 'center', marginBottom: space[1] },
+  errorTitle: { fontSize: 18, fontFamily: FONT.black, textAlign: 'center' },
+  errorSub: { ...type.caption, textAlign: 'center', lineHeight: 20, maxWidth: 300 },
+  retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: space[1], paddingHorizontal: space[5], paddingVertical: space[3], borderRadius: radius.pill, borderWidth: 1 },
+  retryText: { ...type.bodyStrong, fontSize: 15 },
 });

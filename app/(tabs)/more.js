@@ -20,17 +20,20 @@ const THEME_OPTIONS = [
   { key: 'night', label: 'Night', icon: 'moon' },
 ];
 
+// Icon hues carry a `tone` resolved against the live theme at render — the
+// brand tone follows the driver's chosen accent; the rest are fixed category
+// colors from the design system (never raw inline hex).
 const QUICK_ACTIONS = [
-  { icon: 'zap',          label: 'ELD',        sub: 'Connect device', color: '#1FB6CE', onPress: () => Alert.alert('ELD', 'ELD integration coming soon.') },
-  { icon: 'message-circle', label: 'Support',  sub: 'Chat with us',   color: '#3B82F6', onPress: () => Alert.alert('Support', "We're a tap away. Call 1-800-HITCH.") },
-  { icon: 'star',         label: 'Feedback',   sub: 'Rate the app',   color: '#A855F7', onPress: () => Alert.alert('Feedback', 'Thank you! Rating coming soon.') },
+  { icon: 'zap',            label: 'ELD',      sub: 'Connect device', tone: 'teal',   onPress: () => Alert.alert('ELD', 'ELD integration coming soon.') },
+  { icon: 'message-circle', label: 'Support',  sub: 'Chat with us',   tone: 'blue',   onPress: () => Alert.alert('Support', "We're a tap away. Call 1-800-HITCH.") },
+  { icon: 'star',           label: 'Feedback', sub: 'Rate the app',   tone: 'purple', onPress: () => Alert.alert('Feedback', 'Thank you! Rating coming soon.') },
 ];
 
 const SETTING_ROWS = [
-  { icon: 'truck',        label: 'Truck info',      iconBg: '#1FB6CE22', iconColor: '#1FB6CE', metaKey: 'truck' },
-  { icon: 'bell',         label: 'Notifications',   iconBg: '#F9731622', iconColor: '#F97316', meta: 'On'       },
-  { icon: 'globe',        label: 'Language',         iconBg: '#22C55E22', iconColor: '#22C55E', meta: 'English' },
-  { icon: 'help-circle',  label: 'Help & Support',  iconBg: '#A855F722', iconColor: '#A855F7'                  },
+  { icon: 'truck',       label: 'Truck info',     tone: 'teal',   metaKey: 'truck' },
+  { icon: 'bell',        label: 'Notifications',  tone: 'orange', meta: 'On'       },
+  { icon: 'globe',       label: 'Language',       tone: 'green',  meta: 'English'  },
+  { icon: 'help-circle', label: 'Help & Support', tone: 'purple'                   },
 ];
 
 export default function MoreScreen() {
@@ -38,6 +41,14 @@ export default function MoreScreen() {
   const { colors, mode, setMode, isDay, accentKey, setAccent, bgKey, setBg, scheme } = useTheme();
   const { user, userId, signOut } = useAuth();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  // Resolve icon tones: `teal` tracks the chosen accent; others are design-system hues.
+  const hue = useMemo(() => ({
+    teal: colors.teal,
+    blue: ACCENT_PRESETS.blue.color,
+    purple: ACCENT_PRESETS.purple.color,
+    orange: ACCENT_PRESETS.orange.color,
+    green: ACCENT_PRESETS.green.color,
+  }), [colors]);
   const [hos,        setHos]        = useState(mockHos);
   const [activeLoad, setActiveLoad] = useState(null);
 
@@ -108,7 +119,9 @@ export default function MoreScreen() {
         <FadeInView delay={120} style={styles.section}>
           <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Quick actions</Text>
           <View style={styles.quickRow}>
-            {QUICK_ACTIONS.map(({ icon, label, sub, color, onPress }) => (
+            {QUICK_ACTIONS.map(({ icon, label, sub, tone, onPress }) => {
+              const color = hue[tone];
+              return (
               <Pressable
                 key={label}
                 onPress={onPress}
@@ -116,6 +129,8 @@ export default function MoreScreen() {
                   styles.quickCard,
                   { backgroundColor: colors.surface, borderColor: colors.border, opacity: pressed ? 0.8 : 1 },
                 ]}
+                accessibilityRole="button"
+                accessibilityLabel={`${label}. ${sub}`}
               >
                 <View style={[styles.quickIcon, { backgroundColor: color + '22' }]}>
                   <Icon name={icon} size={20} color={color} />
@@ -123,7 +138,8 @@ export default function MoreScreen() {
                 <Text style={[styles.quickLabel, { color: colors.textPrimary }]}>{label}</Text>
                 <Text style={[styles.quickSub, { color: colors.textMuted }]}>{sub}</Text>
               </Pressable>
-            ))}
+              );
+            })}
           </View>
         </FadeInView>
 
@@ -147,6 +163,10 @@ export default function MoreScreen() {
                         { borderColor: active ? colors.teal : colors.border,
                           backgroundColor: active ? colors.tealFill : colors.surface2 },
                       ]}
+                      hitSlop={6}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={`${label} theme`}
                     >
                       <Icon name={icon} size={15} color={active ? colors.teal : colors.textMuted} />
                       <Text style={[styles.themeBtnText, { color: active ? colors.teal : colors.textMuted }]}>
@@ -167,7 +187,15 @@ export default function MoreScreen() {
                 {Object.entries(ACCENT_PRESETS).map(([key, preset]) => {
                   const active = accentKey === key;
                   return (
-                    <Pressable key={key} onPress={() => setAccent(key)} style={styles.accentItem}>
+                    <Pressable
+                      key={key}
+                      onPress={() => setAccent(key)}
+                      style={styles.accentItem}
+                      hitSlop={8}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={`${preset.label} accent color`}
+                    >
                       <View style={[
                         styles.accentDot,
                         { backgroundColor: preset.color },
@@ -202,6 +230,9 @@ export default function MoreScreen() {
                             { backgroundColor: preset.bg,
                               borderColor: active ? colors.teal : colors.borderStrong },
                           ]}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: active }}
+                          accessibilityLabel={`${preset.label} background`}
                         >
                           {active ? (
                             <View style={[styles.bgCheck, { backgroundColor: colors.teal }]}>
@@ -228,7 +259,10 @@ export default function MoreScreen() {
             {SETTING_ROWS.map((row, i) => (
               <View key={row.label}>
                 <SettingRow
-                  {...row}
+                  icon={row.icon}
+                  label={row.label}
+                  iconColor={hue[row.tone]}
+                  iconBg={hue[row.tone] + '22'}
                   meta={row.metaKey ? user?.[row.metaKey] : row.meta}
                   colors={colors}
                   styles={styles}
@@ -251,6 +285,8 @@ export default function MoreScreen() {
               { borderColor: colors.danger + '66',
                 backgroundColor: pressed ? colors.dangerFill : 'transparent' },
             ]}
+            accessibilityRole="button"
+            accessibilityLabel="Sign out of HitchLink"
           >
             <Icon name="log-out" size={18} color={colors.danger} />
             <Text style={[styles.signOutText, { color: colors.danger }]}>Sign out</Text>
@@ -344,6 +380,8 @@ function SettingRow({ icon, label, meta, iconBg, iconColor, colors, styles, onPr
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [styles.settingRow, { backgroundColor: pressed ? colors.surfaceHi : 'transparent' }]}
+      accessibilityRole="button"
+      accessibilityLabel={meta ? `${label}, ${meta}` : label}
     >
       <View style={[styles.settingIconBox, { backgroundColor: iconBg }]}>
         <Icon name={icon} size={17} color={iconColor} />
@@ -440,7 +478,7 @@ const makeStyles = (c) => StyleSheet.create({
   themeRow: { flexDirection: 'row', gap: space[2] },
   themeBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 6, height: 40, borderRadius: radius.md, borderWidth: 1.5,
+    gap: 6, height: 44, borderRadius: radius.md, borderWidth: 1.5,
   },
   themeBtnText: { fontSize: 13, fontFamily: FONT.bold },
   accentRow: { flexDirection: 'row', justifyContent: 'space-between' },
