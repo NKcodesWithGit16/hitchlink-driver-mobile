@@ -1,4 +1,4 @@
-const BASE = process.env.EXPO_PUBLIC_API_BASE_URL || '';
+import { IDENTITY_BASE as BASE } from './config';
 
 export async function login(usernameOrEmail, password) {
   const res = await fetch(`${BASE}/api/Auth/Login`, {

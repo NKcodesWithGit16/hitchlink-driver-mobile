@@ -6,29 +6,31 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "node scripts/web-dev.js",
+    "web:direct": "expo start --web"
   },
   "dependencies": {
     "@expo-google-fonts/lexend": "^0.4.1",
     "@expo/metro-runtime": "~55.0.11",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/netinfo": "11.5.2",
-    "expo": "~55.0.0",
-    "expo-audio": "~55.0.14",
-    "expo-blur": "~55.0.14",
+    "expo": "~55.0.27",
+    "expo-audio": "~55.0.15",
+    "expo-blur": "~55.0.15",
     "expo-constants": "~55.0.16",
     "expo-font": "~55.0.8",
-    "expo-haptics": "~55.0.14",
-    "expo-image-picker": "~55.0.20",
-    "expo-linear-gradient": "~55.0.13",
-    "expo-linking": "~55.0.15",
+    "expo-haptics": "~55.0.15",
+    "expo-image-picker": "~55.0.21",
+    "expo-linear-gradient": "~55.0.15",
+    "expo-linking": "~55.0.16",
+    "expo-location": "~55.1.11",
     "expo-router": "~55.0.14",
-    "expo-secure-store": "~55.0.14",
-    "expo-splash-screen": "~55.0.21",
+    "expo-secure-store": "~55.0.15",
+    "expo-splash-screen": "~55.0.22",
     "expo-status-bar": "~55.0.6",
-    "expo-system-ui": "~55.0.17",
-    "react": "19.2.6",
-    "react-dom": "19.2.6",
+    "expo-system-ui": "~55.0.19",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
     "react-native": "0.83.6",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.23.0",
@@ -37,6 +39,9 @@
   "devDependencies": {
     "@babel/core": "^7.25.0",
     "babel-preset-expo": "^55.0.18"
+  },
+  "overrides": {
+    "expo-asset": "55.0.17"
   },
   "private": true
 }

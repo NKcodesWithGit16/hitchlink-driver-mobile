@@ -13,6 +13,7 @@ import { ThemeProvider, useTheme } from '../src/theme/ThemeContext';
 import { AuthProvider, useAuth } from '../src/context/AuthContext';
 import { AlertProvider } from '../src/context/AlertContext';
 import { WeatherToast, WeatherAlertModalGlobal } from '../src/components/ui/WeatherToast';
+import { useLocationSharing } from '../src/hooks/useLocationSharing';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -30,6 +31,12 @@ class ErrorBoundary extends Component {
     }
     return this.props.children;
   }
+}
+
+// Streams GPS heartbeats to the dispatcher while signed in (no-op until then).
+function LocationReporter() {
+  useLocationSharing();
+  return null;
 }
 
 function RouteGate() {
@@ -61,6 +68,7 @@ function ThemedShell() {
     <View style={{ flex: 1, width, alignSelf: 'center', overflow: 'hidden', backgroundColor: colors.bg }}>
       <StatusBar style={scheme === 'day' ? 'dark' : 'light'} />
       <RouteGate />
+      <LocationReporter />
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
       {/* Global overlays — render above everything */}
       <WeatherToast />

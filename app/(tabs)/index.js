@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Pressable, Modal,
-  RefreshControl, Image, Animated, ImageBackground,
+  RefreshControl, Image, Animated, ImageBackground, Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -34,7 +34,7 @@ import { enqueue, flush, queueCount } from '../../src/lib/offlineQueue';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useAlert } from '../../src/context/AlertContext';
-import { fetchActiveLoad, updateLoadStatus } from '../../src/api/main';
+import { fetchActiveLoad, updateLoadStatus, sendPhotoMessage } from '../../src/api/main';
 import { hos, weatherNow } from '../../src/data/mock';
 import { nextAction, statusChip, nextStop, isPrePickup } from '../../src/lib/load';
 import { money, num, rpm } from '../../src/lib/format';
@@ -136,7 +136,17 @@ export default function LoadScreen() {
     const prevStatus = status;
     if (action.pod) {
       const uri = await capturePod();
-      if (uri) setPodUri(uri);
+      if (uri) {
+        setPodUri(uri);
+        // Ship the paperwork to dispatch as a chat photo. The delivery still
+        // counts if the upload fails — tell the driver so they can resend it
+        // from Messages instead of silently losing the paperwork.
+        sendPhotoMessage(user?.id, { uri, text: `📄 Delivery paperwork — ${load?.id ?? 'load'}` })
+          .catch(() => Alert.alert(
+            'Photo not sent',
+            "Your delivery was recorded, but the paperwork photo couldn't reach dispatch. Please resend it from Messages.",
+          ));
+      }
     }
     advance(action.next);
     // Offer a take-back for every step except the final "Delivered" (which

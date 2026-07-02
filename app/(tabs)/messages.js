@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, Pressable,
-  KeyboardAvoidingView, Platform, Linking, Animated, Image,
+  KeyboardAvoidingView, Platform, Linking, Animated, Image, Modal,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -12,7 +12,10 @@ import VoiceButton from '../../src/components/driver/VoiceButton';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
-import { fetchMessages, sendMessage, fetchActiveLoad } from '../../src/api/main';
+import {
+  fetchMessages, sendMessage, sendVoiceMessage, sendPhotoMessage, fetchActiveLoad,
+  editMessage, deleteMessage, reactToMessage, removeReaction,
+} from '../../src/api/main';
 import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
 
 const QUICK = [
@@ -23,26 +26,60 @@ const QUICK = [
   { label: 'Delivered ✅',  icon: 'flag' },
 ];
 
+// Quick-tap reactions, plus the windows the backend enforces (mirror them in the
+// UI so we only offer actions that will actually succeed).
+const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+const EDIT_WINDOW_MIN = 15;
+const DELETE_WINDOW_MIN = 60;
+const ageMin = (ts) => (ts ? (Date.now() - new Date(ts).getTime()) / 60000 : Infinity);
+const replyPreviewOf = (m) => ({ id: m.id, from: m.from, text: m.text, kind: m.kind });
+
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const { user } = useAuth();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  const [items,      setItems]      = useState([]);
-  const [text,       setText]       = useState('');
-  const [typing,     setTyping]     = useState(false);
-  const [activeLoad, setActiveLoad] = useState(null);
+  const [items,       setItems]       = useState([]);
+  const [text,        setText]        = useState('');
+  const [typing,      setTyping]      = useState(false);
+  const [activeLoad,  setActiveLoad]  = useState(null);
+  const [replyTo,     setReplyTo]     = useState(null);   // message being replied to
+  const [editing,     setEditing]     = useState(null);   // message being edited
+  const [menuFor,     setMenuFor]     = useState(null);   // message with the action sheet open
+  const [confirmDel,  setConfirmDel]  = useState(null);   // message pending delete confirmation
   const scrollRef   = useRef(null);
-  const typingTimer = useRef(null);
 
   // dispatcher info comes from the driver profile loaded in AuthContext
   const dispatcher = user?.dispatcher;
 
+  // Pull chat history and reconcile with any optimistic messages we appended
+  // locally but the server hasn't echoed back yet (so they don't flicker away).
+  const load = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const server = await fetchMessages(user.id);
+      setItems((prev) => {
+        const serverDriverTexts = new Set(
+          server.filter((m) => m.from === 'driver' && m.text).map((m) => m.text)
+        );
+        const stillPending = prev.filter(
+          (m) => String(m.id).startsWith('local-') && !(m.text && serverDriverTexts.has(m.text))
+        );
+        return [...server, ...stillPending];
+      });
+    } catch {}
+  }, [user?.id]);
+
+  // The chat is REST + polling (the backend broadcasts over SignalR for the
+  // dispatcher web; mobile polls). Refresh every few seconds while open so new
+  // dispatcher messages arrive without a manual pull.
   useEffect(() => {
     if (!user?.id) return;
-    fetchMessages(user.id).then(setItems).catch(() => {});
+    load();
     fetchActiveLoad(user.id).then(setActiveLoad).catch(() => {});
-  }, [user?.id]);
+    const timer = setInterval(load, 5000);
+    return () => clearInterval(timer);
+  }, [user?.id, load]);
 
   const scrollToEnd = useCallback((animated = true) => {
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated }));
@@ -56,25 +93,96 @@ export default function MessagesScreen() {
   const send = useCallback((body) => {
     const value = (body ?? text).trim();
     if (!value) return;
-    append({ text: value });
-    setText('');
-    sendMessage(user?.id, value).catch(() => {});
-    // Simulate dispatcher typing reply
-    clearTimeout(typingTimer.current);
-    setTyping(true);
-    typingTimer.current = setTimeout(() => setTyping(false), 3200);
-  }, [text, append, user?.id]);
 
-  const sendVoice = useCallback(({ uri, durationSec }) => append({ kind: 'voice', uri, durationSec }), [append]);
+    // Editing an existing message: PATCH it, optimistically update in place.
+    if (editing) {
+      const id = editing.id;
+      setEditing(null);
+      setText('');
+      setItems((prev) => prev.map((m) => (m.id === id ? { ...m, text: value, editedAt: new Date().toISOString() } : m)));
+      editMessage(id, value, user?.id).then(load).catch(() => {});
+      return;
+    }
+
+    const rid = replyTo?.id || null;
+    append({ text: value, ...(replyTo ? { replyTo: replyPreviewOf(replyTo) } : {}) });
+    setText('');
+    setReplyTo(null);
+    // Send, then pull fresh history so the optimistic bubble is reconciled with
+    // the server's persisted copy (correct id/time).
+    sendMessage(user?.id, value, rid).then(load).catch(() => {});
+  }, [text, append, user?.id, load, editing, replyTo]);
+
+  const sendVoice = useCallback(async ({ uri, durationSec }) => {
+    if (!uri || !user?.id) return;
+    const rid = replyTo?.id || null;
+    // Show the clip immediately, then upload. Once it's persisted we drop the
+    // optimistic copy and let the next poll bring the server's version (which
+    // carries the real id + streamable audio URL), so there's no duplicate.
+    const localId = `local-${Date.now()}`;
+    setItems((prev) => [...prev, { id: localId, from: 'driver', at: nowStr(), kind: 'voice', uri, durationSec, ...(replyTo ? { replyTo: replyPreviewOf(replyTo) } : {}) }]);
+    setReplyTo(null);
+    scrollToEnd();
+    try {
+      await sendVoiceMessage(user.id, { uri, durationSec, replyToMessageId: rid });
+    } catch {}
+    setItems((prev) => prev.filter((m) => m.id !== localId));
+    load();
+  }, [user?.id, load, scrollToEnd, replyTo]);
+
+  // ── Message actions (long-press menu) ───────────────────────────────────
+  const startReply = useCallback((m) => { setMenuFor(null); setEditing(null); setReplyTo(m); }, []);
+
+  const startEdit = useCallback((m) => {
+    setMenuFor(null);
+    setReplyTo(null);
+    setEditing(m);
+    setText(m.text || '');
+  }, []);
+
+  const cancelCompose = useCallback(() => { setEditing(null); setReplyTo(null); setText(''); }, []);
+
+  const react = useCallback(async (m, emoji) => {
+    setMenuFor(null);
+    const mineReaction = m.reactions?.find((r) => r.mine);
+    try {
+      if (mineReaction?.emoji === emoji) await removeReaction(m.id, user?.id);
+      else await reactToMessage(m.id, emoji, user?.id);
+    } catch {}
+    load();
+  }, [user?.id, load]);
+
+  const confirmDelete = useCallback(async () => {
+    const m = confirmDel;
+    setConfirmDel(null);
+    if (!m) return;
+    setItems((prev) => prev.map((x) => (x.id === m.id ? { ...x, deleted: true, text: undefined, kind: undefined, uri: undefined, reactions: [] } : x)));
+    try { await deleteMessage(m.id, user?.id, 'everyone'); } catch {}
+    load();
+  }, [confirmDel, user?.id, load]);
 
   const pickAttachment = useCallback(async () => {
+    if (!user?.id) return;
     try {
       const res = await ImagePicker.launchImageLibraryAsync({ quality: 0.6 });
       if (res.canceled) return;
       const uri = res.assets?.[0]?.uri;
-      if (uri) append({ kind: 'image', uri });
+      if (!uri) return;
+      // Show the photo immediately, then upload. Once persisted we drop the
+      // optimistic copy and let the next poll bring the server's version
+      // (real id + signed URL) — same reconcile dance as sendVoice.
+      const rid = replyTo?.id || null;
+      const localId = `local-${Date.now()}`;
+      setItems((prev) => [...prev, { id: localId, from: 'driver', at: nowStr(), kind: 'image', uri, ...(replyTo ? { replyTo: replyPreviewOf(replyTo) } : {}) }]);
+      setReplyTo(null);
+      scrollToEnd();
+      try {
+        await sendPhotoMessage(user.id, { uri, replyToMessageId: rid });
+      } catch {}
+      setItems((prev) => prev.filter((m) => m.id !== localId));
+      load();
     } catch {}
-  }, [append]);
+  }, [user?.id, replyTo, scrollToEnd, load]);
 
   return (
     <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
@@ -138,7 +246,16 @@ export default function MessagesScreen() {
         >
           <DateSeparator label="Today" colors={colors} styles={styles} />
           {items.map((m, i) => (
-            <Bubble key={m.id} msg={m} prev={items[i - 1]} next={items[i + 1]} colors={colors} styles={styles} />
+            <Bubble
+              key={m.id}
+              msg={m}
+              prev={items[i - 1]}
+              next={items[i + 1]}
+              colors={colors}
+              styles={styles}
+              onAction={() => !m.deleted && !String(m.id).startsWith('local-') && setMenuFor(m)}
+              onReactQuick={(emoji) => !String(m.id).startsWith('local-') && react(m, emoji)}
+            />
           ))}
           {typing ? <TypingIndicator colors={colors} styles={styles} /> : null}
         </ScrollView>
@@ -167,6 +284,26 @@ export default function MessagesScreen() {
 
         {/* ── Composer ── */}
         <View style={[styles.composerOuter, { backgroundColor: colors.surface, borderTopColor: colors.border, paddingBottom: Math.max(insets.bottom, space[3]) }]}>
+          {/* Reply / edit context bar */}
+          {(replyTo || editing) ? (
+            <View style={[styles.contextBar, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
+              <View style={[styles.contextStripe, { backgroundColor: colors.teal }]} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.contextTitle, { color: colors.teal }]}>
+                  {editing ? 'Editing message' : `Replying to ${replyTo.from === 'driver' ? 'yourself' : (dispatcher?.name || 'dispatcher')}`}
+                </Text>
+                <Text style={[styles.contextText, { color: colors.textMuted }]} numberOfLines={1}>
+                  {(editing || replyTo).kind === 'voice' ? '🎤 Voice message'
+                    : (editing || replyTo).kind === 'image' ? '📷 Photo'
+                    : ((editing || replyTo).text || '')}
+                </Text>
+              </View>
+              <Pressable onPress={cancelCompose} hitSlop={8} style={styles.contextClose} accessibilityRole="button" accessibilityLabel="Cancel">
+                <Icon name="x" size={16} color={colors.textMuted} />
+              </Pressable>
+            </View>
+          ) : null}
+
           <View style={[styles.composerInner, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
             <Pressable
               onPress={pickAttachment}
@@ -180,7 +317,7 @@ export default function MessagesScreen() {
             <TextInput
               value={text}
               onChangeText={setText}
-              placeholder="Message dispatcher…"
+              placeholder={editing ? 'Edit your message…' : 'Message dispatcher…'}
               placeholderTextColor={colors.textMuted}
               style={[styles.input, { color: colors.textPrimary }]}
               multiline
@@ -190,9 +327,9 @@ export default function MessagesScreen() {
               <Pressable
                 onPress={() => send()}
                 style={[styles.sendBtn, { backgroundColor: colors.teal }, shadow.glow(colors.teal)]}
-                accessibilityLabel="Send"
+                accessibilityLabel={editing ? 'Save edit' : 'Send'}
               >
-                <Icon name="arrow-up" size={19} color={colors.onAccent} />
+                <Icon name={editing ? 'check' : 'arrow-up'} size={19} color={colors.onAccent} />
               </Pressable>
             ) : (
               <VoiceButton onSend={sendVoice} />
@@ -201,6 +338,28 @@ export default function MessagesScreen() {
         </View>
 
       </KeyboardAvoidingView>
+
+      {/* ── Long-press action sheet ── */}
+      <MessageActionSheet
+        msg={menuFor}
+        meId={user?.id}
+        colors={colors}
+        styles={styles}
+        onClose={() => setMenuFor(null)}
+        onReact={react}
+        onReply={startReply}
+        onEdit={startEdit}
+        onDelete={(m) => { setMenuFor(null); setConfirmDel(m); }}
+      />
+
+      {/* ── Delete confirmation ── */}
+      <ConfirmDelete
+        msg={confirmDel}
+        colors={colors}
+        styles={styles}
+        onCancel={() => setConfirmDel(null)}
+        onConfirm={confirmDelete}
+      />
     </ScreenFade>
   );
 }
@@ -219,11 +378,12 @@ function DateSeparator({ label, colors, styles }) {
   );
 }
 
-function Bubble({ msg, prev, next, colors, styles }) {
+function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick }) {
   const mine = msg.from === 'driver';
   const prevSame = prev?.from === msg.from;
   const nextSame = next?.from === msg.from;
   const showAvatar = !mine && !nextSame;
+  const hasReactions = msg.reactions?.length > 0;
 
   // Tail shape: only the last bubble in a group gets a tail
   const tailMine   = !nextSame && mine;
@@ -236,6 +396,20 @@ function Bubble({ msg, prev, next, colors, styles }) {
     tailTheirs && styles.tailTheirs,
     !prevSame  && (mine ? styles.firstMine : styles.firstTheirs),
   ];
+
+  const body = <BubbleBody msg={msg} mine={mine} colors={colors} styles={styles} />;
+  let inner;
+  if (msg.deleted) {
+    inner = <View style={[bubbleStyle, { backgroundColor: colors.surface2, borderColor: colors.border, borderWidth: 1 }]}>{body}</View>;
+  } else if (mine) {
+    inner = (
+      <LinearGradient colors={colors.gradients.teal} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={bubbleStyle}>
+        {body}
+      </LinearGradient>
+    );
+  } else {
+    inner = <View style={bubbleStyle}>{body}</View>;
+  }
 
   return (
     <View style={[
@@ -254,20 +428,33 @@ function Bubble({ msg, prev, next, colors, styles }) {
         )
       ) : null}
 
-      <View style={{ maxWidth: '78%', minWidth: 0 }}>
-        {mine ? (
-          <LinearGradient
-            colors={colors.gradients.teal}
-            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-            style={bubbleStyle}
-          >
-            <BubbleBody msg={msg} mine colors={colors} styles={styles} />
-          </LinearGradient>
-        ) : (
-          <View style={bubbleStyle}>
-            <BubbleBody msg={msg} mine={false} colors={colors} styles={styles} />
+      <View style={{ maxWidth: '78%', minWidth: 0, alignItems: mine ? 'flex-end' : 'flex-start' }}>
+        <Pressable
+          onLongPress={() => onAction?.()}
+          delayLongPress={280}
+          disabled={msg.deleted}
+          accessibilityRole="button"
+          accessibilityLabel="Message — long press for options"
+        >
+          {inner}
+        </Pressable>
+
+        {hasReactions ? (
+          <View style={[styles.reactRow, mine ? { justifyContent: 'flex-end' } : null]}>
+            {msg.reactions.map((r) => (
+              <Pressable
+                key={r.emoji}
+                onPress={() => onReactQuick?.(r.emoji)}
+                style={[styles.reactChip, { backgroundColor: colors.surfaceHi, borderColor: r.mine ? colors.teal : colors.border }]}
+                accessibilityRole="button"
+                accessibilityLabel={`${r.emoji} ${r.count}`}
+              >
+                <Text style={styles.reactEmoji}>{r.emoji}</Text>
+                {r.count > 1 ? <Text style={[styles.reactCount, { color: colors.textMuted }]}>{r.count}</Text> : null}
+              </Pressable>
+            ))}
           </View>
-        )}
+        ) : null}
       </View>
     </View>
   );
@@ -275,10 +462,32 @@ function Bubble({ msg, prev, next, colors, styles }) {
 
 function BubbleBody({ msg, mine, colors, styles }) {
   const ink = mine ? colors.onAccent : colors.textPrimary;
+  const sub = mine ? 'rgba(255,255,255,0.55)' : colors.textMuted;
+
+  if (msg.deleted) {
+    return (
+      <Text style={[styles.deletedText, { color: colors.textMuted }]}>This message was deleted</Text>
+    );
+  }
+
   const isVoice = msg.kind === 'voice';
   const isImage = msg.kind === 'image';
   return (
     <>
+      {msg.replyTo ? (
+        <View style={[styles.replyQuote, {
+          borderLeftColor: mine ? 'rgba(255,255,255,0.6)' : colors.teal,
+          backgroundColor: mine ? 'rgba(255,255,255,0.12)' : colors.surface2,
+        }]}>
+          <Text style={[styles.replyQuoteName, { color: mine ? 'rgba(255,255,255,0.9)' : colors.teal }]} numberOfLines={1}>
+            {msg.replyTo.from === 'driver' ? 'You' : 'Dispatcher'}
+          </Text>
+          <Text style={[styles.replyQuoteText, { color: mine ? 'rgba(255,255,255,0.8)' : colors.textSecondary }]} numberOfLines={1}>
+            {msg.replyTo.kind === 'voice' ? '🎤 Voice message' : msg.replyTo.kind === 'image' ? '📷 Photo' : (msg.replyTo.text || '')}
+          </Text>
+        </View>
+      ) : null}
+
       {isImage ? (
         <Image source={{ uri: msg.uri }} style={styles.bubbleImage} resizeMode="cover" accessibilityLabel="Attached photo" />
       ) : isVoice ? (
@@ -289,10 +498,82 @@ function BubbleBody({ msg, mine, colors, styles }) {
         <Text style={[styles.bubbleText, { color: ink }]}>{msg.text}</Text>
       )}
       <View style={styles.meta}>
-        <Text style={[styles.metaTime, { color: mine ? 'rgba(255,255,255,0.55)' : colors.textMuted }]}>{msg.at}</Text>
-        {mine && <Icon name="check" size={10} color="rgba(255,255,255,0.55)" />}
+        {msg.editedAt ? <Text style={[styles.metaEdited, { color: sub }]}>edited</Text> : null}
+        <Text style={[styles.metaTime, { color: sub }]}>{msg.at}</Text>
+        {mine && <Icon name="check" size={10} color={sub} />}
       </View>
     </>
+  );
+}
+
+function MessageActionSheet({ msg, colors, styles, onClose, onReact, onReply, onEdit, onDelete }) {
+  const mine = msg?.from === 'driver';
+  const isText = msg && !msg.kind;
+  const canEdit = mine && isText && ageMin(msg?.ts) < EDIT_WINDOW_MIN;
+  const canDelete = mine && ageMin(msg?.ts) < DELETE_WINDOW_MIN;
+  const mineEmoji = msg?.reactions?.find((r) => r.mine)?.emoji;
+
+  return (
+    <Modal visible={!!msg} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.sheetOverlay} onPress={onClose}>
+        <Pressable style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border }]} onPress={() => {}}>
+          <View style={styles.sheetEmojis}>
+            {EMOJIS.map((e) => (
+              <Pressable
+                key={e}
+                onPress={() => msg && onReact(msg, e)}
+                style={[styles.sheetEmojiBtn, mineEmoji === e && { backgroundColor: colors.tealFill, borderColor: colors.teal }]}
+                accessibilityRole="button"
+                accessibilityLabel={`React ${e}`}
+              >
+                <Text style={styles.sheetEmoji}>{e}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <SheetAction icon="corner-up-left" label="Reply" colors={colors} styles={styles} onPress={() => msg && onReply(msg)} />
+          {canEdit ? <SheetAction icon="edit-2" label="Edit" colors={colors} styles={styles} onPress={() => msg && onEdit(msg)} /> : null}
+          {canDelete ? <SheetAction icon="trash-2" label="Delete for everyone" danger colors={colors} styles={styles} onPress={() => msg && onDelete(msg)} /> : null}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function SheetAction({ icon, label, danger, colors, styles, onPress }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.sheetAction, pressed && { backgroundColor: colors.surface2 }]}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
+      <Icon name={icon} size={18} color={danger ? colors.danger : colors.textSecondary} />
+      <Text style={[styles.sheetActionText, { color: danger ? colors.danger : colors.textPrimary }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function ConfirmDelete({ msg, colors, styles, onCancel, onConfirm }) {
+  return (
+    <Modal visible={!!msg} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.confirmOverlay}>
+        <View style={[styles.confirmCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={[styles.confirmIcon, { backgroundColor: colors.surface2, borderColor: colors.danger }]}>
+            <Icon name="trash-2" size={24} color={colors.danger} />
+          </View>
+          <Text style={[styles.confirmTitle, { color: colors.textPrimary }]}>Delete for everyone?</Text>
+          <Text style={[styles.confirmSub, { color: colors.textSecondary }]}>
+            This message will be removed for you and the dispatcher. This can't be undone.
+          </Text>
+          <Pressable onPress={onConfirm} style={[styles.confirmDanger, { backgroundColor: colors.danger }]} accessibilityRole="button" accessibilityLabel="Delete for everyone">
+            <Text style={styles.confirmDangerText}>Delete</Text>
+          </Pressable>
+          <Pressable onPress={onCancel} style={[styles.confirmCancel, { borderColor: colors.border }]} accessibilityRole="button" accessibilityLabel="Cancel">
+            <Text style={[styles.confirmCancelText, { color: colors.textMuted }]}>Cancel</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -444,6 +725,46 @@ const makeStyles = (c) => StyleSheet.create({
   bubbleImage: { width: 200, height: 150, borderRadius: radius.md, marginBottom: 2 },
   meta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 3, marginTop: 1 },
   metaTime: { fontSize: 10, fontFamily: FONT.medium },
+  metaEdited: { fontSize: 10, fontFamily: FONT.medium, fontStyle: 'italic', marginRight: 1 },
+  deletedText: { ...type.body, fontStyle: 'italic' },
+
+  /* Reply quote inside a bubble */
+  replyQuote: { borderLeftWidth: 3, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 5, marginBottom: 5, gap: 1 },
+  replyQuoteName: { fontSize: 11, fontFamily: FONT.bold },
+  replyQuoteText: { fontSize: 12, fontFamily: FONT.medium },
+
+  /* Reactions */
+  reactRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: -6, marginHorizontal: 4 },
+  reactChip: { flexDirection: 'row', alignItems: 'center', gap: 3, borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 7, paddingVertical: 2 },
+  reactEmoji: { fontSize: 12 },
+  reactCount: { fontSize: 11, fontFamily: FONT.bold },
+
+  /* Action sheet */
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  sheet: { borderTopLeftRadius: radius['2xl'], borderTopRightRadius: radius['2xl'], borderWidth: 1, paddingTop: space[3], paddingBottom: space[6], paddingHorizontal: space[3] },
+  sheetEmojis: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: space[2], paddingVertical: space[2], marginBottom: space[2] },
+  sheetEmojiBtn: { width: 46, height: 46, borderRadius: 999, borderWidth: 1, borderColor: 'transparent', alignItems: 'center', justifyContent: 'center' },
+  sheetEmoji: { fontSize: 24 },
+  sheetAction: { flexDirection: 'row', alignItems: 'center', gap: space[3], paddingHorizontal: space[3], paddingVertical: 14, borderRadius: radius.lg },
+  sheetActionText: { ...type.body, fontFamily: FONT.bold },
+
+  /* Delete confirmation */
+  confirmOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: space[5] },
+  confirmCard: { width: '100%', maxWidth: 360, borderRadius: radius['2xl'], borderWidth: 1, padding: space[6], alignItems: 'center', gap: space[3] },
+  confirmIcon: { width: 60, height: 60, borderRadius: 999, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', marginBottom: space[1] },
+  confirmTitle: { fontSize: 19, fontFamily: FONT.black, textAlign: 'center' },
+  confirmSub: { ...type.caption, textAlign: 'center', lineHeight: 19 },
+  confirmDanger: { width: '100%', height: 52, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', marginTop: space[2] },
+  confirmDangerText: { ...type.bodyStrong, color: '#fff' },
+  confirmCancel: { width: '100%', height: 48, borderRadius: radius.lg, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  confirmCancelText: { ...type.bodyStrong },
+
+  /* Reply / edit context bar */
+  contextBar: { flexDirection: 'row', alignItems: 'center', gap: space[2], borderWidth: 1, borderRadius: radius.lg, paddingVertical: 8, paddingRight: 8, paddingLeft: 0, marginBottom: space[2], overflow: 'hidden' },
+  contextStripe: { width: 4, alignSelf: 'stretch', borderTopLeftRadius: radius.lg, borderBottomLeftRadius: radius.lg },
+  contextTitle: { fontSize: 12, fontFamily: FONT.bold },
+  contextText: { fontSize: 12, fontFamily: FONT.medium },
+  contextClose: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
 
   /* Typing */
   typingBubble: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: radius.xl, borderBottomLeftRadius: 6, borderWidth: 1, paddingHorizontal: space[4], paddingVertical: 14 },
