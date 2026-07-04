@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { sendHeartbeat } from '../api/main';
+import { startBackgroundTracking } from '../lib/backgroundLocation';
 
 /* GPS → dispatcher heartbeats.
 
@@ -70,6 +71,10 @@ export function useLocationSharing() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted' || cancelled) return;
+        // Keep heartbeats flowing when the app is backgrounded (navigation
+        // hand-off, locked phone). Escalates to "Allow all the time" — if the
+        // driver declines, foreground sharing below still works unchanged.
+        startBackgroundTracking();
         sub = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.Balanced,

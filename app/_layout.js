@@ -14,6 +14,11 @@ import { AuthProvider, useAuth } from '../src/context/AuthContext';
 import { AlertProvider } from '../src/context/AlertContext';
 import { WeatherToast, WeatherAlertModalGlobal } from '../src/components/ui/WeatherToast';
 import { useLocationSharing } from '../src/hooks/useLocationSharing';
+import { usePushNotificationRouting } from '../src/hooks/usePushNotifications';
+// Side-effect import: registers the background location task with TaskManager
+// at app entry, so it exists when the OS relaunches the app headlessly to
+// deliver location updates.
+import '../src/lib/backgroundLocation';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -36,6 +41,14 @@ class ErrorBoundary extends Component {
 // Streams GPS heartbeats to the dispatcher while signed in (no-op until then).
 function LocationReporter() {
   useLocationSharing();
+  return null;
+}
+
+// Routes push-notification taps (new load / dispatcher message) to the right
+// tab, including taps that cold-started the app.
+function PushRouter() {
+  const { signedIn } = useAuth();
+  usePushNotificationRouting(signedIn);
   return null;
 }
 
@@ -69,6 +82,7 @@ function ThemedShell() {
       <StatusBar style={scheme === 'day' ? 'dark' : 'light'} />
       <RouteGate />
       <LocationReporter />
+      <PushRouter />
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
       {/* Global overlays — render above everything */}
       <WeatherToast />

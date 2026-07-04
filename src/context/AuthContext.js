@@ -3,6 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { readToken, writeToken, clearToken } from '../utils/tokenStorage';
 import { readUserFromToken } from '../utils/jwtUtils';
 import { fetchDriver } from '../api/main';
+import { registerForPushNotifications, unregisterPushNotifications } from '../hooks/usePushNotifications';
+import { stopBackgroundTracking } from '../lib/backgroundLocation';
 
 const AuthContext = createContext(null);
 
@@ -37,6 +39,9 @@ export function AuthProvider({ children }) {
           setUserEmail(email || '');
           // Fetch driver profile in background — screens handle null gracefully
           fetchDriver(claims.userId).then(setDriverProfile).catch(() => {});
+          // Re-register push on every boot: the Expo token can rotate, and the
+          // call is an idempotent PATCH.
+          registerForPushNotifications(claims.userId);
         }
         if (o === '1') setOnboarded(true);
       } catch {}
@@ -58,9 +63,15 @@ export function AuthProvider({ children }) {
     setUserName(name  || '');
     setUserEmail(email || '');
     fetchDriver(claims.userId).then(setDriverProfile).catch(() => {});
+    registerForPushNotifications(claims.userId);
   };
 
   const signOut = async () => {
+    // Tear down device-level channels while the token still works: stop the
+    // background GPS task and deactivate this device's push token so a
+    // signed-out phone doesn't keep receiving the old driver's messages.
+    await stopBackgroundTracking();
+    await unregisterPushNotifications(userId);
     await clearToken();
     await AsyncStorage.multiRemove([NAME_KEY, EMAIL_KEY]);
     setUserId(null);
