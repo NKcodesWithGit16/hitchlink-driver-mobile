@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "210395148119",
+    "project_id": "hitchlink-driver",
+    "storage_bucket": "hitchlink-driver.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:210395148119:android:4d65f5d7d368691d8b1812",
+        "android_client_info": {
+          "package_name": "com.nk16.hitchlinkdriver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCgUw5jq2db9m0-ZWo7d5fcZcy84E99hcY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
