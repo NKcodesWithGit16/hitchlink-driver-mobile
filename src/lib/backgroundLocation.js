@@ -15,7 +15,7 @@
 import { AppState } from 'react-native';
 import { USE_MOCK } from '../api/config';
 import { sendHeartbeat } from '../api/main';
-import { readToken } from '../utils/tokenStorage';
+import { getValidToken } from './session';
 import { readUserFromToken } from '../utils/jwtUtils';
 
 let Location = null;
@@ -47,7 +47,9 @@ if (TaskManager?.defineTask) {
     const now = Date.now();
     if (now - lastSentAt < MIN_SEND_INTERVAL_MS) return;
 
-    const claims = readUserFromToken(await readToken());
+    // getValidToken refreshes an expired access token, so heartbeats keep
+    // flowing on long shifts even while the app stays backgrounded.
+    const claims = readUserFromToken(await getValidToken());
     if (!claims?.userId) return;
 
     const fix = data.locations[data.locations.length - 1];

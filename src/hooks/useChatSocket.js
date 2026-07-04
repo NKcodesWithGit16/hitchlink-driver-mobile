@@ -13,7 +13,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { MAIN_BASE, USE_MOCK } from '../api/config';
-import { readToken } from '../utils/tokenStorage';
+import { getValidToken } from '../lib/session';
 
 let signalR = null;
 try {
@@ -41,9 +41,10 @@ export function useChatSocket(driverId, onMessage) {
     const conn = new signalR.HubConnectionBuilder()
       .withUrl(`${MAIN_BASE}/hubs/chat`, {
         // The hub requires a JWT; SignalR passes it as ?access_token= on the
-        // websocket and the backend reads it in OnMessageReceived. Read from
-        // storage at call time so reconnects pick up a refreshed token.
-        accessTokenFactory: async () => (await readToken()) || '',
+        // websocket and the backend reads it in OnMessageReceived. Resolved at
+        // call time via the session layer, so reconnects auto-refresh an
+        // expired token instead of failing auth.
+        accessTokenFactory: async () => (await getValidToken()) || '',
       })
       .withAutomaticReconnect()
       .build();

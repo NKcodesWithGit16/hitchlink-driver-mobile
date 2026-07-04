@@ -1,10 +1,14 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { readToken, writeToken, clearToken } from '../utils/tokenStorage';
+import {
+  readToken, writeToken, clearToken,
+  readRefreshToken, writeRefreshToken, clearRefreshToken,
+} from '../utils/tokenStorage';
 import { readUserFromToken } from '../utils/jwtUtils';
 import { fetchDriver } from '../api/main';
 import { registerForPushNotifications, unregisterPushNotifications } from '../hooks/usePushNotifications';
 import { stopBackgroundTracking } from '../lib/backgroundLocation';
+import { onSessionExpired, refreshNow } from '../lib/session';
 
 const AuthContext = createContext(null);
 
@@ -20,18 +24,30 @@ export function AuthProvider({ children }) {
   const [driverProfile, setDriverProfile] = useState(null);
   const [onboarded,     setOnboarded]     = useState(false);
   const [ready,         setReady]         = useState(false);
+  // Set when the session ends without the driver asking for it (refresh token
+  // rejected) — the sign-in screen shows it so the logout isn't mysterious.
+  const [sessionNotice, setSessionNotice] = useState('');
 
   // Boot: restore session from stored token
   useEffect(() => {
     (async () => {
       try {
-        const [token, name, email, o] = await Promise.all([
+        let [token, name, email, o] = await Promise.all([
           readToken(),
           AsyncStorage.getItem(NAME_KEY),
           AsyncStorage.getItem(EMAIL_KEY),
           AsyncStorage.getItem(OKEY),
         ]);
-        const claims = readUserFromToken(token);
+        let claims = readUserFromToken(token);
+        // Access token expired while the app was closed — try the refresh
+        // token before bouncing the driver to the sign-in screen.
+        if (!claims?.userId && (await readRefreshToken())) {
+          const fresh = await refreshNow();
+          if (fresh) {
+            token = fresh;
+            claims = readUserFromToken(fresh);
+          }
+        }
         if (claims?.userId) {
           setUserId(claims.userId);
           setUserRole(claims.role);
@@ -50,14 +66,16 @@ export function AuthProvider({ children }) {
   }, []);
 
   // Called by sign-in screen after a successful login()
-  const signIn = async (token, name, email) => {
+  const signIn = async (token, name, email, refreshToken = null) => {
     const claims = readUserFromToken(token);
     if (!claims?.userId) throw new Error('Invalid token received from server');
     await writeToken(token);
+    await writeRefreshToken(refreshToken);
     await AsyncStorage.multiSet([
       [NAME_KEY,  name  || ''],
       [EMAIL_KEY, email || ''],
     ]);
+    setSessionNotice('');
     setUserId(claims.userId);
     setUserRole(claims.role);
     setUserName(name  || '');
@@ -73,6 +91,7 @@ export function AuthProvider({ children }) {
     await stopBackgroundTracking();
     await unregisterPushNotifications(userId);
     await clearToken();
+    await clearRefreshToken();
     await AsyncStorage.multiRemove([NAME_KEY, EMAIL_KEY]);
     setUserId(null);
     setUserRole(null);
@@ -80,6 +99,16 @@ export function AuthProvider({ children }) {
     setUserEmail('');
     setDriverProfile(null);
   };
+
+  // Terminal session expiry: the Identity service rejected our refresh token
+  // (revoked, or the driver was away longer than its lifetime). Sign out and
+  // leave a notice for the sign-in screen so the logout isn't mysterious.
+  const signOutRef = useRef(signOut);
+  signOutRef.current = signOut;
+  useEffect(() => onSessionExpired(() => {
+    setSessionNotice('Your session expired — please sign in again.');
+    signOutRef.current();
+  }), []);
 
   const completeOnboarding = () => {
     setOnboarded(true);
@@ -112,10 +141,11 @@ export function AuthProvider({ children }) {
     onboarded,
     ready,
     driverProfile,
+    sessionNotice,
     signIn,
     signOut,
     completeOnboarding,
-  }), [user, userId, userRole, onboarded, ready, driverProfile]);
+  }), [user, userId, userRole, onboarded, ready, driverProfile, sessionNotice]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

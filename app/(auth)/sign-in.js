@@ -16,7 +16,7 @@ import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
 
 export default function SignIn() {
   const { colors } = useTheme();
-  const { signIn } = useAuth();
+  const { signIn, sessionNotice } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
@@ -36,7 +36,7 @@ export default function SignIn() {
       const token = data?.token || data?.accessToken || data;
       if (!token || typeof token !== 'string') throw new Error('No token in response');
       // name/email come from the form — backend will be the source of truth after profile fetch
-      await signIn(token, '', email.trim());
+      await signIn(token, '', email.trim(), data?.refreshToken || null);
       router.replace('/(tabs)');
     } catch (e) {
       setError(e.message === 'Login failed' ? 'Wrong username or password.' : (e.message || 'Something went wrong.'));
@@ -63,6 +63,9 @@ export default function SignIn() {
           <Text style={[styles.sub, { color: colors.textSecondary }]}>
             Use the username and password you created when you accepted your invite.
           </Text>
+          {sessionNotice ? (
+            <Text style={[styles.sub, { color: colors.caution, marginTop: 8 }]}>{sessionNotice}</Text>
+          ) : null}
         </View>
 
         {/* Username / email */}

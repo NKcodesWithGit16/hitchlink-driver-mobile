@@ -8,6 +8,7 @@ import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEY = 'hl_driver_token';
+const REFRESH_KEY = 'hl_driver_refresh_token';
 const isWeb = Platform.OS === 'web';
 let migrated = false;
 
@@ -49,4 +50,29 @@ export async function clearToken() {
   } catch {}
   // Always clear any legacy AsyncStorage copy on native too.
   if (!isWeb) { try { await AsyncStorage.removeItem(KEY); } catch {} }
+}
+
+// ── Refresh token (long-lived; rotated by the Identity service on every use) ──
+
+export async function readRefreshToken() {
+  try {
+    return isWeb
+      ? await AsyncStorage.getItem(REFRESH_KEY)
+      : await SecureStore.getItemAsync(REFRESH_KEY);
+  } catch { return null; }
+}
+
+export async function writeRefreshToken(token) {
+  if (!token) return clearRefreshToken();
+  try {
+    if (isWeb) await AsyncStorage.setItem(REFRESH_KEY, token);
+    else await SecureStore.setItemAsync(REFRESH_KEY, token);
+  } catch {}
+}
+
+export async function clearRefreshToken() {
+  try {
+    if (isWeb) await AsyncStorage.removeItem(REFRESH_KEY);
+    else await SecureStore.deleteItemAsync(REFRESH_KEY);
+  } catch {}
 }
