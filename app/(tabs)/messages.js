@@ -16,6 +16,7 @@ import {
   fetchMessages, sendMessage, sendVoiceMessage, sendPhotoMessage, fetchActiveLoad,
   editMessage, deleteMessage, reactToMessage, removeReaction,
 } from '../../src/api/main';
+import { useChatSocket } from '../../src/hooks/useChatSocket';
 import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 
@@ -71,16 +72,20 @@ export default function MessagesScreen() {
     } catch {}
   }, [user?.id]);
 
-  // The chat is REST + polling (the backend broadcasts over SignalR for the
-  // dispatcher web; mobile polls). Refresh every few seconds while open so new
-  // dispatcher messages arrive without a manual pull.
+  // Real-time: the SignalR hub nudges `load()` the instant a message arrives.
+  // Polling stays as reconciliation — relaxed to 30s while the socket is
+  // healthy (it also picks up edits/deletes/reactions, which the hub doesn't
+  // broadcast), and back to 5s whenever the socket is down or unavailable
+  // (mock mode, web without the module, server unreachable).
+  const socketConnected = useChatSocket(user?.id, load);
+
   useEffect(() => {
     if (!user?.id) return;
     load();
     fetchActiveLoad(user.id).then(setActiveLoad).catch(() => {});
-    const timer = setInterval(load, 5000);
+    const timer = setInterval(load, socketConnected ? 30000 : 5000);
     return () => clearInterval(timer);
-  }, [user?.id, load]);
+  }, [user?.id, load, socketConnected]);
 
   const scrollToEnd = useCallback((animated = true) => {
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated }));
