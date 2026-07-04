@@ -16,6 +16,7 @@ import { useAuth } from '../../src/context/AuthContext';
 import { fetchDocuments } from '../../src/api/main';
 import { expiryStatus, fmtDate, daysUntil } from '../../src/lib/format';
 import { space, type, radius, toneOf, FONT, shadow } from '../../src/theme/tokens';
+import { TAB_BAR_CLEARANCE } from './_layout';
 
 const FILTERS = [
   { key: 'all',      label: 'All'      },
@@ -153,7 +154,7 @@ export default function DocumentsScreen() {
 
       {/* ── Doc list ── */}
       <ScrollView
-        contentContainerStyle={{ padding: space[4], paddingBottom: 120, gap: space[3] }}
+        contentContainerStyle={{ padding: space[4], paddingBottom: insets.bottom + TAB_BAR_CLEARANCE, gap: space[3] }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.teal} />}
       >

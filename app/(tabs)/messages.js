@@ -17,6 +17,7 @@ import {
   editMessage, deleteMessage, reactToMessage, removeReaction,
 } from '../../src/api/main';
 import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
+import { TAB_BAR_CLEARANCE } from './_layout';
 
 const QUICK = [
   { label: 'On my way',     icon: 'navigation' },
@@ -283,7 +284,9 @@ export default function MessagesScreen() {
         </View>
 
         {/* ── Composer ── */}
-        <View style={[styles.composerOuter, { backgroundColor: colors.surface, borderTopColor: colors.border, paddingBottom: Math.max(insets.bottom, space[3]) }]}>
+        {/* Padded past the floating tab island so the input is never covered
+            by (or typed under) the glass bar. */}
+        <View style={[styles.composerOuter, { backgroundColor: colors.surface, borderTopColor: colors.border, paddingBottom: insets.bottom + TAB_BAR_CLEARANCE }]}>
           {/* Reply / edit context bar */}
           {(replyTo || editing) ? (
             <View style={[styles.contextBar, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
@@ -429,11 +432,14 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick }) {
       ) : null}
 
       <View style={{ maxWidth: '78%', minWidth: 0, alignItems: mine ? 'flex-end' : 'flex-start' }}>
+        {/* No accessibilityRole="button" here — this wrapper only reacts to
+            long-press (a plain tap does nothing), and voice bubbles nest a
+            real play/pause button inside it. On web, "button" role renders
+            an actual <button>, and a <button> can't contain another <button>. */}
         <Pressable
           onLongPress={() => onAction?.()}
           delayLongPress={280}
           disabled={msg.deleted}
-          accessibilityRole="button"
           accessibilityLabel="Message — long press for options"
         >
           {inner}

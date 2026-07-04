@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Animated, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Animated, RefreshControl } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -13,8 +13,13 @@ import { useAuth } from '../../src/context/AuthContext';
 import { fetchEarnings } from '../../src/api/main';
 import { money, num, rpm } from '../../src/lib/format';
 import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
+import { TAB_BAR_CLEARANCE } from './_layout';
 
 const CHART_H = 108;
+// Scroll distance over which the hero fully collapses, and how small the
+// big take-home figure gets at the end of that range.
+const HERO_COLLAPSE_RANGE = 150;
+const HERO_MIN_SCALE = 0.62;
 
 export default function EarningsScreen() {
   const insets = useSafeAreaInsets();
@@ -26,6 +31,43 @@ export default function EarningsScreen() {
   const [expanded, setExpanded] = useState(null);
   const [error, setError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Scroll-linked hero collapse: the chart + compare line shrink to zero
+  // height and the big figure scales down as you scroll. Heights are
+  // measured via onLayout (they vary with font scaling), never hardcoded.
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const [figH, setFigH] = useState(0);
+  const [detailH, setDetailH] = useState(0);
+
+  // Note: not gated on reduce-motion — this tracks the user's own scroll
+  // gesture 1:1 (direct manipulation), it never moves on its own.
+  const figStyle = figH > 0 ? {
+    height: scrollY.interpolate({
+      inputRange: [0, HERO_COLLAPSE_RANGE],
+      outputRange: [figH, Math.round(figH * HERO_MIN_SCALE)],
+      extrapolate: 'clamp',
+    }),
+    transform: [{ scale: scrollY.interpolate({
+      inputRange: [0, HERO_COLLAPSE_RANGE],
+      outputRange: [1, HERO_MIN_SCALE],
+      extrapolate: 'clamp',
+    }) }],
+    transformOrigin: 'left top',
+  } : null;
+
+  const detailStyle = detailH > 0 ? {
+    height: scrollY.interpolate({
+      inputRange: [0, HERO_COLLAPSE_RANGE],
+      outputRange: [detailH, 0],
+      extrapolate: 'clamp',
+    }),
+    opacity: scrollY.interpolate({
+      inputRange: [0, HERO_COLLAPSE_RANGE * 0.65],
+      outputRange: [1, 0],
+      extrapolate: 'clamp',
+    }),
+    overflow: 'hidden',
+  } : null;
 
   const loadData = useCallback(async () => {
     try {
@@ -47,14 +89,17 @@ export default function EarningsScreen() {
   }, [loadData]);
 
   const d = data?.[range];
-  const delta = useMemo(() => (d ? Math.round(((d.net - d.prevNet) / d.prevNet) * 100) : 0), [d]);
-  const wfTotal = d ? d.net + d.fuelCost + d.deductions : 1;
+  // Guard every ratio against a zero denominator (no loads yet this week/month) —
+  // otherwise the division produces NaN, and NaN as a `flex` value crashes the
+  // waterfall bar's layout on web.
+  const delta = useMemo(() => (d && d.prevNet ? Math.round(((d.net - d.prevNet) / d.prevNet) * 100) : 0), [d]);
+  const wfTotal = d ? (d.net + d.fuelCost + d.deductions) || 1 : 1;
   const netPct  = d ? d.net        / wfTotal : 0;
   const fuelPct = d ? d.fuelCost   / wfTotal : 0;
   const dedPct  = d ? d.deductions / wfTotal : 0;
   const bestBar = d ? d.bars.reduce((a, b) => (b.v > a.v ? b : a), d.bars[0]) : null;
-  const avgLoad = d ? Math.round(d.net / d.loads) : 0;
-  const dpm     = d ? d.net / d.miles : 0;
+  const avgLoad = d && d.loads ? Math.round(d.net / d.loads) : 0;
+  const dpm     = d && d.miles ? d.net / d.miles : 0;
 
   return (
     <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
@@ -71,7 +116,10 @@ export default function EarningsScreen() {
 
         {d ? (
           <>
-            <View style={styles.heroFigRow}>
+            <Animated.View
+              onLayout={(e) => { const h = e.nativeEvent.layout.height; if (h > figH) setFigH(h); }}
+              style={[styles.heroFigRow, figStyle]}
+            >
               <CountUp value={d.net} duration={1100} format={money} style={styles.heroValue} />
               <View style={[styles.deltaBadge, { backgroundColor: delta >= 0 ? colors.goFill : colors.dangerFill, borderColor: delta >= 0 ? colors.go : colors.danger }]}>
                 <Icon name={delta >= 0 ? 'trending-up' : 'trending-down'} size={13} color={delta >= 0 ? colors.go : colors.danger} />
@@ -79,9 +127,14 @@ export default function EarningsScreen() {
                   {delta >= 0 ? '+' : ''}{delta}%
                 </Text>
               </View>
-            </View>
-            <Text style={styles.heroCompare}>vs {money(d.prevNet)} last {range}</Text>
-            <AnimatedChart bars={d.bars} colors={colors} styles={styles} range={range} />
+            </Animated.View>
+            <Animated.View
+              onLayout={(e) => { const h = e.nativeEvent.layout.height; if (h > detailH) setDetailH(h); }}
+              style={detailStyle}
+            >
+              <Text style={styles.heroCompare}>vs {money(d.prevNet)} last {range}</Text>
+              <AnimatedChart bars={d.bars} colors={colors} styles={styles} range={range} />
+            </Animated.View>
           </>
         ) : error ? (
           <View style={{ marginTop: space[3], gap: 4 }}>
@@ -97,11 +150,16 @@ export default function EarningsScreen() {
         )}
       </LinearGradient>
 
-      <ScrollView
-        contentContainerStyle={{ padding: space[4], paddingBottom: 120, gap: space[4] }}
+      <Animated.ScrollView
+        contentContainerStyle={{ padding: space[4], paddingBottom: insets.bottom + TAB_BAR_CLEARANCE, gap: space[4] }}
         showsVerticalScrollIndicator={false}
         style={{ backgroundColor: colors.bg }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.teal} />}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }, // height/layout animations need the JS driver
+        )}
+        scrollEventThrottle={16}
       >
         {d ? (
           <>
@@ -191,7 +249,7 @@ export default function EarningsScreen() {
         ) : (
           <EarningsBodySkeleton colors={colors} styles={styles} />
         )}
-      </ScrollView>
+      </Animated.ScrollView>
     </ScreenFade>
   );
 }
@@ -355,7 +413,7 @@ function BreakdownRow({ label, value, tone, strong, colors, styles }) {
 }
 
 function LoadCard({ load, expanded, onToggle, colors, styles }) {
-  const dpm = load.net / load.miles;
+  const dpm = load.miles ? load.net / load.miles : 0;
   return (
     <Pressable
       onPress={onToggle}

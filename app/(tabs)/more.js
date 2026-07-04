@@ -13,6 +13,7 @@ import { fetchHos, fetchActiveLoad } from '../../src/api/main';
 import { hos as mockHos } from '../../src/data/mock';
 import { hm, money } from '../../src/lib/format';
 import { space, type, radius, toneOf, FONT, shadow, ACCENT_PRESETS, BG_PRESETS_NIGHT } from '../../src/theme/tokens';
+import { TAB_BAR_CLEARANCE } from './_layout';
 
 const THEME_OPTIONS = [
   { key: 'auto',  label: 'Auto',  icon: 'zap'  },
@@ -67,7 +68,7 @@ export default function MoreScreen() {
   return (
     <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
       <ScrollView
-        contentContainerStyle={{ paddingBottom: 120, gap: space[4] }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + TAB_BAR_CLEARANCE, gap: space[4] }}
         showsVerticalScrollIndicator={false}
       >
 

@@ -21,7 +21,7 @@ try {
 }
 
 const DEFAULT_INTERVAL_SEC = 60;   // until the server suggests a cadence
-const MIN_INTERVAL_SEC = 30;       // never hammer, whatever the server says
+const MIN_INTERVAL_SEC = 8;        // never hammer, whatever the server says
 const RETRY_INTERVAL_SEC = 120;    // backoff while offline / endpoint down
 const MAX_FIX_AGE_MS = 5 * 60 * 1000; // never report a stale fix as "here now"
 
@@ -73,8 +73,8 @@ export function useLocationSharing() {
         sub = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.Balanced,
-            timeInterval: 15000,   // keep the ref fresh, sends are paced above
-            distanceInterval: 50,
+            timeInterval: 5000,    // keep the ref fresh, sends are paced above
+            distanceInterval: 20,
           },
           (pos) => {
             latest.fix = pos;

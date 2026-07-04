@@ -30,6 +30,7 @@ import UndoToast from '../../src/components/ui/UndoToast';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useNetworkStatus } from '../../src/hooks/useNetworkStatus';
 import { enqueue, flush, queueCount } from '../../src/lib/offlineQueue';
+import { TAB_BAR_CLEARANCE } from './_layout';
 
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
@@ -237,7 +238,7 @@ export default function LoadScreen() {
       {!online ? <OfflineBanner pending={pending} /> : null}
 
       <ScrollView
-        contentContainerStyle={{ padding: space[5], paddingBottom: 140, gap: space[4] }}
+        contentContainerStyle={{ padding: space[5], paddingBottom: insets.bottom + TAB_BAR_CLEARANCE, gap: space[4] }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.teal} />}
       >
