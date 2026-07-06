@@ -32,7 +32,7 @@ export function ThemeProvider({ children }) {
   const forced = urlMode();
   const [mode, setModeState] = useState(forced || 'auto');
   const [accentKey, setAccentKeyState] = useState('teal');
-  const [bgKey, setBgKeyState] = useState('navy');
+  const [bgKey, setBgKeyState] = useState('slate');
 
   useEffect(() => {
     if (forced) return;

@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, Pressable,
-  KeyboardAvoidingView, Platform, Linking, Animated, Image, Modal,
+  KeyboardAvoidingView, Platform, Linking, Animated, Image, Modal, Keyboard,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../../src/components/ui/Icon';
-import VoiceButton from '../../src/components/driver/VoiceButton';
+import RecordingBar from '../../src/components/driver/RecordingBar';
+import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
@@ -17,6 +19,7 @@ import {
   editMessage, deleteMessage, reactToMessage, removeReaction,
 } from '../../src/api/main';
 import { useChatSocket } from '../../src/hooks/useChatSocket';
+import { useVoiceRecorder } from '../../src/hooks/useVoiceRecorder';
 import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 
@@ -38,6 +41,7 @@ const replyPreviewOf = (m) => ({ id: m.id, from: m.from, text: m.text, kind: m.k
 
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { colors } = useTheme();
   const { user } = useAuth();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -49,7 +53,23 @@ export default function MessagesScreen() {
   const [editing,     setEditing]     = useState(null);   // message being edited
   const [menuFor,     setMenuFor]     = useState(null);   // message with the action sheet open
   const [confirmDel,  setConfirmDel]  = useState(null);   // message pending delete confirmation
+  const [viewerUri,   setViewerUri]   = useState(null);   // photo open in the fullscreen viewer
+  const [kbOpen,      setKbOpen]      = useState(false);  // keyboard visibility
   const scrollRef   = useRef(null);
+
+  // When the keyboard is up, the floating tab island is hidden behind it, so
+  // the composer no longer needs to reserve room for it — collapse that
+  // padding so the input sits right above the keyboard instead of under it.
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const s = Keyboard.addListener(showEvt, () => {
+      setKbOpen(true);
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+    });
+    const h = Keyboard.addListener(hideEvt, () => setKbOpen(false));
+    return () => { s.remove(); h.remove(); };
+  }, []);
 
   // dispatcher info comes from the driver profile loaded in AuthContext
   const dispatcher = user?.dispatcher;
@@ -136,6 +156,10 @@ export default function MessagesScreen() {
     load();
   }, [user?.id, load, scrollToEnd, replyTo]);
 
+  // Tap-to-record voice: start() flips the composer into a recording bar,
+  // stop() sends the clip through sendVoice, cancel() discards it.
+  const voice = useVoiceRecorder({ onSend: sendVoice });
+
   // ── Message actions (long-press menu) ───────────────────────────────────
   const startReply = useCallback((m) => { setMenuFor(null); setEditing(null); setReplyTo(m); }, []);
 
@@ -194,11 +218,7 @@ export default function MessagesScreen() {
     <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
 
       {/* ── Header ── */}
-      <View style={[styles.header, shadow.card]}>
-        <LinearGradient
-          colors={[colors.surface, colors.surface]}
-          style={StyleSheet.absoluteFill}
-        />
+      <View style={[styles.header, { borderBottomColor: colors.border }]}>
         <View style={styles.peerInfo}>
           <LinearGradient colors={colors.gradients.teal} style={styles.avatar}>
             <Text style={styles.avatarInitials}>
@@ -227,9 +247,14 @@ export default function MessagesScreen() {
         </View>
       </View>
 
-      {/* ── Load context banner ── */}
+      {/* ── Load context banner (tap → Load tab) ── */}
       {activeLoad ? (
-        <View style={[styles.loadBanner, { backgroundColor: colors.tealFill, borderColor: colors.teal }]}>
+        <Pressable
+          onPress={() => router.push('/(tabs)')}
+          style={({ pressed }) => [styles.loadBanner, { backgroundColor: colors.tealFill, borderColor: colors.teal, opacity: pressed ? 0.85 : 1 }]}
+          accessibilityRole="button"
+          accessibilityLabel={`Open load ${activeLoad.id}`}
+        >
           <Icon name="truck" size={12} color={colors.teal} />
           <Text style={[styles.loadBannerText, { color: colors.teal }]} numberOfLines={1}>
             {activeLoad.id} · {activeLoad.origin} → {activeLoad.destination}
@@ -237,10 +262,21 @@ export default function MessagesScreen() {
           <View style={[styles.loadStatusPill, { backgroundColor: colors.teal }]}>
             <Text style={[styles.loadStatusText, { color: colors.onAccent }]}>En Route</Text>
           </View>
-        </View>
+          <Icon name="chevron-right" size={14} color={colors.teal} />
+        </Pressable>
       ) : null}
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={8}>
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={8}>
+
+        {/* Soft brand glow lighting the top of the thread — ambient depth,
+            near-invisible, fixed while messages scroll over it. */}
+        <LinearGradient
+          pointerEvents="none"
+          colors={colors.isDay
+            ? ['rgba(1,147,171,0.12)', 'rgba(4,40,90,0.04)', 'transparent']
+            : ['rgba(31,182,206,0.16)', 'rgba(4,40,90,0.06)', 'transparent']}
+          style={styles.threadGlow}
+        />
 
         {/* ── Chat area ── */}
         <ScrollView
@@ -248,7 +284,7 @@ export default function MessagesScreen() {
           contentContainerStyle={styles.chatContent}
           onContentSizeChange={() => scrollToEnd(false)}
           showsVerticalScrollIndicator={false}
-          style={{ backgroundColor: colors.bg }}
+          style={styles.chatScroll}
         >
           <DateSeparator label="Today" colors={colors} styles={styles} />
           {items.map((m, i) => (
@@ -261,6 +297,7 @@ export default function MessagesScreen() {
               styles={styles}
               onAction={() => !m.deleted && !String(m.id).startsWith('local-') && setMenuFor(m)}
               onReactQuick={(emoji) => !String(m.id).startsWith('local-') && react(m, emoji)}
+              onOpenImage={setViewerUri}
             />
           ))}
           {typing ? <TypingIndicator colors={colors} styles={styles} /> : null}
@@ -291,7 +328,7 @@ export default function MessagesScreen() {
         {/* ── Composer ── */}
         {/* Padded past the floating tab island so the input is never covered
             by (or typed under) the glass bar. */}
-        <View style={[styles.composerOuter, { backgroundColor: colors.surface, borderTopColor: colors.border, paddingBottom: insets.bottom + TAB_BAR_CLEARANCE }]}>
+        <View style={[styles.composerOuter, { backgroundColor: colors.surface, borderTopColor: colors.border, paddingBottom: kbOpen ? space[3] : insets.bottom + TAB_BAR_CLEARANCE }]}>
           {/* Reply / edit context bar */}
           {(replyTo || editing) ? (
             <View style={[styles.contextBar, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
@@ -312,37 +349,51 @@ export default function MessagesScreen() {
             </View>
           ) : null}
 
-          <View style={[styles.composerInner, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
-            <Pressable
-              onPress={pickAttachment}
-              style={styles.attachBtn}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="Attach a photo"
-            >
-              <Icon name="paperclip" size={18} color={colors.textMuted} />
-            </Pressable>
-            <TextInput
-              value={text}
-              onChangeText={setText}
-              placeholder={editing ? 'Edit your message…' : 'Message dispatcher…'}
-              placeholderTextColor={colors.textMuted}
-              style={[styles.input, { color: colors.textPrimary }]}
-              multiline
-              onSubmitEditing={() => send()}
-            />
-            {text.trim() ? (
+          {voice.recording ? (
+            <RecordingBar elapsed={voice.elapsed} onCancel={voice.cancel} onSend={voice.stop} />
+          ) : (
+            <View style={[styles.composerInner, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
               <Pressable
-                onPress={() => send()}
-                style={[styles.sendBtn, { backgroundColor: colors.teal }, shadow.glow(colors.teal)]}
-                accessibilityLabel={editing ? 'Save edit' : 'Send'}
+                onPress={pickAttachment}
+                style={styles.attachBtn}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Attach a photo"
               >
-                <Icon name={editing ? 'check' : 'arrow-up'} size={19} color={colors.onAccent} />
+                <Icon name="paperclip" size={18} color={colors.textMuted} />
               </Pressable>
-            ) : (
-              <VoiceButton onSend={sendVoice} />
-            )}
-          </View>
+              <TextInput
+                value={text}
+                onChangeText={setText}
+                placeholder={editing ? 'Edit your message…' : 'Message dispatcher…'}
+                placeholderTextColor={colors.textMuted}
+                style={[styles.input, { color: colors.textPrimary }]}
+                multiline
+                numberOfLines={1}
+                onSubmitEditing={() => send()}
+              />
+              {text.trim() ? (
+                <Pressable
+                  onPress={() => send()}
+                  style={[styles.sendBtn, { backgroundColor: colors.teal }, shadow.glow(colors.teal)]}
+                  accessibilityLabel={editing ? 'Save edit' : 'Send'}
+                >
+                  <Icon name={editing ? 'check' : 'arrow-up'} size={19} color={colors.onAccent} />
+                </Pressable>
+              ) : (
+                <Pressable
+                  onPress={voice.start}
+                  style={[styles.micBtn]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Record a voice message"
+                >
+                  <LinearGradient colors={colors.gradients.teal} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.micBtnFill}>
+                    <Icon name="mic" size={19} color={colors.onAccent} />
+                  </LinearGradient>
+                </Pressable>
+              )}
+            </View>
+          )}
         </View>
 
       </KeyboardAvoidingView>
@@ -368,6 +419,9 @@ export default function MessagesScreen() {
         onCancel={() => setConfirmDel(null)}
         onConfirm={confirmDelete}
       />
+
+      {/* ── Fullscreen photo viewer ── */}
+      <ImageViewer uri={viewerUri} colors={colors} styles={styles} onClose={() => setViewerUri(null)} />
     </ScreenFade>
   );
 }
@@ -386,12 +440,21 @@ function DateSeparator({ label, colors, styles }) {
   );
 }
 
-function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick }) {
+function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onOpenImage }) {
   const mine = msg.from === 'driver';
   const prevSame = prev?.from === msg.from;
   const nextSame = next?.from === msg.from;
   const showAvatar = !mine && !nextSame;
   const hasReactions = msg.reactions?.length > 0;
+
+  // Gentle entrance — runs once when a bubble first mounts (stable m.id keys
+  // mean existing bubbles don't re-animate on every poll/re-render).
+  const reduce = useReduceMotion();
+  const enter = useRef(new Animated.Value(reduce ? 1 : 0)).current;
+  useEffect(() => {
+    if (reduce) return;
+    Animated.timing(enter, { toValue: 1, duration: 240, useNativeDriver: true }).start();
+  }, []);
 
   // Tail shape: only the last bubble in a group gets a tail
   const tailMine   = !nextSame && mine;
@@ -405,13 +468,15 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick }) {
     !prevSame  && (mine ? styles.firstMine : styles.firstTheirs),
   ];
 
-  const body = <BubbleBody msg={msg} mine={mine} colors={colors} styles={styles} />;
+  const body = <BubbleBody msg={msg} mine={mine} colors={colors} styles={styles} onOpenImage={onOpenImage} />;
   let inner;
   if (msg.deleted) {
     inner = <View style={[bubbleStyle, { backgroundColor: colors.surface2, borderColor: colors.border, borderWidth: 1 }]}>{body}</View>;
   } else if (mine) {
+    // Brand teal→navy gradient with white ink — the driver's "voice" in the
+    // thread. A soft teal glow lifts it off the near-black background.
     inner = (
-      <LinearGradient colors={colors.gradients.teal} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={bubbleStyle}>
+      <LinearGradient colors={colors.gradients.brand} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[bubbleStyle, styles.bubbleMineGlow]}>
         {body}
       </LinearGradient>
     );
@@ -420,10 +485,11 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick }) {
   }
 
   return (
-    <View style={[
+    <Animated.View style={[
       styles.bubbleRow,
       mine ? styles.rowMine : styles.rowTheirs,
       prevSame ? { marginTop: 3 } : { marginTop: 10 },
+      { opacity: enter, transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }] },
     ]}>
       {/* Dispatcher avatar — shown only on last bubble in group */}
       {!mine ? (
@@ -467,13 +533,13 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick }) {
           </View>
         ) : null}
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
-function BubbleBody({ msg, mine, colors, styles }) {
-  const ink = mine ? colors.onAccent : colors.textPrimary;
-  const sub = mine ? 'rgba(255,255,255,0.55)' : colors.textMuted;
+function BubbleBody({ msg, mine, colors, styles, onOpenImage }) {
+  const ink = mine ? '#FFFFFF' : colors.textPrimary;
+  const sub = mine ? 'rgba(255,255,255,0.62)' : colors.textMuted;
 
   if (msg.deleted) {
     return (
@@ -500,7 +566,13 @@ function BubbleBody({ msg, mine, colors, styles }) {
       ) : null}
 
       {isImage ? (
-        <Image source={{ uri: msg.uri }} style={styles.bubbleImage} resizeMode="cover" accessibilityLabel="Attached photo" />
+        <Pressable
+          onPress={() => msg.uri && onOpenImage?.(msg.uri)}
+          accessibilityRole="button"
+          accessibilityLabel="Open photo fullscreen"
+        >
+          <Image source={{ uri: msg.uri }} style={styles.bubbleImage} resizeMode="cover" />
+        </Pressable>
       ) : isVoice ? (
         msg.uri
           ? <VoicePlayable uri={msg.uri} durationSec={msg.durationSec} mine={mine} colors={colors} styles={styles} />
@@ -588,6 +660,28 @@ function ConfirmDelete({ msg, colors, styles, onCancel, onConfirm }) {
   );
 }
 
+function ImageViewer({ uri, colors, styles, onClose }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal visible={!!uri} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.viewerOverlay} onPress={onClose}>
+        {uri ? (
+          <Image source={{ uri }} style={styles.viewerImage} resizeMode="contain" accessibilityLabel="Photo" />
+        ) : null}
+        <Pressable
+          onPress={onClose}
+          style={[styles.viewerClose, { top: insets.top + space[3] }]}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="Close photo"
+        >
+          <Icon name="x" size={24} color="#FFFFFF" />
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 function TypingIndicator({ colors, styles }) {
   const dots = [useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current];
 
@@ -624,7 +718,7 @@ function TypingIndicator({ colors, styles }) {
 }
 
 function VoiceStatic({ durationSec, mine, colors, styles }) {
-  const ink = mine ? colors.onAccent : colors.teal;
+  const ink = mine ? '#FFFFFF' : colors.teal;
   return (
     <View style={styles.voice}>
       <View style={[styles.playCircle, { borderColor: mine ? 'rgba(255,255,255,0.6)' : colors.teal, backgroundColor: mine ? 'rgba(255,255,255,0.15)' : colors.tealFill }]}>
@@ -645,7 +739,7 @@ function VoiceStatic({ durationSec, mine, colors, styles }) {
 function VoicePlayable({ uri, durationSec, mine, colors, styles }) {
   const player = useAudioPlayer({ uri });
   const status = useAudioPlayerStatus(player);
-  const ink = mine ? colors.onAccent : colors.teal;
+  const ink = mine ? '#FFFFFF' : colors.teal;
   const playing = !!status?.playing;
   const dur = status?.duration || durationSec || 1;
   const cur = status?.currentTime || 0;
@@ -688,7 +782,7 @@ const makeStyles = (c) => StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: space[4], paddingVertical: space[3],
-    backgroundColor: c.surface, zIndex: 10,
+    backgroundColor: c.surface, zIndex: 10, borderBottomWidth: 1,
   },
   peerInfo: { flexDirection: 'row', alignItems: 'center', gap: space[3], flex: 1, minWidth: 0 },
   avatar: { width: 48, height: 48, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
@@ -710,6 +804,8 @@ const makeStyles = (c) => StyleSheet.create({
   loadStatusText: { fontSize: 10, fontFamily: FONT.black },
 
   /* Chat */
+  chatScroll: { backgroundColor: 'transparent' },
+  threadGlow: { position: 'absolute', top: 0, left: 0, right: 0, height: 200 },
   chatContent: { padding: space[4], paddingBottom: space[6], gap: 0 },
 
   dateSep: { flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: space[4] },
@@ -726,6 +822,7 @@ const makeStyles = (c) => StyleSheet.create({
 
   bubble: { borderRadius: radius.xl, paddingHorizontal: space[4], paddingVertical: space[3], gap: 4, borderWidth: 0 },
   bubbleMine: {},
+  bubbleMineGlow: { shadowColor: c.teal, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.28, shadowRadius: 12, elevation: 5 },
   bubbleTheirs: { borderWidth: 1 },
   firstMine:   { borderTopRightRadius: radius.xl },
   firstTheirs: { borderTopLeftRadius:  radius.xl },
@@ -770,6 +867,11 @@ const makeStyles = (c) => StyleSheet.create({
   confirmCancel: { width: '100%', height: 48, borderRadius: radius.lg, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   confirmCancelText: { ...type.bodyStrong },
 
+  /* Fullscreen photo viewer */
+  viewerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.94)', alignItems: 'center', justifyContent: 'center' },
+  viewerImage: { width: '100%', height: '100%' },
+  viewerClose: { position: 'absolute', right: space[4], width: 40, height: 40, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
+
   /* Reply / edit context bar */
   contextBar: { flexDirection: 'row', alignItems: 'center', gap: space[2], borderWidth: 1, borderRadius: radius.lg, paddingVertical: 8, paddingRight: 8, paddingLeft: 0, marginBottom: space[2], overflow: 'hidden' },
   contextStripe: { width: 4, alignSelf: 'stretch', borderTopLeftRadius: radius.lg, borderBottomLeftRadius: radius.lg },
@@ -797,11 +899,13 @@ const makeStyles = (c) => StyleSheet.create({
   /* Composer */
   composerOuter: { borderTopWidth: 1, paddingHorizontal: space[4], paddingTop: space[3] },
   composerInner: {
-    flexDirection: 'row', alignItems: 'flex-end', gap: space[2],
+    flexDirection: 'row', alignItems: 'center', gap: space[2],
     borderRadius: radius.xl, borderWidth: 1,
-    paddingLeft: space[3], paddingRight: space[2], paddingVertical: space[2],
+    paddingLeft: 5, paddingRight: 5, paddingVertical: 5,
   },
-  attachBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  input: { flex: 1, minHeight: 44, maxHeight: 110, paddingVertical: 6, ...type.body },
-  sendBtn: { width: 44, height: 44, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  attachBtn: { width: 40, height: 38, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  input: { flex: 1, minHeight: 38, maxHeight: 110, paddingVertical: 8, lineHeight: 22, textAlignVertical: 'center', ...type.body },
+  sendBtn: { width: 38, height: 38, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  micBtn: { width: 38, height: 38, flexShrink: 0 },
+  micBtnFill: { flex: 1, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
 });

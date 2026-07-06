@@ -31,20 +31,24 @@ export const TAB_BAR_CLEARANCE = BAR_HEIGHT + BAR_BOTTOM_GAP + 16;
 // Load is the app's primary screen — a bigger circular badge that stays
 // teal-tinted even at rest (unlike the other tabs, which go fully muted)
 // so it always reads as the hero tab, not just when it happens to be active.
-const HERO_SIZE = 54;
+const HERO_SIZE = 46;
 
 function TabIcon({ iconRest, iconActive, label, color, focused, fillColor, hero, colors }) {
   // Scale/lift pop on focus — mirrors motion.spring so every tab shares the
   // same feel; the hero circle pops slightly more since it's the anchor tab.
   const reduceMotion = useReduceMotion();
+  // Load (hero) sits deliberately raised at all times so it reads as the
+  // app's anchor tab; every tab lifts a little more when it's the active one.
+  const restLift = hero ? -3 : 0;
+  const activeLift = hero ? -6 : -3;
   const scale = useRef(new Animated.Value(focused ? 1 : 0.94)).current;
-  const lift = useRef(new Animated.Value(focused ? (hero ? -4 : -2) : 0)).current;
+  const lift = useRef(new Animated.Value(focused ? activeLift : restLift)).current;
   // Gradient cross-fade for the active pill (hard bg switches look cheap).
   const fade = useRef(new Animated.Value(focused ? 1 : 0)).current;
 
   useEffect(() => {
     const scaleTo = focused ? 1 : 0.94;
-    const liftTo = focused ? (hero ? -4 : -2) : 0;
+    const liftTo = focused ? activeLift : restLift;
     const fadeTo = focused ? 1 : 0;
     if (reduceMotion) {
       scale.setValue(scaleTo);
@@ -63,14 +67,20 @@ function TabIcon({ iconRest, iconActive, label, color, focused, fillColor, hero,
   const labelStyle = {
     fontSize: 11,
     fontFamily: focused ? FONT.extrabold : FONT.medium,
-    letterSpacing: focused ? 0.2 : 0,
+    // No focused letter-spacing bump: the extrabold weight already widens the
+    // word, and the extra tracking pushed "Docs"/"More" past their box so
+    // numberOfLines={1} ellipsized them to "Do…"/"Mo…".
     color,
     lineHeight: 13,
+    // Fixed, centered box wide enough for the boldest label — guarantees the
+    // text renders in full regardless of weight/tracking.
+    width: 56,
+    textAlign: 'center',
   };
 
   if (hero) {
     return (
-      <View style={{ alignItems: 'center', gap: 2 }}>
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2 }}>
         <Animated.View style={{ transform }}>
           {focused ? (
             <LinearGradient
@@ -105,7 +115,7 @@ function TabIcon({ iconRest, iconActive, label, color, focused, fillColor, hero,
     );
   }
   return (
-    <View style={{ alignItems: 'center', gap: 3 }}>
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 3 }}>
       {/* Glow lives on this outer wrapper — the pill itself needs
           overflow:'hidden' for the gradient, which would clip a shadow. */}
       <Animated.View style={[{ transform }, focused ? shadow.glow(colors.teal) : null]}>
@@ -145,6 +155,11 @@ function IslandBackground({ colors }) {
   // Top-edge sheen is what makes glass read as glass instead of grey
   // plastic — stronger in daylight, faint at night.
   const sheen = colors.isDay ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.07)';
+  // The shared glass overlay is tuned to be see-through, which left the tab
+  // icons/labels illegible when bright content scrolled behind them. The bar
+  // is the app's primary navigation, so it gets a stronger scrim than a
+  // decorative glass panel — still translucent, but opaque enough to read.
+  const scrim = colors.isDay ? 'rgba(248,250,252,0.82)' : 'rgba(14,19,26,0.86)';
   return (
     <View
       pointerEvents="none"
@@ -162,7 +177,7 @@ function IslandBackground({ colors }) {
         experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
         style={StyleSheet.absoluteFill}
       />
-      <View style={[StyleSheet.absoluteFill, { backgroundColor: glass.overlay }]} />
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: scrim }]} />
       <LinearGradient
         colors={[sheen, 'rgba(255,255,255,0)']}
         start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
@@ -196,14 +211,22 @@ export default function TabsLayout() {
           borderRadius: radius['2xl'],
           backgroundColor: 'transparent',
           borderTopWidth: 0,
-          paddingTop: 8,
-          paddingBottom: 8,
+          // No vertical padding: each tab now owns its own full-height,
+          // centered slot (see TabIcon + tabBarIconStyle), so all five icons
+          // share one vertical axis instead of React Navigation biasing the
+          // shorter (non-hero) groups toward the top.
+          paddingTop: 0,
+          paddingBottom: 0,
           // A floating island casts a normal drop shadow like a card —
           // not the upward shadow a docked bar needs. Strongest tier:
           // the bar floats over content, it can afford it.
           ...elevation[4],
         },
         tabBarItemStyle: { flex: 1, minWidth: 0, alignItems: 'center', justifyContent: 'center' },
+        // Let the icon container fill the item height so our centered TabIcon
+        // slot can truly center within the bar (RN otherwise reserves space
+        // for a hidden label and top-anchors the icon).
+        tabBarIconStyle: { flex: 1, alignSelf: 'stretch', justifyContent: 'center', marginTop: 0, marginBottom: 0 },
         sceneStyle: { backgroundColor: colors.bg },
       }}
     >

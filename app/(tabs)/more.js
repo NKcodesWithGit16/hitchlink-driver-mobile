@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../../src/components/ui/Icon';
@@ -10,9 +11,9 @@ import { hosState } from '../../src/components/driver/HOSPill';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { fetchHos, fetchActiveLoad } from '../../src/api/main';
-import { hos as mockHos } from '../../src/data/mock';
-import { hm, money } from '../../src/lib/format';
-import { space, type, radius, toneOf, FONT, shadow, ACCENT_PRESETS, BG_PRESETS_NIGHT } from '../../src/theme/tokens';
+import { hos as mockHos, earnings } from '../../src/data/mock';
+import { hm } from '../../src/lib/format';
+import { space, type, radius, elevation, toneOf, FONT, shadow, ACCENT_PRESETS, BG_PRESETS_NIGHT } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 
 const THEME_OPTIONS = [
@@ -20,6 +21,11 @@ const THEME_OPTIONS = [
   { key: 'day',   label: 'Day',   icon: 'sun'  },
   { key: 'night', label: 'Night', icon: 'moon' },
 ];
+
+// Demo "standing" metrics — the reputation numbers a real app would pull from
+// the dispatch backend. Kept here (not in the shared fixtures) because they're
+// presentation-only for this screen.
+const STANDING = { score: 96, tier: 'Elite', percentile: 5, rating: 4.9, onTimePct: 98, streak: 12, acceptPct: 94 };
 
 // Icon hues carry a `tone` resolved against the live theme at render — the
 // brand tone follows the driver's chosen accent; the rest are fixed category
@@ -30,16 +36,42 @@ const QUICK_ACTIONS = [
   { icon: 'star',           label: 'Feedback', sub: 'Rate the app',   tone: 'purple', onPress: () => Alert.alert('Feedback', 'Thank you! Rating coming soon.') },
 ];
 
-const SETTING_ROWS = [
-  { icon: 'truck',       label: 'Truck info',     tone: 'teal',   metaKey: 'truck' },
-  { icon: 'bell',        label: 'Notifications',  tone: 'orange', meta: 'On'       },
-  { icon: 'globe',       label: 'Language',       tone: 'green',  meta: 'English'  },
-  { icon: 'help-circle', label: 'Help & Support', tone: 'purple'                   },
+// Settings grouped into labeled sections the way top-tier apps organize them.
+// `route` navigates; otherwise a row falls back to an informational alert.
+const SETTING_GROUPS = [
+  {
+    title: 'Account',
+    rows: [
+      { icon: 'user',        label: 'Profile',        tone: 'teal'                                     },
+      { icon: 'truck',       label: 'Truck info',     tone: 'blue',   metaKey: 'truck'                 },
+      { icon: 'file-text',   label: 'Documents',      tone: 'green',  meta: 'Manage', route: '/(tabs)/documents' },
+      { icon: 'credit-card', label: 'Payout method',  tone: 'purple', meta: 'Direct deposit'           },
+    ],
+  },
+  {
+    title: 'Preferences',
+    rows: [
+      { icon: 'bell',        label: 'Notifications',  tone: 'orange', meta: 'On'         },
+      { icon: 'globe',       label: 'Language',       tone: 'green',  meta: 'English'    },
+      { icon: 'map',         label: 'Distance units', tone: 'teal',   meta: 'Miles'      },
+      { icon: 'navigation',  label: 'Navigation app', tone: 'blue',   meta: 'Apple Maps' },
+    ],
+  },
+  {
+    title: 'Support',
+    rows: [
+      { icon: 'help-circle', label: 'Help center',     tone: 'teal'   },
+      { icon: 'phone',       label: 'Contact support', tone: 'green',  meta: '1-800-HITCH' },
+      { icon: 'star',        label: 'Rate the app',    tone: 'orange' },
+      { icon: 'shield',      label: 'Terms & privacy', tone: 'purple' },
+    ],
+  },
 ];
 
 export default function MoreScreen() {
   const insets = useSafeAreaInsets();
-  const { colors, mode, setMode, isDay, accentKey, setAccent, bgKey, setBg, scheme } = useTheme();
+  const router = useRouter();
+  const { colors, mode, setMode, accentKey, setAccent, bgKey, setBg, scheme } = useTheme();
   const { user, userId, signOut } = useAuth();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   // Resolve icon tones: `teal` tracks the chosen accent; others are design-system hues.
@@ -59,6 +91,16 @@ export default function MoreScreen() {
     fetchActiveLoad(userId).then(setActiveLoad).catch(() => {});
   }, [userId]);
 
+  const greeting = useMemo(() => {
+    const h = new Date().getHours();
+    return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+  }, []);
+
+  const onRow = (row) =>
+    row.route
+      ? router.push(row.route)
+      : Alert.alert(row.label, row.meta ?? user?.[row.metaKey] ?? 'Coming soon.');
+
   const confirmSignOut = () =>
     Alert.alert('Sign out', 'Sign out of HitchLink?', [
       { text: 'Cancel', style: 'cancel' },
@@ -68,7 +110,7 @@ export default function MoreScreen() {
   return (
     <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
       <ScrollView
-        contentContainerStyle={{ paddingBottom: insets.bottom + TAB_BAR_CLEARANCE, gap: space[4] }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + TAB_BAR_CLEARANCE, gap: space[5] }}
         showsVerticalScrollIndicator={false}
       >
 
@@ -79,45 +121,66 @@ export default function MoreScreen() {
             start={{ x: 0.1, y: 0 }} end={{ x: 1, y: 1 }}
             style={styles.profileHero}
           >
-            {/* Avatar */}
-            <View style={styles.avatarRing}>
-              <View style={styles.avatarInner}>
-                <Text style={styles.avatarText}>
-                  {(user?.firstName || 'D').slice(0, 1).toUpperCase()}
-                </Text>
+            {/* Greeting + edit */}
+            <View style={styles.heroTopRow}>
+              <Text style={styles.heroGreeting}>{greeting}</Text>
+              <Pressable
+                onPress={() => Alert.alert('Edit profile', 'Profile editing coming soon.')}
+                hitSlop={10}
+                style={styles.heroEditBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Edit profile"
+              >
+                <Icon name="edit-2" size={15} color="rgba(255,255,255,0.9)" />
+              </Pressable>
+            </View>
+
+            {/* Identity */}
+            <View style={styles.heroIdentity}>
+              <View style={styles.avatarRing}>
+                <View style={styles.avatarInner}>
+                  <Text style={styles.avatarText}>
+                    {(user?.firstName || 'D').slice(0, 1).toUpperCase()}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.heroName} numberOfLines={1}>{user?.name ?? 'Driver'}</Text>
+                <Text style={styles.heroTruck} numberOfLines={1}>{user?.truck}</Text>
+                <View style={styles.heroStatusRow}>
+                  <View style={styles.onDutyDot} />
+                  <Text style={styles.heroStatus}>On Duty</Text>
+                  {activeLoad ? <Text style={styles.heroLoadId}>· {activeLoad.id}</Text> : null}
+                </View>
               </View>
             </View>
 
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={styles.heroName} numberOfLines={1}>{user?.name ?? 'Driver'}</Text>
-              <Text style={styles.heroTruck} numberOfLines={1}>{user?.truck}</Text>
-              <View style={styles.heroStatusRow}>
-                <View style={styles.onDutyDot} />
-                <Text style={styles.heroStatus}>On Duty</Text>
-                {activeLoad ? (
-                  <Text style={styles.heroLoadId}>· {activeLoad.id}</Text>
-                ) : null}
-              </View>
+            {/* Glass stats strip */}
+            <View style={styles.heroStats}>
+              <HeroStat icon="star"       value={STANDING.rating.toFixed(1)} label="Rating"    styles={styles} />
+              <View style={styles.heroStatDivider} />
+              <HeroStat icon="check-circle" value={`${STANDING.onTimePct}%`}   label="On-time"   styles={styles} />
+              <View style={styles.heroStatDivider} />
+              <HeroStat icon="navigation" value={`${(earnings.week.miles / 1000).toFixed(1)}k`} label="Mi / week" styles={styles} />
             </View>
-
-            {/* Quick pay badge */}
-            {activeLoad ? (
-              <View style={styles.heroPay}>
-                <Text style={styles.heroPayLabel}>This load</Text>
-                <Text style={styles.heroPayValue}>{money(activeLoad.rate)}</Text>
-              </View>
-            ) : null}
           </LinearGradient>
         </FadeInView>
 
-        {/* ── HOS ── */}
+        {/* ── Driver standing ── */}
         <FadeInView delay={60} style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Your standing</Text>
+          <StandingCard colors={colors} styles={styles} />
+        </FadeInView>
+
+        {/* ── HOS ── */}
+        <FadeInView delay={120} style={styles.section}>
           <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Hours of Service</Text>
           <HosCard hos={hos} colors={colors} styles={styles} />
         </FadeInView>
 
         {/* ── Quick actions ── */}
-        <FadeInView delay={120} style={styles.section}>
+        <FadeInView delay={180} style={styles.section}>
           <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Quick actions</Text>
           <View style={styles.quickRow}>
             {QUICK_ACTIONS.map(({ icon, label, sub, tone, onPress }) => {
@@ -129,6 +192,7 @@ export default function MoreScreen() {
                 style={({ pressed }) => [
                   styles.quickCard,
                   { backgroundColor: colors.surface, borderColor: colors.border, opacity: pressed ? 0.8 : 1 },
+                  elevation[1],
                 ]}
                 accessibilityRole="button"
                 accessibilityLabel={`${label}. ${sub}`}
@@ -144,10 +208,36 @@ export default function MoreScreen() {
           </View>
         </FadeInView>
 
+        {/* ── Settings groups ── */}
+        {SETTING_GROUPS.map((group, gi) => (
+          <FadeInView key={group.title} delay={220 + gi * 40} style={styles.section}>
+            <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{group.title}</Text>
+            <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border, padding: 0, overflow: 'hidden' }, elevation[1]]}>
+              {group.rows.map((row, i) => (
+                <View key={row.label}>
+                  <SettingRow
+                    icon={row.icon}
+                    label={row.label}
+                    iconColor={hue[row.tone]}
+                    iconBg={hue[row.tone] + '22'}
+                    meta={row.metaKey ? user?.[row.metaKey] : row.meta}
+                    colors={colors}
+                    styles={styles}
+                    onPress={() => onRow(row)}
+                  />
+                  {i < group.rows.length - 1 ? (
+                    <View style={[styles.rowDivider, { backgroundColor: colors.border }]} />
+                  ) : null}
+                </View>
+              ))}
+            </View>
+          </FadeInView>
+        ))}
+
         {/* ── Appearance ── */}
-        <FadeInView delay={180} style={styles.section}>
+        <FadeInView delay={360} style={styles.section}>
           <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Appearance</Text>
-          <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, elevation[1]]}>
 
             {/* Theme */}
             <View style={styles.settingBlock}>
@@ -253,32 +343,8 @@ export default function MoreScreen() {
           </View>
         </FadeInView>
 
-        {/* ── Settings ── */}
-        <FadeInView delay={220} style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Settings</Text>
-          <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border, padding: 0, overflow: 'hidden' }]}>
-            {SETTING_ROWS.map((row, i) => (
-              <View key={row.label}>
-                <SettingRow
-                  icon={row.icon}
-                  label={row.label}
-                  iconColor={hue[row.tone]}
-                  iconBg={hue[row.tone] + '22'}
-                  meta={row.metaKey ? user?.[row.metaKey] : row.meta}
-                  colors={colors}
-                  styles={styles}
-                  onPress={() => Alert.alert(row.label, row.meta ?? user?.[row.metaKey] ?? '')}
-                />
-                {i < SETTING_ROWS.length - 1 ? (
-                  <View style={[styles.rowDivider, { backgroundColor: colors.border }]} />
-                ) : null}
-              </View>
-            ))}
-          </View>
-        </FadeInView>
-
         {/* ── Sign out ── */}
-        <FadeInView delay={260} style={[styles.section, { paddingBottom: space[2] }]}>
+        <FadeInView delay={420} style={[styles.section, { paddingBottom: space[2] }]}>
           <Pressable
             onPress={confirmSignOut}
             style={({ pressed }) => [
@@ -300,6 +366,79 @@ export default function MoreScreen() {
   );
 }
 
+/* ─────────── Hero stat ─────────── */
+
+function HeroStat({ icon, value, label, styles }) {
+  return (
+    <View style={styles.heroStat}>
+      <View style={styles.heroStatTop}>
+        <Icon name={icon} size={12} color="rgba(255,255,255,0.85)" />
+        <Text style={styles.heroStatValue}>{value}</Text>
+      </View>
+      <Text style={styles.heroStatLabel}>{label}</Text>
+    </View>
+  );
+}
+
+/* ─────────── Standing Card ─────────── */
+
+function StandingCard({ colors, styles }) {
+  const pct = Math.max(0, Math.min(1, STANDING.score / 100));
+  return (
+    <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, elevation[2]]}>
+      <View style={styles.standingTop}>
+        {/* Score medallion */}
+        <LinearGradient
+          colors={colors.gradients.go}
+          start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+          style={[styles.scoreBadge, shadow.glow(colors.go)]}
+        >
+          <CountUp value={STANDING.score} duration={1200} style={styles.scoreValue} />
+          <Text style={styles.scoreMax}>/100</Text>
+        </LinearGradient>
+
+        <View style={{ flex: 1, gap: 6 }}>
+          <View style={styles.tierRow}>
+            <Text style={[styles.tierName, { color: colors.textPrimary }]}>{STANDING.tier} driver</Text>
+            <View style={[styles.tierBadge, { backgroundColor: colors.goFill, borderColor: colors.go + '55' }]}>
+              <Icon name="award" size={11} color={colors.go} />
+              <Text style={[styles.tierBadgeText, { color: colors.go }]}>Top {STANDING.percentile}%</Text>
+            </View>
+          </View>
+          <Text style={[styles.tierSub, { color: colors.textMuted }]}>
+            Keep it up to unlock priority loads.
+          </Text>
+          <View style={[styles.scoreTrack, { backgroundColor: colors.surfaceHi }]}>
+            <LinearGradient
+              colors={colors.gradients.go}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+              style={[styles.scoreFill, { width: `${pct * 100}%` }]}
+            />
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.standingGrid}>
+        <StandingStat icon="check-circle" value={`${STANDING.onTimePct}%`} label="On-time"    colors={colors} styles={styles} />
+        <View style={[styles.standingVDivider, { backgroundColor: colors.border }]} />
+        <StandingStat icon="zap"          value={`${STANDING.streak}`}     label="Load streak" colors={colors} styles={styles} />
+        <View style={[styles.standingVDivider, { backgroundColor: colors.border }]} />
+        <StandingStat icon="thumbs-up"    value={`${STANDING.acceptPct}%`} label="Acceptance"  colors={colors} styles={styles} />
+      </View>
+    </View>
+  );
+}
+
+function StandingStat({ icon, value, label, colors, styles }) {
+  return (
+    <View style={styles.standingStat}>
+      <Icon name={icon} size={14} color={colors.textSecondary} />
+      <Text style={[styles.standingStatValue, { color: colors.textPrimary }]}>{value}</Text>
+      <Text style={[styles.standingStatLabel, { color: colors.textMuted }]}>{label}</Text>
+    </View>
+  );
+}
+
 /* ─────────── HOS Card ─────────── */
 
 function HosCard({ hos, colors, styles }) {
@@ -312,7 +451,7 @@ function HosCard({ hos, colors, styles }) {
     state === 'caution' ? 'Plan a stop soon'     : 'Time to stop';
 
   return (
-    <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+    <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, elevation[1]]}>
 
       {/* Top row */}
       <View style={styles.hosTop}>
@@ -403,12 +542,19 @@ const makeStyles = (c) => StyleSheet.create({
 
   /* Profile hero */
   profileHero: {
-    flexDirection: 'row', alignItems: 'center', gap: space[4],
-    paddingHorizontal: space[5], paddingVertical: space[5],
-    marginBottom: space[1],
+    paddingHorizontal: space[5], paddingTop: space[4], paddingBottom: space[5],
+    gap: space[4],
   },
+  heroTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  heroGreeting: { fontSize: 13, fontFamily: FONT.bold, color: 'rgba(255,255,255,0.7)', letterSpacing: 0.2 },
+  heroEditBtn: {
+    width: 34, height: 34, borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  heroIdentity: { flexDirection: 'row', alignItems: 'center', gap: space[4] },
   avatarRing: {
-    width: 68, height: 68, borderRadius: 999,
+    width: 64, height: 64, borderRadius: 999,
     borderWidth: 2.5, borderColor: 'rgba(255,255,255,0.5)',
     padding: 3, flexShrink: 0,
   },
@@ -417,24 +563,52 @@ const makeStyles = (c) => StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center', justifyContent: 'center',
   },
-  avatarText: { fontSize: 26, fontFamily: FONT.black, color: '#FFFFFF' },
+  avatarText: { fontSize: 24, fontFamily: FONT.black, color: '#FFFFFF' },
   heroName:   { fontSize: 20, fontFamily: FONT.black, color: '#FFFFFF', letterSpacing: -0.4 },
   heroTruck:  { fontSize: 13, fontFamily: FONT.medium, color: 'rgba(255,255,255,0.65)', marginTop: 2 },
   heroStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
   onDutyDot: { width: 7, height: 7, borderRadius: 999, backgroundColor: '#1BD68C' },
   heroStatus: { fontSize: 12, fontFamily: FONT.bold, color: '#1BD68C' },
   heroLoadId: { fontSize: 12, fontFamily: FONT.medium, color: 'rgba(255,255,255,0.5)' },
-  heroPay: {
-    alignItems: 'flex-end', gap: 2,
+
+  heroStats: {
+    flexDirection: 'row', alignItems: 'center',
     backgroundColor: 'rgba(255,255,255,0.12)',
-    borderRadius: radius.lg, paddingHorizontal: space[3], paddingVertical: space[2],
-    flexShrink: 0,
+    borderRadius: radius.lg, paddingVertical: space[3], paddingHorizontal: space[2],
   },
-  heroPayLabel: { fontSize: 10, fontFamily: FONT.bold, color: 'rgba(255,255,255,0.55)' },
-  heroPayValue: { fontSize: 20, fontFamily: FONT.black, color: '#FFFFFF', letterSpacing: -0.5 },
+  heroStat: { flex: 1, alignItems: 'center', gap: 3 },
+  heroStatTop: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  heroStatValue: { fontSize: 17, fontFamily: FONT.black, color: '#FFFFFF', letterSpacing: -0.3, ...type.num },
+  heroStatLabel: { fontSize: 10, fontFamily: FONT.bold, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: 0.4 },
+  heroStatDivider: { width: 1, height: 28, backgroundColor: 'rgba(255,255,255,0.18)' },
 
   /* Generic card */
   card: { borderRadius: radius.xl, borderWidth: 1, padding: space[4], gap: space[4] },
+
+  /* Standing */
+  standingTop: { flexDirection: 'row', alignItems: 'center', gap: space[4] },
+  scoreBadge: {
+    width: 76, height: 76, borderRadius: radius.lg,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  scoreValue: { fontSize: 30, fontFamily: FONT.black, color: '#06121A', letterSpacing: -1, ...type.num },
+  scoreMax: { fontSize: 10, fontFamily: FONT.bold, color: 'rgba(6,18,26,0.6)', marginTop: -2 },
+  tierRow: { flexDirection: 'row', alignItems: 'center', gap: space[2], flexWrap: 'wrap' },
+  tierName: { fontSize: 18, fontFamily: FONT.black, letterSpacing: -0.3 },
+  tierBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 3,
+    borderRadius: radius.pill, borderWidth: 1,
+  },
+  tierBadgeText: { fontSize: 11, fontFamily: FONT.bold },
+  tierSub: { fontSize: 12, fontFamily: FONT.medium },
+  scoreTrack: { height: 8, borderRadius: 999, overflow: 'hidden', marginTop: 2 },
+  scoreFill: { height: '100%', borderRadius: 999 },
+  standingGrid: { flexDirection: 'row', alignItems: 'center' },
+  standingStat: { flex: 1, alignItems: 'center', gap: 4 },
+  standingStatValue: { fontSize: 20, fontFamily: FONT.black, letterSpacing: -0.3, ...type.num },
+  standingStatLabel: { fontSize: 11, fontFamily: FONT.bold },
+  standingVDivider: { width: 1, height: 36 },
 
   /* HOS */
   hosTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space[3] },
