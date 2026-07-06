@@ -40,6 +40,17 @@ export function expiryStatus(iso) {
   return { key: 'valid', label: 'Valid', tone: 'go', days };
 }
 
+// Minutes-ago → compact relative label for notification timestamps.
+// "now" · "5m" · "3h" · "Yesterday" · "4d"
+export function relativeMinutes(mins) {
+  if (mins == null || isNaN(mins)) return '';
+  if (mins < 1) return 'now';
+  if (mins < 60) return `${Math.round(mins)}m`;
+  if (mins < 1440) return `${Math.floor(mins / 60)}h`;
+  if (mins < 2880) return 'Yesterday';
+  return `${Math.floor(mins / 1440)}d`;
+}
+
 // Minutes → "6h 12m"
 export function hm(mins) {
   if (mins == null || isNaN(mins)) return '—';

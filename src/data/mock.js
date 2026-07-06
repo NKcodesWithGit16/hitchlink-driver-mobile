@@ -74,7 +74,7 @@ export const quickReplies = ['On my way', 'Running late', 'At the dock', 'Loaded
 export const earnings = {
   week: {
     net: 3284, gross: 3760, miles: 2140, loads: 4, rpm: 1.76,
-    fuelGal: 329, fuelCost: 1184, deductions: 476, prevNet: 2980,
+    fuelGal: 329, fuelCost: 1184, deductions: 476, prevNet: 2980, goal: 4000,
     bars: [
       { d: 'Mon', v: 520 }, { d: 'Tue', v: 0 }, { d: 'Wed', v: 880 },
       { d: 'Thu', v: 610 }, { d: 'Fri', v: 720 }, { d: 'Sat', v: 554 }, { d: 'Sun', v: 0 },
@@ -82,7 +82,7 @@ export const earnings = {
   },
   month: {
     net: 12940, gross: 15010, miles: 8620, loads: 17, rpm: 1.74,
-    fuelGal: 1326, fuelCost: 4770, deductions: 2070, prevNet: 11200,
+    fuelGal: 1326, fuelCost: 4770, deductions: 2070, prevNet: 11200, goal: 15000,
     bars: [
       { d: 'W1', v: 2980 }, { d: 'W2', v: 3120 }, { d: 'W3', v: 3556 }, { d: 'W4', v: 3284 },
     ],
@@ -94,6 +94,85 @@ export const earnings = {
     { id: 'LD-4772', date: 'May 27', from: 'Los Angeles, CA', to: 'Phoenix, AZ', miles: 370, gross: 980, net: 842, deductions: 138 },
   ],
 };
+
+// ── Notifications inbox ──────────────────────────────────────────────
+// Feed for the Alerts screen. Copy is drawn straight from the fixtures above
+// (activeLoad, hos, documents, earnings) so it reads coherently. Each item:
+//   category: 'load' | 'hos' | 'document' | 'weather' | 'earnings'
+//   tone:     drives the accent color (see toneOf) — teal/caution/danger/go
+//   critical: pinned to the top of the list until read (can't-miss items)
+//   minutesAgo: relative timestamp source (kept deterministic for the demo)
+//   action:   optional affordance — { label, route } to navigate, or
+//             { label, kind } for a special handler ('weatherTakeover'|'findStop')
+export const notifications = [
+  {
+    id: 'n-weather',
+    category: 'weather',
+    tone: 'caution',
+    icon: 'alert-triangle',
+    critical: true,
+    title: 'Winter storm warning ahead',
+    body: 'Heavy snow near Joliet, IL — about 30 min out. Reduced visibility expected; plan a stop.',
+    minutesAgo: 3,
+    read: false,
+    action: { label: 'Find a safe truck stop', kind: 'weatherTakeover' },
+  },
+  {
+    id: 'n-load-new',
+    category: 'load',
+    tone: 'teal',
+    icon: 'truck',
+    title: 'New load assigned — LD-4827',
+    body: 'Chicago, IL → Atlanta, GA · 720 mi · $1,820. Pickup window 08:00–12:00 today.',
+    minutesAgo: 18,
+    read: false,
+    action: { label: 'View load', route: '/(tabs)' },
+  },
+  {
+    id: 'n-doc-med',
+    category: 'document',
+    tone: 'caution',
+    icon: 'file-text',
+    title: 'Medical Certificate expires soon',
+    body: 'Your DOT medical card (MC-99214) expires Jun 28 — 23 days left. Renew to stay compliant.',
+    minutesAgo: 65,
+    read: false,
+    action: { label: 'View documents', route: '/(tabs)/documents' },
+  },
+  {
+    id: 'n-hos-break',
+    category: 'hos',
+    tone: 'caution',
+    icon: 'clock',
+    title: '30-minute break due soon',
+    body: 'About 1h 36m of drive time left before your required 30-minute break. Line up a stop.',
+    minutesAgo: 120,
+    read: true,
+    action: { label: 'Find a stop', kind: 'findStop' },
+  },
+  {
+    id: 'n-pay',
+    category: 'earnings',
+    tone: 'go',
+    icon: 'dollar-sign',
+    title: "This week's settlement posted",
+    body: '$3,284 net across 4 loads · 2,140 mi. Detention on LD-4810 was approved and added.',
+    minutesAgo: 1440,
+    read: true,
+    action: { label: 'See breakdown', route: '/(tabs)/earnings' },
+  },
+  {
+    id: 'n-load-note',
+    category: 'load',
+    tone: 'teal',
+    icon: 'message-square',
+    title: 'Broker note on LD-4827',
+    body: 'Detention starts after 2 hrs if loading is slow. Keep the lumper receipt at destination.',
+    minutesAgo: 1500,
+    read: true,
+    action: { label: 'View load', route: '/(tabs)' },
+  },
+];
 
 export const documents = [
   { id: 'cdl', label: 'CDL', sub: "Commercial Driver's License", number: 'IL D824-5519', expires: '2027-04-12', icon: 'credit-card' },

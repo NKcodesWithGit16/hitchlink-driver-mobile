@@ -4,6 +4,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
+import { setAudioModeAsync } from 'expo-audio';
 import {
   useFonts,
   Lexend_400Regular, Lexend_500Medium, Lexend_600SemiBold,
@@ -62,11 +63,14 @@ function RouteGate() {
     const seg0 = segments[0];
     const inAuth = seg0 === '(auth)';
     const inOnboarding = seg0 === 'onboarding';
+    const inWelcome = seg0 === 'welcome';
+    const inIntro = inWelcome || inOnboarding;
     if (signedIn) {
-      if (inAuth || inOnboarding) router.replace('/(tabs)');
+      if (inAuth || inIntro) router.replace('/(tabs)');
     } else if (!onboarded) {
-      if (!inOnboarding && !inAuth) router.replace('/onboarding');
-    } else if (!inAuth && !inOnboarding) {
+      // First run: land on the cinematic welcome; the tour + sign-in are reachable from there.
+      if (!inIntro && !inAuth) router.replace('/welcome');
+    } else if (!inAuth && !inIntro) {
       router.replace('/(auth)/sign-in');
     }
   }, [ready, signedIn, onboarded, segments]);
@@ -100,6 +104,13 @@ export default function RootLayout() {
   useEffect(() => {
     if (loaded || error) SplashScreen.hideAsync().catch(() => {});
   }, [loaded, error]);
+
+  // Route audio to the loudspeaker and let voice notes play even with the
+  // iOS ringer-silent switch on — otherwise playback is muted "sometimes"
+  // depending on the phone's silent switch / prior recording session.
+  useEffect(() => {
+    setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false }).catch(() => {});
+  }, []);
 
   if (!loaded && !error) return null;
 

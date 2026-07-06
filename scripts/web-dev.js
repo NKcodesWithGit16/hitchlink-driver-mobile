@@ -74,9 +74,18 @@ function makeProxy(targetOrigin) {
       }
     );
     upstream.on('error', (e) => {
+      // The upstream socket can fail mid-stream — after we've already sent the
+      // response headers. Calling writeHead again throws ERR_HTTP_HEADERS_SENT,
+      // and thrown from an 'error' handler that would crash the whole dev
+      // server. Only send a 502 if nothing has been written yet.
+      if (res.headersSent || res.writableEnded) { res.destroy(); return; }
       res.writeHead(502, cors);
       res.end(JSON.stringify({ message: 'Proxy error: ' + e.message }));
     });
+    // If either side of the pipe drops, tear down the other so a stray socket
+    // error can never bubble up as an uncaught exception.
+    req.on('error', () => upstream.destroy());
+    res.on('error', () => upstream.destroy());
     req.pipe(upstream);
   });
 }

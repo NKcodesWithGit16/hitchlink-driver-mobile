@@ -47,7 +47,7 @@ export default function LoadScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const { user } = useAuth();
-  const { unread, activeAlert, openModal: openAlert } = useAlert();
+  const { unreadCount, activeAlert, openModal: openAlert } = useAlert();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const online = useNetworkStatus();
   const [pending, setPending] = useState(0);
@@ -178,7 +178,7 @@ export default function LoadScreen() {
   if (error && !load) {
     return (
       <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
-        <Header colors={colors} styles={styles} name={user?.firstName} unread={unread} onBell={openAlert} />
+        <Header colors={colors} styles={styles} name={user?.firstName} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
         <View style={[styles.center, { flex: 1, paddingHorizontal: space[6] }]}>
           <View style={[styles.errorIcon, { backgroundColor: colors.cautionFill, borderColor: colors.bg }]}>
             <Icon name="wifi-off" size={34} color={colors.caution} />
@@ -202,7 +202,7 @@ export default function LoadScreen() {
   if (!load) {
     return (
       <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
-        <Header colors={colors} styles={styles} name={user?.firstName} unread={unread} onBell={openAlert} />
+        <Header colors={colors} styles={styles} name={user?.firstName} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
         <ImageBackground source={photos.road} style={styles.emptyHero}>
           <LinearGradient colors={['transparent', colors.bg]} style={StyleSheet.absoluteFill} />
         </ImageBackground>
@@ -233,7 +233,7 @@ export default function LoadScreen() {
 
   return (
     <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
-      <Header colors={colors} styles={styles} name={user?.firstName} unread={unread} onBell={openAlert} />
+      <Header colors={colors} styles={styles} name={user?.firstName} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
       <StatusBar chip={chip} driveMinutesLeft={hos.driveMinutesLeft} online={online} onHosPress={() => router.push('/(tabs)/more')} />
       {!online ? <OfflineBanner pending={pending} /> : null}
 
@@ -343,22 +343,27 @@ export default function LoadScreen() {
 }
 
 /* ───────── Local pieces ───────── */
-function Header({ colors, styles, name, unread, onBell }) {
+function Header({ colors, styles, name, unreadCount = 0, onBell }) {
   const initials = (name || 'Driver').slice(0, 1).toUpperCase();
+  const hasUnread = unreadCount > 0;
   return (
     <View style={styles.header}>
       <BrandLogo size={26} layout="horizontal" />
       <View style={styles.headerRight}>
-        {/* Bell with badge */}
+        {/* Bell with unread count badge */}
         <Pressable
           onPress={onBell}
           style={styles.iconBtn}
           hitSlop={8}
           accessibilityRole="button"
-          accessibilityLabel={unread ? 'New weather alert — open' : 'Alerts'}
+          accessibilityLabel={hasUnread ? `${unreadCount} unread alerts — open` : 'Alerts'}
         >
-          <Icon name="bell" size={20} color={unread ? colors.caution : colors.textSecondary} />
-          {unread ? <View style={[styles.badge, { backgroundColor: colors.caution }]} /> : null}
+          <Icon name="bell" size={20} color={hasUnread ? colors.teal : colors.textSecondary} />
+          {hasUnread ? (
+            <View style={[styles.badge, { backgroundColor: colors.danger }]}>
+              <Text style={styles.badgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+            </View>
+          ) : null}
         </Pressable>
         <View style={[styles.avatar, { backgroundColor: colors.surfaceHi, borderColor: colors.border }]}>
           <Text style={styles.avatarText}>{initials}</Text>
@@ -476,7 +481,12 @@ const makeStyles = (c) => StyleSheet.create({
   },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: space[3] },
   iconBtn: { width: tap.icon, height: tap.icon, alignItems: 'center', justifyContent: 'center' },
-  badge: { position: 'absolute', top: 6, right: 6, width: 9, height: 9, borderRadius: 999, borderWidth: 1.5, borderColor: c.bg },
+  badge: {
+    position: 'absolute', top: 3, right: 3, minWidth: 18, height: 18, borderRadius: 999,
+    paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: c.bg,
+  },
+  badgeText: { color: '#FFFFFF', fontSize: 10, fontFamily: FONT.extrabold, lineHeight: 12, ...type.num },
   avatar: { width: 38, height: 38, borderRadius: 999, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
   avatarText: { ...type.bodyStrong, color: c.textPrimary },
 

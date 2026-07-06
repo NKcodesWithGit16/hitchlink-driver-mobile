@@ -59,6 +59,7 @@
     "android": {
       "googleServicesFile": "./google-services.json",
       "userInterfaceStyle": "automatic",
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#04285A"

@@ -7,64 +7,120 @@ import PrimaryAction from './PrimaryAction';
 import GlassView from './GlassView';
 import { useTheme } from '../../theme/ThemeContext';
 import { useAlert } from '../../context/AlertContext';
-import { space, type, radius, FONT, shadow } from '../../theme/tokens';
+import { useReduceMotion } from '../../lib/useReduceMotion';
+import { space, type, radius, FONT, shadow, toneOf } from '../../theme/tokens';
 
 const TOAST_DURATION = 7000;
 
-/* ── Sliding top notification banner ── */
+/* ── Top notification banner ──
+   A calm, glassy heads-up that settles in from the top rather than snapping.
+   Gradient icon tile + clear hierarchy (what · when/where · how to act) and a
+   thin countdown line so its exit never feels abrupt. Tap = open the full
+   takeover; the × just dismisses. */
 export function WeatherToast() {
   const { colors } = useTheme();
   const { activeAlert, toastVisible, dismissToast, openModal } = useAlert();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
-  const translateY = useRef(new Animated.Value(-120)).current;
+  const reduce = useReduceMotion();
+
+  const anim = useRef(new Animated.Value(0)).current;      // 0 hidden → 1 shown
+  const progress = useRef(new Animated.Value(1)).current;  // 1 → 0 countdown
   const autoTimer = useRef(null);
 
   useEffect(() => {
+    clearTimeout(autoTimer.current);
     if (toastVisible) {
-      clearTimeout(autoTimer.current);
-      Animated.spring(translateY, {
-        toValue: 0, damping: 18, stiffness: 200, useNativeDriver: true,
-      }).start();
+      progress.setValue(1);
+      if (reduce) {
+        anim.setValue(1);
+      } else {
+        Animated.spring(anim, {
+          toValue: 1, damping: 17, stiffness: 170, mass: 0.85, useNativeDriver: true,
+        }).start();
+        Animated.timing(progress, {
+          toValue: 0, duration: TOAST_DURATION, useNativeDriver: false,
+        }).start();
+      }
       autoTimer.current = setTimeout(dismissToast, TOAST_DURATION);
     } else {
-      clearTimeout(autoTimer.current);
-      Animated.timing(translateY, {
-        toValue: -120, duration: 260, useNativeDriver: true,
+      Animated.timing(anim, {
+        toValue: 0, duration: 240, useNativeDriver: true,
       }).start();
     }
     return () => clearTimeout(autoTimer.current);
-  }, [toastVisible]);
+  }, [toastVisible, reduce]);
 
   if (!activeAlert) return null;
 
   const severe = activeAlert.severity === 'severe';
-  const accent = severe ? colors.danger : colors.caution;
-  const fill   = severe ? colors.dangerFill : colors.cautionFill;
+  const tone = toneOf(colors, severe ? 'danger' : 'caution');
+  const eyebrow = severe ? 'Severe weather ahead' : 'Weather ahead';
+
+  const translateY = anim.interpolate({
+    inputRange: [0, 1], outputRange: [-(160 + insets.top), 0],
+  });
+  const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.97, 1] });
+  const barWidth = progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
 
   return (
     <Animated.View
       style={[
         styles.wrap,
-        { top: insets.top + space[2], transform: [{ translateY }] },
+        { top: insets.top + space[2], opacity: anim, transform: [{ translateY }, { scale }] },
         shadow.float,
       ]}
       pointerEvents={toastVisible ? 'box-none' : 'none'}
     >
-      <Pressable onPress={openModal}>
-        <GlassView radius={radius.xl} border={false} style={[styles.toast, { borderColor: accent, borderLeftColor: accent }]}>
-          <View style={[styles.iconWrap, { backgroundColor: fill }]}>
-            <Icon name="alert-triangle" size={18} color={accent} />
+      <Pressable
+        onPress={openModal}
+        accessibilityRole="button"
+        accessibilityLabel={`${eyebrow}. ${activeAlert.title}. About ${activeAlert.etaMinutes} minutes ahead near ${activeAlert.near}. Tap to see safe stops.`}
+      >
+        <GlassView radius={radius['2xl']} style={styles.toast}>
+          <View style={styles.row}>
+            <LinearGradient
+              colors={tone.grad}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[styles.iconTile, shadow.glow(tone.solid)]}
+            >
+              <Icon name="cloud-snow" size={22} color="#FFFFFF" />
+            </LinearGradient>
+
+            <View style={styles.textCol}>
+              <Text style={[styles.eyebrow, { color: tone.solid }]} numberOfLines={1}>
+                {eyebrow}
+              </Text>
+              <Text style={[styles.title, { color: colors.textPrimary }]} numberOfLines={1}>
+                {activeAlert.title}
+              </Text>
+              <View style={styles.metaRow}>
+                <Text style={[styles.sub, { color: colors.textSecondary }]} numberOfLines={1}>
+                  ~{activeAlert.etaMinutes} min ahead · Near {activeAlert.near}
+                </Text>
+              </View>
+              <View style={styles.hintRow}>
+                <Text style={[styles.hint, { color: tone.solid }]}>Tap for safe truck stops</Text>
+                <Icon name="chevron-right" size={13} color={tone.solid} />
+              </View>
+            </View>
+
+            <Pressable
+              onPress={dismissToast}
+              hitSlop={12}
+              style={[styles.close, { backgroundColor: colors.surface2, borderColor: colors.border }]}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss alert"
+            >
+              <Icon name="x" size={15} color={colors.textSecondary} />
+            </Pressable>
           </View>
-          <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-            <Text style={[styles.title, { color: accent }]} numberOfLines={1}>{activeAlert.title}</Text>
-            <Text style={[styles.sub, { color: colors.textSecondary }]} numberOfLines={1}>
-              ~{activeAlert.etaMinutes} min ahead · Near {activeAlert.near}
-            </Text>
+
+          {/* Auto-dismiss countdown — hugs the bottom edge of the glass. */}
+          <View style={[styles.track, { backgroundColor: tone.solid + '22' }]}>
+            <Animated.View style={[styles.trackFill, { width: barWidth, backgroundColor: tone.solid }]} />
           </View>
-          <Pressable onPress={dismissToast} style={styles.close} hitSlop={10}>
-            <Icon name="x" size={16} color={colors.textMuted} />
-          </Pressable>
         </GlassView>
       </Pressable>
     </Animated.View>
@@ -112,15 +168,27 @@ export function WeatherAlertModalGlobal() {
 
 const makeStyles = (c) => StyleSheet.create({
   wrap: { position: 'absolute', left: space[4], right: space[4], zIndex: 999 },
-  toast: {
-    flexDirection: 'row', alignItems: 'center', gap: space[3],
-    borderRadius: radius.xl, borderWidth: 1.5, borderLeftWidth: 4,
-    paddingHorizontal: space[4], paddingVertical: space[3],
+  toast: { paddingTop: space[4], paddingBottom: space[4] + 3, paddingHorizontal: space[4] },
+  row: { flexDirection: 'row', alignItems: 'center', gap: space[3] },
+  iconTile: {
+    width: 46, height: 46, borderRadius: radius.md,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
-  iconWrap: { width: 36, height: 36, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  title: { ...type.bodyStrong, fontSize: 14 },
-  sub: { ...type.caption },
-  close: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  textCol: { flex: 1, minWidth: 0, gap: 1 },
+  eyebrow: { ...type.label, fontSize: 10.5 },
+  title: { fontSize: 16, fontFamily: FONT.extrabold, letterSpacing: -0.3, marginTop: 1 },
+  metaRow: { marginTop: 1 },
+  sub: { ...type.caption, fontSize: 12.5 },
+  hintRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 4 },
+  hint: { ...type.caption, fontSize: 12, fontFamily: FONT.bold },
+  close: {
+    width: 30, height: 30, borderRadius: 999, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  track: {
+    position: 'absolute', left: 0, right: 0, bottom: 0, height: 3,
+  },
+  trackFill: { height: 3 },
 
   alertScreen: { flex: 1 },
   alertInner: { flex: 1, padding: space[6], justifyContent: 'center', gap: space[2] },
