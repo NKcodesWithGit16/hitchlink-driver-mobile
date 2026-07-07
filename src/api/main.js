@@ -264,3 +264,70 @@ export async function registerPushToken(driverId, pushToken) {
     body: JSON.stringify({ pushToken }),
   });
 }
+
+// ── Notifications ────────────────────────────────────────────────────
+// The backend speaks { id, title, message, type, isRead, createdAt }; the
+// Alerts UI speaks { id, category, tone, icon, critical, title, body,
+// minutesAgo, read, action }. Map the type string onto the UI's visual
+// language. The backend currently emits load / driver / success / warning /
+// error; the map also covers domain-ish strings (document, hos, earnings,
+// weather) so richer server-side tagging drops in without a UI change.
+const NOTIF_TYPE_MAP = {
+  load:     { category: 'load',     tone: 'teal',    icon: 'truck',          route: '/(tabs)',           actionLabel: 'View load' },
+  driver:   { category: 'load',     tone: 'teal',    icon: 'user',           route: '/(tabs)',           actionLabel: 'View' },
+  document: { category: 'document', tone: 'caution', icon: 'file-text',      route: '/(tabs)/documents', actionLabel: 'View documents' },
+  hos:      { category: 'hos',      tone: 'caution', icon: 'clock',          route: null,                actionLabel: null },
+  earnings: { category: 'earnings', tone: 'go',      icon: 'dollar-sign',    route: '/(tabs)/earnings',  actionLabel: 'See breakdown' },
+  weather:  { category: 'weather',  tone: 'caution', icon: 'cloud',          route: null,                actionLabel: null },
+  success:  { category: 'load',     tone: 'go',      icon: 'check-circle',   route: '/(tabs)',           actionLabel: 'View' },
+  warning:  { category: 'load',     tone: 'caution', icon: 'alert-triangle', route: '/(tabs)',           actionLabel: 'View' },
+  error:    { category: 'load',     tone: 'danger',  icon: 'alert-triangle', route: '/(tabs)',           actionLabel: 'View' },
+};
+const NOTIF_FALLBACK = { category: 'load', tone: 'teal', icon: 'bell', route: null, actionLabel: null };
+
+// .NET serializes DateTime.UtcNow; if the string carries no timezone, read it
+// as UTC rather than letting JS assume the device's local zone.
+function notifMinutesAgo(iso) {
+  if (!iso) return 0;
+  const hasTz = /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso);
+  const ms = new Date(hasTz ? iso : `${iso}Z`).getTime();
+  return isNaN(ms) ? 0 : Math.max(0, Math.round((Date.now() - ms) / 60000));
+}
+
+function normalizeNotification(n) {
+  const key = (n.type || '').toLowerCase();
+  const m = NOTIF_TYPE_MAP[key] || NOTIF_FALLBACK;
+  return {
+    id: n.id,
+    category: m.category,
+    tone: m.tone,
+    icon: m.icon,
+    critical: key === 'error',
+    title: n.title ?? '',
+    body: n.message ?? '',
+    minutesAgo: notifMinutesAgo(n.createdAt),
+    read: !!n.isRead,
+    action: m.actionLabel ? { label: m.actionLabel, route: m.route } : undefined,
+  };
+}
+
+export async function fetchNotifications(userId) {
+  if (USE_MOCK) { await wait(); return mock.notifications; }
+  if (!userId) return [];
+  // A 404 / empty inbox is a normal empty state, not a connection error.
+  const data = await apiFetch(`/notifications?userId=${userId}`, { allow404: true });
+  return Array.isArray(data) ? data.map(normalizeNotification) : [];
+}
+
+export async function markNotificationRead(id) {
+  if (USE_MOCK) { await wait(80); return { ok: true }; }
+  return apiFetch(`/notifications/${id}/read`, { method: 'PATCH' });
+}
+
+// Soft-deletes the notification on the backend (IsActive = false). There is no
+// un-delete endpoint, so callers that offer Undo must defer this until the
+// undo window closes rather than delete first and try to restore.
+export async function dismissNotification(id) {
+  if (USE_MOCK) { await wait(80); return { ok: true }; }
+  return apiFetch(`/notifications/${id}`, { method: 'DELETE' });
+}

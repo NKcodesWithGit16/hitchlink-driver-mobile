@@ -118,11 +118,13 @@ export default function RootLayout() {
     <ErrorBoundary>
       <SafeAreaProvider style={{ flex: 1, minWidth: 0, maxWidth: '100%' }}>
         <ThemeProvider>
-          <AlertProvider>
-            <AuthProvider>
+          {/* AlertProvider sits inside AuthProvider: the notifications inbox is
+              fetched per signed-in user, so it needs useAuth(). */}
+          <AuthProvider>
+            <AlertProvider>
               <ThemedShell />
-            </AuthProvider>
-          </AlertProvider>
+            </AlertProvider>
+          </AuthProvider>
         </ThemeProvider>
       </SafeAreaProvider>
     </ErrorBoundary>

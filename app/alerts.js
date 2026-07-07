@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Pressable, Linking,
 } from 'react-native';
@@ -32,10 +32,20 @@ export default function AlertsScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const {
-    notifications, unreadCount, markRead, markAllRead, dismiss, clearAll, restoreAll, openModal,
+    notifications, unreadCount, markRead, markAllRead, dismiss, clearAll, restoreAll,
+    commitPending, refresh, openModal,
   } = useNotifications();
   const [filter, setFilter] = useState('all');
   const [undo, setUndo] = useState(null); // { message, snapshot }
+
+  // Pull the freshest inbox when the screen opens.
+  useEffect(() => { refresh(); }, [refresh]);
+
+  // If the driver leaves while an Undo is still pending, commit the deferred
+  // deletes so the removed rows don't resurrect on the next refetch.
+  const commitRef = useRef(commitPending);
+  commitRef.current = commitPending;
+  useEffect(() => () => commitRef.current(), []);
 
   // Both removal paths snapshot the full list first, so a single Undo restores
   // whatever was there — whether the driver removed one card or all of them.
@@ -267,7 +277,7 @@ export default function AlertsScreen() {
         visible={!!undo}
         message={undo?.message}
         onUndo={() => { if (undo) restoreAll(undo.snapshot); setUndo(null); }}
-        onHide={() => setUndo(null)}
+        onHide={() => { commitPending(); setUndo(null); }}
       />
     </View>
   );
