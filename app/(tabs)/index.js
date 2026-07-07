@@ -35,7 +35,9 @@ import { TAB_BAR_CLEARANCE } from './_layout';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useAlert } from '../../src/context/AlertContext';
-import { fetchActiveLoad, updateLoadStatus, sendPhotoMessage } from '../../src/api/main';
+import { fetchActiveLoad, updateLoadStatus, undoLoadStatus, sendPhotoMessage } from '../../src/api/main';
+import { useLoadStatusSocket } from '../../src/hooks/useLoadStatusSocket';
+import { useConfirmEveryStep } from '../../src/lib/prefs';
 import { hos, weatherNow } from '../../src/data/mock';
 import { nextAction, statusChip, nextStop, isPrePickup } from '../../src/lib/load';
 import { money, num, rpm } from '../../src/lib/format';
@@ -50,6 +52,7 @@ export default function LoadScreen() {
   const { unreadCount, activeAlert, openModal: openAlert } = useAlert();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const online = useNetworkStatus();
+  const confirmEveryStep = useConfirmEveryStep();
   const [pending, setPending] = useState(0);
 
   const [load, setLoad] = useState(null);
@@ -84,7 +87,16 @@ export default function LoadScreen() {
 
   useEffect(() => {
     if (!online) return;
-    flush((item) => updateLoadStatus(item.loadId, item.status)).then((done) => {
+    flush(async (item) => {
+      try {
+        await updateLoadStatus(item.loadId, item.status);
+      } catch (e) {
+        // A 4xx means the queued step no longer applies (the load moved on) —
+        // drop it. Only transient errors (offline/5xx) are worth replaying.
+        if (e?.status >= 400 && e?.status < 500) return;
+        throw e;
+      }
+    }).then((done) => {
       if (done > 0) queueCount().then(setPending);
     });
   }, [online]);
@@ -95,9 +107,39 @@ export default function LoadScreen() {
     setRefreshing(false);
   }, [loadData]);
 
+  // Keep the load in a ref so the SignalR callback always sees the current one
+  // without re-subscribing on every render.
+  const loadRef = useRef(load);
+  loadRef.current = load;
+
+  // Live inbound sync: a dispatcher correction, a GPS geofence auto-advance, or
+  // our own tap echoed back all land here within ~1s and move the screen to
+  // match the backend — so driver and dispatcher never drift apart.
+  useLoadStatusSocket(user?.id, useCallback((loadId, newStatus) => {
+    const cur = loadRef.current;
+    if (!cur || String(loadId) !== String(cur.id)) return;
+    if (newStatus === 'Cancelled' || newStatus === 'Closed') {
+      // The load left active service — reconcile to the real "no load / next
+      // load" state instead of leaving a half-rendered terminal status.
+      loadData();
+      return;
+    }
+    setStatus((prev) => {
+      // "AtDelivery" is screen-only (the backend stays EnRouteToDropoff until
+      // Delivered) — don't let the server's equivalent state pull the screen
+      // back off the "arrived" view the driver already advanced to.
+      if (prev === 'AtDelivery' && newStatus === 'EnRouteToDropoff') return prev;
+      return newStatus;
+    });
+  }, [loadData]));
+
   const advance = async (next) => {
+    const prev = status;
     setBusy(true);
     setStatus(next);
+    // Screen-only stage — the backend has no "AtDelivery"; it stays
+    // EnRouteToDropoff until "Delivered", so there's nothing to send.
+    if (next === 'AtDelivery') { setBusy(false); return; }
     if (!online) {
       setPending(await enqueue({ loadId: load.id, status: next }));
       setBusy(false);
@@ -105,8 +147,20 @@ export default function LoadScreen() {
     }
     try {
       await updateLoadStatus(load.id, next);
-    } catch {
-      setPending(await enqueue({ loadId: load.id, status: next }));
+    } catch (e) {
+      if (e?.status >= 400 && e?.status < 500) {
+        // The server rejected it — snap the screen back so it matches the
+        // backend instead of silently diverging, and drop any offered Undo.
+        setStatus(prev);
+        setUndo(null);
+        Alert.alert(
+          "That didn't go through",
+          "Your load may have already moved on. We've set it back to match dispatch — pull to refresh if it still looks off.",
+        );
+      } else {
+        // Offline / server blip — queue to replay when the connection returns.
+        setPending(await enqueue({ loadId: load.id, status: next }));
+      }
     } finally {
       setBusy(false);
     }
@@ -124,15 +178,10 @@ export default function LoadScreen() {
     }
   };
 
-  const handlePrimary = () => {
-    const action = nextAction(status);
-    if (!action) return;
-    setPendingAction(action);
-  };
-
-  const confirmAndAdvance = async () => {
-    const action = pendingAction;
-    setPendingAction(null);
+  // Perform a status step: capture POD if the step calls for it, advance, then
+  // offer a short-lived Undo (every step except the final Delivered, and only
+  // when online — Undo needs the server).
+  const runAction = async (action) => {
     haptics.success();
     const prevStatus = status;
     if (action.pod) {
@@ -150,18 +199,47 @@ export default function LoadScreen() {
       }
     }
     advance(action.next);
-    // Offer a take-back for every step except the final "Delivered" (which
-    // shows the celebration card and may have captured paperwork).
-    if (action.next !== 'Delivered') {
+    if (action.next !== 'Delivered' && online) {
       setUndo({ prevStatus, message: 'Update sent to dispatcher' });
     }
   };
 
-  const handleUndo = () => {
+  const handlePrimary = () => {
+    const action = nextAction(status);
+    if (!action) return;
+    // Milestones (cargo on board, delivered) always confirm. Arrivals advance on
+    // a single tap unless the driver opted into confirm-every-step in Settings.
+    if (action.milestone || confirmEveryStep) {
+      setPendingAction(action);
+    } else {
+      runAction(action);
+    }
+  };
+
+  const confirmAndAdvance = () => {
+    const action = pendingAction;
+    setPendingAction(null);
+    runAction(action);
+  };
+
+  const handleUndo = async () => {
     if (!undo) return;
     haptics.tap();
-    advance(undo.prevStatus);
+    const target = undo.prevStatus;
+    const current = status;
     setUndo(null);
+    setStatus(target); // optimistic — the server echo confirms it
+    try {
+      await undoLoadStatus(load.id, user?.id, target);
+    } catch {
+      // Too late to take back (window passed, or it already moved on). Restore
+      // and point the driver at dispatch, who can still correct it.
+      setStatus(current);
+      Alert.alert(
+        "Couldn't undo",
+        "That update was already saved. Ask your dispatcher to correct the status if it's wrong.",
+      );
+    }
   };
 
   if (loading) {

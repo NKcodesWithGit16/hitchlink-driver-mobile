@@ -31,9 +31,18 @@ export async function apiFetch(path, options = {}) {
     },
   }));
   if (res.status === 404 && allow404) return null;
-  if (!res.ok) throw new Error(`API ${res.status} — ${path}`);
+  if (!res.ok) throw apiError(res.status, path);
   const text = await res.text();
   return text ? JSON.parse(text) : null;
+}
+
+// Error carrying the HTTP status so callers can tell a "the server rejected
+// this" (4xx — don't retry, roll back the optimistic UI) from a transient
+// network/server blip (offline or 5xx — safe to queue and replay).
+function apiError(status, path) {
+  const err = new Error(`API ${status} — ${path}`);
+  err.status = status;
+  return err;
 }
 
 // Multipart upload (e.g. voice notes). We must NOT set Content-Type here — the

@@ -65,6 +65,18 @@ export async function updateLoadStatus(loadId, status) {
   });
 }
 
+// Driver "take-back" of a mistaken tap — rolls the load back to an earlier
+// active state. The backend enforces the guards (own load, still in progress,
+// earlier step, within a short window); a 4xx here means it's too late to undo
+// and the driver should ask dispatch to correct it.
+export async function undoLoadStatus(loadId, driverId, toStatus) {
+  if (USE_MOCK) { await wait(150); return { ok: true, status: toStatus }; }
+  return apiFetch(`/loads/${loadId}/undo-status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ driverId, toStatus }),
+  });
+}
+
 export async function acceptLoad(loadId, driverId) {
   if (USE_MOCK) { await wait(150); return { ok: true }; }
   return apiFetch(`/loads/${loadId}/accept`, { method: 'POST', body: JSON.stringify({ driverId }) });

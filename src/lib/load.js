@@ -36,18 +36,21 @@ export function statusChip(status) {
 }
 
 // The single contextual action shown on the home screen.
+// `milestone: true` marks the irreversible-feeling steps (cargo now on board;
+// delivered) that always ask for confirmation. Arrivals are cheap to take back,
+// so they advance on a single tap unless the driver opts into confirm-every-step.
 export function nextAction(status) {
   switch (status) {
     case 'Assigned':
     case 'EnRouteToPickup':
       return { label: "I've Arrived at Pickup", icon: 'map-pin', tone: 'teal', next: 'AtPickup' };
     case 'AtPickup':
-      return { label: "I'm Loaded — Go", icon: 'check', tone: 'go', next: 'EnRouteToDropoff' };
+      return { label: "I'm Loaded — Go", icon: 'check', tone: 'go', next: 'EnRouteToDropoff', milestone: true };
     case 'Loaded':
     case 'EnRouteToDropoff':
       return { label: "I've Arrived at Delivery", icon: 'map-pin', tone: 'teal', next: 'AtDelivery' };
     case 'AtDelivery':
-      return { label: 'Delivered', icon: 'check-circle', tone: 'go', next: 'Delivered', confirm: true, pod: true };
+      return { label: 'Delivered', icon: 'check-circle', tone: 'go', next: 'Delivered', confirm: true, pod: true, milestone: true };
     default:
       return null;
   }

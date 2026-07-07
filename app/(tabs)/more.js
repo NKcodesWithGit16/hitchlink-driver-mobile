@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Switch } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import ScreenFade from '../../src/components/ui/ScreenFade';
@@ -10,6 +10,7 @@ import FadeInView from '../../src/components/ui/FadeInView';
 import { hosState } from '../../src/components/driver/HOSPill';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
+import { useConfirmEveryStep, setConfirmEveryStep } from '../../src/lib/prefs';
 import { fetchHos, fetchActiveLoad } from '../../src/api/main';
 import { hos as mockHos, earnings } from '../../src/data/mock';
 import { hm } from '../../src/lib/format';
@@ -84,6 +85,7 @@ export default function MoreScreen() {
   }), [colors]);
   const [hos,        setHos]        = useState(mockHos);
   const [activeLoad, setActiveLoad] = useState(null);
+  const confirmEveryStep = useConfirmEveryStep();
 
   useEffect(() => {
     if (!userId) return;
@@ -233,6 +235,31 @@ export default function MoreScreen() {
             </View>
           </FadeInView>
         ))}
+
+        {/* ── Load updates (safety) ── */}
+        <FadeInView delay={340} style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Load updates</Text>
+          <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border, padding: 0, overflow: 'hidden' }, elevation[1]]}>
+            <View style={styles.toggleRow}>
+              <View style={[styles.settingIconBox, { backgroundColor: hue.teal + '22' }]}>
+                <Icon name="check-circle" size={17} color={hue.teal} />
+              </View>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={[styles.toggleTitle, { color: colors.textPrimary }]}>Confirm every status update</Text>
+                <Text style={[styles.toggleSub, { color: colors.textMuted }]}>
+                  Ask before each step. Loaded &amp; Delivered always confirm.
+                </Text>
+              </View>
+              <Switch
+                value={confirmEveryStep}
+                onValueChange={setConfirmEveryStep}
+                trackColor={{ false: colors.surfaceHi, true: colors.teal }}
+                thumbColor="#ffffff"
+                ios_backgroundColor={colors.surfaceHi}
+              />
+            </View>
+          </View>
+        </FadeInView>
 
         {/* ── Appearance ── */}
         <FadeInView delay={360} style={styles.section}>
@@ -675,6 +702,14 @@ const makeStyles = (c) => StyleSheet.create({
   settingLabel: { ...type.body, fontFamily: FONT.semibold, flex: 1 },
   settingMeta: { ...type.caption, maxWidth: 130 },
   rowDivider: { height: 1, marginLeft: space[4] + 36 + space[3] },
+
+  /* Toggle row (settings switch) */
+  toggleRow: {
+    flexDirection: 'row', alignItems: 'center', gap: space[3],
+    paddingHorizontal: space[4], paddingVertical: 14,
+  },
+  toggleTitle: { ...type.body, fontFamily: FONT.semibold },
+  toggleSub: { ...type.caption, lineHeight: 17 },
 
   /* Sign out */
   signOutBtn: {
