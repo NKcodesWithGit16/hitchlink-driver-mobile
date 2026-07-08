@@ -95,6 +95,57 @@ export const earnings = {
   ],
 };
 
+// ── Load history ─────────────────────────────────────────────────────
+// The driver's completed loads for the Load History screen. Mirrors the
+// /loads/driver/{id}/history shape: terminal-state loads, newest first, each
+// with its proof-of-delivery photos inline. Demo photos are externally hosted
+// (deterministic picsum seeds) so the screen renders without a backend.
+const pod = (seed, caption) => ({
+  id: `p-${seed}`,
+  url: `https://picsum.photos/seed/${seed}/900/700`,
+  thumbnailUrl: `https://picsum.photos/seed/${seed}/240/240`,
+  caption,
+});
+
+export const loadHistory = [
+  {
+    id: 'LD-4810', origin: 'Dallas, TX', destination: 'Chicago, IL', originState: 'TX', destState: 'IL',
+    miles: 925, rate: 2080, rpm: 2.25, equipment: '53FT Dry Van', commodity: 'Consumer goods', weight: 38000,
+    broker: 'Coyote Logistics', status: 'Delivered', completedAt: '2026-06-03',
+    photos: [pod('hlh4810a', 'Delivery paperwork'), pod('hlh4810b', 'Signed BOL'), pod('hlh4810c', 'Cargo delivered')],
+  },
+  {
+    id: 'LD-4798', origin: 'Denver, CO', destination: 'Dallas, TX', originState: 'CO', destState: 'TX',
+    miles: 780, rate: 1990, rpm: 2.55, equipment: 'Reefer', commodity: 'Produce', weight: 41000,
+    broker: 'TQL', status: 'Delivered', completedAt: '2026-06-01',
+    photos: [pod('hlh4798a', 'Delivery paperwork'), pod('hlh4798b', 'Reefer temps')],
+  },
+  {
+    id: 'LD-4781', origin: 'Phoenix, AZ', destination: 'Denver, CO', originState: 'AZ', destState: 'CO',
+    miles: 600, rate: 1520, rpm: 2.53, equipment: 'Flatbed', commodity: 'Steel', weight: 44000,
+    broker: 'Echo', status: 'Closed', completedAt: '2026-05-29',
+    photos: [pod('hlh4781a', 'Delivery paperwork'), pod('hlh4781b', 'Load secured'), pod('hlh4781c', 'Tarps on')],
+  },
+  {
+    id: 'LD-4772', origin: 'Los Angeles, CA', destination: 'Phoenix, AZ', originState: 'CA', destState: 'AZ',
+    miles: 370, rate: 980, rpm: 2.65, equipment: '53FT Dry Van', commodity: 'Electronics', weight: 22000,
+    broker: 'RXO', status: 'Delivered', completedAt: '2026-05-27',
+    photos: [pod('hlh4772a', 'Delivery paperwork')],
+  },
+  {
+    id: 'LD-4759', origin: 'Seattle, WA', destination: 'Portland, OR', originState: 'WA', destState: 'OR',
+    miles: 175, rate: 720, rpm: 4.11, equipment: 'Reefer', commodity: 'Seafood', weight: 18000,
+    broker: 'Coyote Logistics', status: 'Cancelled', completedAt: '2026-05-24',
+    cancellationReason: 'Shipper cancelled at the dock', photos: [],
+  },
+  {
+    id: 'LD-4741', origin: 'Kansas City, MO', destination: 'St. Louis, MO', originState: 'MO', destState: 'MO',
+    miles: 250, rate: 890, rpm: 3.56, equipment: 'Flatbed', commodity: 'Machinery', weight: 39000,
+    broker: 'Echo', status: 'Closed', completedAt: '2026-05-20',
+    photos: [pod('hlh4741a', 'Delivery paperwork'), pod('hlh4741b', 'Cargo delivered')],
+  },
+];
+
 // ── Notifications inbox ──────────────────────────────────────────────
 // Feed for the Alerts screen. Copy is drawn straight from the fixtures above
 // (activeLoad, hos, documents, earnings) so it reads coherently. Each item:

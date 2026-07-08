@@ -48,6 +48,16 @@ export async function fetchDriver(driverId) {
   return data ?? null;
 }
 
+// The driver's completed-load history — terminal-state loads (Delivered /
+// Closed / Cancelled), newest first, each with its proof-of-delivery photos
+// resolved inline. Empty history is a normal state, not an error.
+export async function fetchLoadHistory(driverId) {
+  if (USE_MOCK) { await wait(); return mock.loadHistory; }
+  if (!driverId) return [];
+  const data = await apiFetch(`/loads/driver/${driverId}/history`, { allow404: true });
+  return Array.isArray(data) ? data : [];
+}
+
 export async function fetchActiveLoad(driverId) {
   if (USE_MOCK) { await wait(); return mock.activeLoad; }
   if (!driverId) return null; // not signed in yet — don't hit /loads/driver/undefined

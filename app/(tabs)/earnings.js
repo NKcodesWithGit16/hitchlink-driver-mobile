@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Animated, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Animated, RefreshControl, Modal, Image, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -10,9 +10,10 @@ import Skeleton from '../../src/components/ui/Skeleton';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
-import { fetchEarnings } from '../../src/api/main';
+import { fetchEarnings, fetchLoadHistory } from '../../src/api/main';
 import { money, num, rpm } from '../../src/lib/format';
-import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
+import haptics from '../../src/lib/haptics';
+import { space, type, radius, FONT, shadow, toneOf } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 
 const CHART_H = 116;
@@ -21,6 +22,15 @@ const CHART_H = 116;
 // 15% above last period, rounded to a clean hundred.
 const fallbackGoal = (d) => Math.round(((d.prevNet || d.net || 0) * 1.15) / 100) * 100;
 
+// Compact "Jun 3" for a history row. Handles both a plain 'YYYY-MM-DD' (mock)
+// and a full ISO timestamp (live /history), so it never renders a raw string.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function fmtWhen(x) {
+  if (!x) return '';
+  const d = new Date(x);
+  return isNaN(d.getTime()) ? String(x) : `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+}
+
 export default function EarningsScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
@@ -28,9 +38,10 @@ export default function EarningsScreen() {
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [data, setData]   = useState(null);
   const [range, setRange] = useState('week');
-  const [expanded, setExpanded] = useState(null);
   const [error, setError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [lightbox, setLightbox] = useState(null); // { photos, index }
 
   // The hero scrolls away with the content; a slim summary bar fades in to
   // replace it. Driven on the NATIVE driver (opacity + translateY only) so it
@@ -47,6 +58,9 @@ export default function EarningsScreen() {
     } catch {
       setError(true);
     }
+    // History is independent of the earnings figures — a failure here shouldn't
+    // flip the whole screen into its error state.
+    try { setHistory(await fetchLoadHistory(userId)); } catch { /* leave prior */ }
   }, [userId]);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -215,21 +229,6 @@ export default function EarningsScreen() {
                 </View>
               </FadeInView>
 
-              {/* Recent loads */}
-              <FadeInView delay={280}>
-                <Text style={[styles.sectionTitle, { color: colors.textPrimary, marginBottom: 2 }]}>Recent loads</Text>
-              </FadeInView>
-              {data.loads.map((l, i) => (
-                <FadeInView key={l.id} delay={320 + i * 60}>
-                  <LoadCard
-                    load={l}
-                    expanded={expanded === l.id}
-                    onToggle={() => setExpanded((p) => (p === l.id ? null : l.id))}
-                    colors={colors}
-                    styles={styles}
-                  />
-                </FadeInView>
-              ))}
             </>
           ) : error ? (
             <View style={styles.errorBox}>
@@ -246,8 +245,47 @@ export default function EarningsScreen() {
           ) : (
             <EarningsBodySkeleton colors={colors} styles={styles} />
           )}
+
+          {/* ── Load history — every delivered load with its paperwork photos ── */}
+          <FadeInView delay={80}>
+            <View style={styles.histHead}>
+              <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Load history</Text>
+              {history.length > 0 ? (
+                <Text style={[styles.cardHeadSub, { color: colors.textMuted }]}>{history.length} loads</Text>
+              ) : null}
+            </View>
+          </FadeInView>
+          {history.length === 0 ? (
+            <View style={[styles.histEmpty, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <Icon name="clock" size={22} color={colors.textMuted} />
+              <Text style={[styles.histEmptyText, { color: colors.textSecondary }]}>
+                Your delivered loads show up here with the paperwork photos you captured on the dock.
+              </Text>
+            </View>
+          ) : (
+            history.map((l, i) => (
+              <FadeInView key={l.id} delay={Math.min(i, 6) * 60}>
+                <HistoryCard
+                  load={l}
+                  colors={colors}
+                  styles={styles}
+                  onOpenPhoto={(idx) => { haptics.tap(); setLightbox({ photos: l.photos || [], index: idx }); }}
+                />
+              </FadeInView>
+            ))
+          )}
         </View>
       </Animated.ScrollView>
+
+      {lightbox ? (
+        <Lightbox
+          photos={lightbox.photos}
+          index={lightbox.index}
+          onIndex={(i) => setLightbox((lb) => ({ ...lb, index: i }))}
+          onClose={() => setLightbox(null)}
+          styles={styles}
+        />
+      ) : null}
     </ScreenFade>
   );
 }
@@ -467,43 +505,103 @@ function BreakdownRow({ label, value, tone, strong, colors, styles }) {
   );
 }
 
-function LoadCard({ load, expanded, onToggle, colors, styles }) {
-  const dpm = load.miles ? load.net / load.miles : 0;
+// One completed load in the history list: route + pay + a tappable strip of its
+// proof-of-delivery photos. Tapping a thumbnail opens the fullscreen lightbox.
+function HistoryCard({ load, colors, styles, onOpenPhoto }) {
+  const cancelled = load.status === 'Cancelled';
+  const t = toneOf(colors, cancelled ? 'danger' : 'go');
+  const photos = load.photos || [];
+  const shown = photos.slice(0, 4);
+  const extra = photos.length - shown.length;
   return (
-    <Pressable
-      onPress={onToggle}
-      style={({ pressed }) => [styles.loadCard, { backgroundColor: colors.surface, borderColor: colors.border, transform: [{ scale: pressed ? 0.985 : 1 }] }]}
-      accessibilityRole="button"
-      accessibilityState={{ expanded }}
-      accessibilityLabel={`${load.from} to ${load.to}, took home ${money(load.net)}. ${expanded ? 'Tap to hide' : 'Tap to show'} breakdown`}
-    >
-      <View style={[styles.loadStripe, { backgroundColor: colors.go }]} />
-      <View style={{ flex: 1 }}>
-        <View style={styles.loadTop}>
+    <View style={[styles.histCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <View style={[styles.histStripe, { backgroundColor: t.solid }]} />
+      <View style={{ flex: 1, padding: space[4], gap: space[3] }}>
+        <View style={styles.histTop}>
           <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={[styles.loadRoute, { color: colors.textPrimary }]} numberOfLines={1}>{load.from} → {load.to}</Text>
-            <Text style={[styles.loadMeta, { color: colors.textMuted }]}>{load.date} · {num(load.miles)} mi · {load.id}</Text>
+            <Text style={[styles.histRoute, { color: colors.textPrimary }]} numberOfLines={1}>
+              {load.origin} → {load.destination}
+            </Text>
+            <Text style={[styles.histMeta, { color: colors.textMuted }]} numberOfLines={1}>
+              {fmtWhen(load.completedAt)} · {num(load.miles)} mi{load.broker ? ` · ${load.broker}` : ''}
+            </Text>
           </View>
-          <View style={{ alignItems: 'flex-end', gap: 4 }}>
-            <Text style={[styles.loadNet, { color: colors.textPrimary }]}>{money(load.net)}</Text>
-            <View style={[styles.dpmBadge, { backgroundColor: colors.goFill, borderColor: colors.go + '55' }]}>
-              <Text style={[styles.dpmText, { color: colors.go }]}>${rpm(dpm)}/mi</Text>
+          <View style={{ alignItems: 'flex-end', gap: 5 }}>
+            <Text style={[styles.histRate, { color: colors.textPrimary }]}>{money(load.rate)}</Text>
+            <View style={[styles.histBadge, { backgroundColor: t.fill, borderColor: t.solid + '55' }]}>
+              <Text style={[styles.histBadgeText, { color: t.solid }]}>{cancelled ? 'Cancelled' : 'Delivered'}</Text>
             </View>
           </View>
         </View>
-        {expanded ? (
-          <View style={styles.loadExpanded}>
-            <View style={[styles.loadDivider, { backgroundColor: colors.border }]} />
-            <BreakdownRow label="Gross"      value={money(load.gross)}            colors={colors} styles={styles} />
-            <BreakdownRow label="Deductions" value={`− ${money(load.deductions)}`} tone="danger" colors={colors} styles={styles} />
-            <BreakdownRow label="Net pay"    value={money(load.net)} tone="go" strong colors={colors} styles={styles} />
+
+        {photos.length > 0 ? (
+          <View style={styles.histPhotoRow}>
+            {shown.map((p, i) => (
+              <Pressable
+                key={p.id ?? i}
+                onPress={() => onOpenPhoto(i)}
+                style={({ pressed }) => [styles.histThumb, { opacity: pressed ? 0.8 : 1 }]}
+                accessibilityRole="imagebutton"
+                accessibilityLabel={p.caption || 'Load photo'}
+              >
+                <Image source={{ uri: p.thumbnailUrl || p.url }} style={styles.histThumbImg} />
+                {i === shown.length - 1 && extra > 0 ? (
+                  <View style={styles.histThumbMore}>
+                    <Text style={styles.histThumbMoreText}>+{extra}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+            ))}
           </View>
-        ) : null}
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 6 }}>
-          <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={colors.textMuted} />
-        </View>
+        ) : cancelled ? (
+          <Text style={[styles.histNote, { color: colors.textMuted }]} numberOfLines={2}>
+            {load.cancellationReason || 'Load cancelled.'}
+          </Text>
+        ) : (
+          <View style={[styles.histNoPhotos, { borderColor: colors.border }]}>
+            <Icon name="camera-off" size={13} color={colors.textMuted} />
+            <Text style={[styles.histNoPhotosText, { color: colors.textMuted }]}>No paperwork photos</Text>
+          </View>
+        )}
       </View>
-    </Pressable>
+    </View>
+  );
+}
+
+// Fullscreen photo viewer with prev/next. Tapping the backdrop closes it.
+function Lightbox({ photos, index, onIndex, onClose, styles }) {
+  const { width } = useWindowDimensions();
+  if (!photos || photos.length === 0) return null;
+  const p = photos[index];
+  const go = (dir) => onIndex((index + dir + photos.length) % photos.length);
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
+      <View style={styles.lbOverlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close photo" />
+        <Image
+          source={{ uri: p.url || p.thumbnailUrl }}
+          style={{ width: width - 32, height: '68%' }}
+          resizeMode="contain"
+        />
+        <View style={styles.lbCaption} pointerEvents="none">
+          <Text style={styles.lbCaptionText}>{p.caption || 'Photo'}</Text>
+          <Text style={styles.lbCount}>{index + 1} / {photos.length}</Text>
+        </View>
+        <Pressable onPress={onClose} style={styles.lbClose} hitSlop={10} accessibilityRole="button" accessibilityLabel="Close">
+          <Icon name="x" size={22} color="#FFFFFF" />
+        </Pressable>
+        {photos.length > 1 ? (
+          <>
+            <Pressable onPress={() => go(-1)} style={[styles.lbNav, { left: 12 }]} hitSlop={8} accessibilityRole="button" accessibilityLabel="Previous photo">
+              <Icon name="chevron-left" size={26} color="#FFFFFF" />
+            </Pressable>
+            <Pressable onPress={() => go(1)} style={[styles.lbNav, { right: 12 }]} hitSlop={8} accessibilityRole="button" accessibilityLabel="Next photo">
+              <Icon name="chevron-right" size={26} color="#FFFFFF" />
+            </Pressable>
+          </>
+        ) : null}
+      </View>
+    </Modal>
   );
 }
 
@@ -588,17 +686,34 @@ const makeStyles = (c) => StyleSheet.create({
   brLabel: { ...type.body, color: c.textSecondary },
   brValue: { ...type.bodyStrong },
 
-  /* Load cards */
-  loadCard: { flexDirection: 'row', borderRadius: radius.lg, borderWidth: 1, overflow: 'hidden' },
-  loadStripe: { width: 4, flexShrink: 0 },
-  loadTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space[3], padding: space[4] },
-  loadExpanded: { paddingHorizontal: space[4], paddingBottom: space[2], gap: space[2] },
-  loadDivider: { height: 1, marginBottom: space[2] },
-  loadRoute: { ...type.bodyStrong },
-  loadMeta: { ...type.caption, marginTop: 2 },
-  loadNet: { fontSize: 18, fontFamily: FONT.black, letterSpacing: -0.3 },
-  dpmBadge: { borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 7, paddingVertical: 3 },
-  dpmText: { fontSize: 10, fontFamily: FONT.black },
+  /* Load history */
+  histHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  histEmpty: { borderRadius: radius.lg, borderWidth: 1, padding: space[5], alignItems: 'center', gap: space[2] },
+  histEmptyText: { ...type.caption, textAlign: 'center', lineHeight: 19, maxWidth: 280 },
+  histCard: { flexDirection: 'row', borderRadius: radius.lg, borderWidth: 1, overflow: 'hidden' },
+  histStripe: { width: 4, flexShrink: 0 },
+  histTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space[3] },
+  histRoute: { ...type.bodyStrong },
+  histMeta: { ...type.caption, marginTop: 2 },
+  histRate: { fontSize: 17, fontFamily: FONT.black, letterSpacing: -0.3 },
+  histBadge: { borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 3 },
+  histBadgeText: { fontSize: 10, fontFamily: FONT.black, letterSpacing: 0.2 },
+  histPhotoRow: { flexDirection: 'row', gap: space[2] },
+  histThumb: { width: 56, height: 56, borderRadius: radius.md, overflow: 'hidden', backgroundColor: 'rgba(127,127,127,0.15)' },
+  histThumbImg: { width: '100%', height: '100%' },
+  histThumbMore: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
+  histThumbMoreText: { color: '#FFFFFF', fontSize: 14, fontFamily: FONT.black },
+  histNote: { ...type.caption, fontStyle: 'italic' },
+  histNoPhotos: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderStyle: 'dashed', borderRadius: radius.md, paddingHorizontal: space[3], paddingVertical: space[2], alignSelf: 'flex-start' },
+  histNoPhotosText: { ...type.caption },
+
+  /* Lightbox */
+  lbOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.94)', alignItems: 'center', justifyContent: 'center' },
+  lbClose: { position: 'absolute', top: 48, right: 20, width: 42, height: 42, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  lbCaption: { position: 'absolute', bottom: 56, left: 0, right: 0, alignItems: 'center', gap: 4 },
+  lbCaptionText: { color: '#FFFFFF', fontSize: 14, fontFamily: FONT.bold },
+  lbCount: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontFamily: FONT.medium, ...type.num },
+  lbNav: { position: 'absolute', top: '50%', marginTop: -24, width: 48, height: 48, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center' },
 
   /* Error / retry */
   errorBox: { alignItems: 'center', justifyContent: 'center', gap: space[3], paddingVertical: space[10], paddingHorizontal: space[4] },
