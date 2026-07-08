@@ -216,6 +216,46 @@ export async function sendPhotoMessage(driverId, { uri, text = null, replyToMess
   });
 }
 
+// Stores a proof-of-delivery photo against the load itself — the permanent
+// record the dispatcher's Completed Loads history reads from. Same three-step
+// flow as sendPhotoMessage (sign → PUT the bytes straight to R2 → create the
+// record with the storage key), but against POST /loads/{id}/photos instead of
+// the chat thread. Captured at delivery on the load screen.
+export async function uploadLoadPhoto(loadId, { uri, caption = 'Delivery paperwork' } = {}) {
+  if (USE_MOCK) { await wait(200); return { ok: true }; }
+  if (!loadId || !uri) return null;
+
+  const blob = await (await fetch(uri)).blob();
+  const mimeType = blob.type || 'image/jpeg';
+
+  const signed = await apiFetch(`/loads/${loadId}/photos/sign`, {
+    method: 'POST',
+    body: JSON.stringify({ mimeType, sizeBytes: blob.size }),
+  });
+
+  // Bare fetch — the signed URL carries its own auth, and the Content-Type must
+  // match what was signed (R2 folds it into the signature).
+  const put = await fetch(signed.uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': mimeType },
+    body: blob,
+  });
+  if (!put.ok) throw new Error(`Load photo upload failed (${put.status})`);
+
+  return apiFetch(`/loads/${loadId}/photos`, {
+    method: 'POST',
+    body: JSON.stringify({
+      uploadedByRole: 'driver',
+      photos: [{
+        storageKey: signed.storageKey,
+        mimeType,
+        sizeBytes: blob.size,
+        caption,
+      }],
+    }),
+  });
+}
+
 export async function fetchEarnings(driverId) {
   if (USE_MOCK) { await wait(); return mock.earnings; }
   // Real endpoint: GET /drivers/{id}/earnings (settlements aggregated into the

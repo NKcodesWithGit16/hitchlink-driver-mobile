@@ -35,7 +35,7 @@ import { TAB_BAR_CLEARANCE } from './_layout';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useAlert } from '../../src/context/AlertContext';
-import { fetchActiveLoad, updateLoadStatus, undoLoadStatus, sendPhotoMessage } from '../../src/api/main';
+import { fetchActiveLoad, updateLoadStatus, undoLoadStatus, sendPhotoMessage, uploadLoadPhoto } from '../../src/api/main';
 import { useLoadStatusSocket } from '../../src/hooks/useLoadStatusSocket';
 import { useConfirmEveryStep } from '../../src/lib/prefs';
 import { hos, weatherNow } from '../../src/data/mock';
@@ -188,14 +188,22 @@ export default function LoadScreen() {
       const uri = await capturePod();
       if (uri) {
         setPodUri(uri);
-        // Ship the paperwork to dispatch as a chat photo. The delivery still
-        // counts if the upload fails — tell the driver so they can resend it
+        // Store the paperwork two ways: against the load itself (the permanent
+        // record the dispatcher's Completed Loads history reads) and as a chat
+        // photo (a live heads-up in the dispatch thread). The delivery still
+        // counts if either upload fails — tell the driver so they can resend it
         // from Messages instead of silently losing the paperwork.
-        sendPhotoMessage(user?.id, { uri, text: `📄 Delivery paperwork — ${load?.id ?? 'load'}` })
-          .catch(() => Alert.alert(
-            'Photo not sent',
-            "Your delivery was recorded, but the paperwork photo couldn't reach dispatch. Please resend it from Messages.",
-          ));
+        Promise.allSettled([
+          uploadLoadPhoto(load?.id, { uri, caption: 'Delivery paperwork' }),
+          sendPhotoMessage(user?.id, { uri, text: `📄 Delivery paperwork — ${load?.id ?? 'load'}` }),
+        ]).then((results) => {
+          if (results.some((r) => r.status === 'rejected')) {
+            Alert.alert(
+              'Photo not sent',
+              "Your delivery was recorded, but the paperwork photo couldn't upload. Please resend it from Messages.",
+            );
+          }
+        });
       }
     }
     advance(action.next);
