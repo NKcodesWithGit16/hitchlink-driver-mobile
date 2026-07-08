@@ -7,14 +7,26 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "android": { "buildType": "apk" }
+      "android": { "buildType": "apk" },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://dspidentity-staging.up.railway.app",
+        "EXPO_PUBLIC_API_MAIN_URL": "https://dspmain-staging.up.railway.app"
+      }
     },
     "preview": {
       "distribution": "internal",
-      "android": { "buildType": "apk" }
+      "android": { "buildType": "apk" },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://dspidentity-staging.up.railway.app",
+        "EXPO_PUBLIC_API_MAIN_URL": "https://dspmain-staging.up.railway.app"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://dspidentity-staging.up.railway.app",
+        "EXPO_PUBLIC_API_MAIN_URL": "https://dspmain-staging.up.railway.app"
+      }
     }
   },
   "submit": {
