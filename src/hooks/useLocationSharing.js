@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { sendHeartbeat } from '../api/main';
 import { startBackgroundTracking } from '../lib/backgroundLocation';
+import { deriveSpeedKph, isAcceptableFix } from '../lib/geo';
 
 /* GPS → dispatcher heartbeats.
 
@@ -37,7 +38,9 @@ export function useLocationSharing() {
     let appStateSub = null;
     let cancelled = false;
     let started = false;   // first fix kicks off the send loop exactly once
-    const latest = { fix: null };
+    // `fix` carries a derived `_speedKph` (see geo.deriveSpeedKph); `prev` is the
+    // last accepted fix, used to derive speed and reject teleports.
+    const latest = { fix: null, prev: null };
 
     const schedule = (sec) => {
       if (cancelled) return;
@@ -57,8 +60,9 @@ export function useLocationSharing() {
         const res = await sendHeartbeat(userId, {
           lat: fix.coords.latitude,
           lng: fix.coords.longitude,
-          // GPS speed is m/s (and -1/null when unknown) → clamp to kph.
-          speedKph: Math.max(0, (fix.coords.speed ?? 0) * 3.6),
+          // Derived when the fix was accepted — real speed even when Android's
+          // coords.speed comes back null (see geo.deriveSpeedKph).
+          speedKph: Math.max(0, fix._speedKph ?? 0),
         });
         schedule(res?.nextHeartbeatSeconds ?? DEFAULT_INTERVAL_SEC);
       } catch {
@@ -77,11 +81,18 @@ export function useLocationSharing() {
         startBackgroundTracking();
         sub = await Location.watchPositionAsync(
           {
-            accuracy: Location.Accuracy.Balanced,
+            // High (not Balanced): precise fixes with a reliable coords.speed,
+            // so the marker tracks smoothly and the server keeps the 8s cadence.
+            accuracy: Location.Accuracy.High,
             timeInterval: 5000,    // keep the ref fresh, sends are paced above
             distanceInterval: 20,
           },
           (pos) => {
+            // Drop coarse/cached fixes (the "snap back to the origin" bug)
+            // instead of reporting them as the live position.
+            if (!isAcceptableFix(latest.prev, pos)) return;
+            pos._speedKph = deriveSpeedKph(latest.prev, pos);
+            latest.prev = pos;
             latest.fix = pos;
             if (!started) { started = true; send(); } // first fix → beat now
           }

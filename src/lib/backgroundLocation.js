@@ -17,6 +17,7 @@ import { USE_MOCK } from '../api/config';
 import { sendHeartbeat } from '../api/main';
 import { getValidToken } from './session';
 import { readUserFromToken } from '../utils/jwtUtils';
+import { deriveSpeedKph, isAcceptableFix } from './geo';
 
 let Location = null;
 let TaskManager = null;
@@ -34,6 +35,9 @@ export const BG_LOCATION_TASK = 'hitchlink-driver-location';
 // reports don't need to be tighter than that.
 const MIN_SEND_INTERVAL_MS = 8000;
 let lastSentAt = 0;
+// Last accepted fix, persisted across headless task invocations so speed can be
+// derived and teleports rejected the same way the foreground watch does.
+let lastBgFix = null;
 
 if (TaskManager?.defineTask) {
   TaskManager.defineTask(BG_LOCATION_TASK, async ({ data, error }) => {
@@ -52,17 +56,24 @@ if (TaskManager?.defineTask) {
     const claims = readUserFromToken(await getValidToken());
     if (!claims?.userId) return;
 
-    const fix = data.locations[data.locations.length - 1];
-    const { latitude, longitude, speed } = fix?.coords ?? {};
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+    // Walk every fix in the batch so speed is derived and teleports rejected
+    // against the running previous fix — same rules as the foreground watch.
+    // Send only the last accepted one (heartbeats are paced, not per-fix).
+    let toSend = null;
+    for (const loc of data.locations) {
+      if (!isAcceptableFix(lastBgFix, loc)) continue;
+      loc._speedKph = deriveSpeedKph(lastBgFix, loc);
+      lastBgFix = loc;
+      toSend = loc;
+    }
+    if (!toSend) return;
 
     lastSentAt = now;
     try {
       await sendHeartbeat(claims.userId, {
-        lat: latitude,
-        lng: longitude,
-        // GPS speed is m/s (and -1/null when unknown) → clamp to kph.
-        speedKph: Math.max(0, (speed ?? 0) * 3.6),
+        lat: toSend.coords.latitude,
+        lng: toSend.coords.longitude,
+        speedKph: Math.max(0, toSend._speedKph ?? 0),
       });
     } catch {
       // Offline / server hiccup — the next fix will retry.
@@ -90,7 +101,7 @@ export async function startBackgroundTracking() {
     if (alreadyRunning) return true;
 
     await Location.startLocationUpdatesAsync(BG_LOCATION_TASK, {
-      accuracy: Location.Accuracy.Balanced,
+      accuracy: Location.Accuracy.High,
       timeInterval: 10000,
       distanceInterval: 50,
       // iOS: keep delivering while backgrounded; show the status-bar
