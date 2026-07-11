@@ -266,7 +266,12 @@ export default function MessagesScreen() {
         </Pressable>
       ) : null}
 
-      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={8}>
+      {/* behavior="padding" on BOTH platforms. Android can't fall back to the
+          OS's adjustResize here: edge-to-edge (mandatory since Expo SDK 54)
+          stops the window from resizing for the keyboard, so with behavior
+          undefined the composer sat *under* the keyboard. Letting the KAV apply
+          the bottom padding itself lifts it above the keyboard on Android too. */}
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior="padding" keyboardVerticalOffset={8}>
 
         {/* Soft brand glow lighting the top of the thread — ambient depth,
             near-invisible, fixed while messages scroll over it. */}

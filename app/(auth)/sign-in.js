@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   View, Text, TextInput, Pressable, StyleSheet,
-  KeyboardAvoidingView, Platform, ScrollView,
+  KeyboardAvoidingView, ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -70,7 +70,10 @@ export default function SignIn() {
         </View>
       </View>
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kav}>
+      {/* padding on both platforms — edge-to-edge kills Android's adjustResize,
+          so the KAV must add the bottom inset itself for the ScrollView to
+          reveal the focused field above the keyboard. */}
+      <KeyboardAvoidingView behavior="padding" style={styles.kav}>
         <ScrollView
           contentContainerStyle={[styles.scroll, { paddingTop: bandH - 44, paddingBottom: insets.bottom + space[6] }]}
           keyboardShouldPersistTaps="handled"
