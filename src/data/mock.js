@@ -25,6 +25,11 @@ export const activeLoad = {
   miles: 720,
   rate: 1820,
   rpm: 2.53,
+  // Actual GPS-driven miles (demo). In live mode these accrue from the odometer;
+  // finalize freezes the same figures on delivery. deadhead + loaded = driven.
+  deadheadMiles: 62,
+  loadedMiles: 731,
+  drivenMiles: 793,
   equipment: '53FT Dry Van',
   commodity: 'Consumer Goods',
   weight: 38000,
@@ -110,25 +115,25 @@ const pod = (seed, caption) => ({
 export const loadHistory = [
   {
     id: 'LD-4810', origin: 'Dallas, TX', destination: 'Chicago, IL', originState: 'TX', destState: 'IL',
-    miles: 925, rate: 2080, rpm: 2.25, equipment: '53FT Dry Van', commodity: 'Consumer goods', weight: 38000,
+    miles: 925, rate: 2080, rpm: 2.25, deadheadMiles: 74, loadedMiles: 938, drivenMiles: 1012, equipment: '53FT Dry Van', commodity: 'Consumer goods', weight: 38000,
     broker: 'Coyote Logistics', status: 'Delivered', completedAt: '2026-06-03',
     photos: [pod('hlh4810a', 'Delivery paperwork'), pod('hlh4810b', 'Signed BOL'), pod('hlh4810c', 'Cargo delivered')],
   },
   {
     id: 'LD-4798', origin: 'Denver, CO', destination: 'Dallas, TX', originState: 'CO', destState: 'TX',
-    miles: 780, rate: 1990, rpm: 2.55, equipment: 'Reefer', commodity: 'Produce', weight: 41000,
+    miles: 780, rate: 1990, rpm: 2.55, deadheadMiles: 55, loadedMiles: 792, drivenMiles: 847, equipment: 'Reefer', commodity: 'Produce', weight: 41000,
     broker: 'TQL', status: 'Delivered', completedAt: '2026-06-01',
     photos: [pod('hlh4798a', 'Delivery paperwork'), pod('hlh4798b', 'Reefer temps')],
   },
   {
     id: 'LD-4781', origin: 'Phoenix, AZ', destination: 'Denver, CO', originState: 'AZ', destState: 'CO',
-    miles: 600, rate: 1520, rpm: 2.53, equipment: 'Flatbed', commodity: 'Steel', weight: 44000,
+    miles: 600, rate: 1520, rpm: 2.53, deadheadMiles: 88, loadedMiles: 611, drivenMiles: 699, equipment: 'Flatbed', commodity: 'Steel', weight: 44000,
     broker: 'Echo', status: 'Closed', completedAt: '2026-05-29',
     photos: [pod('hlh4781a', 'Delivery paperwork'), pod('hlh4781b', 'Load secured'), pod('hlh4781c', 'Tarps on')],
   },
   {
     id: 'LD-4772', origin: 'Los Angeles, CA', destination: 'Phoenix, AZ', originState: 'CA', destState: 'AZ',
-    miles: 370, rate: 980, rpm: 2.65, equipment: '53FT Dry Van', commodity: 'Electronics', weight: 22000,
+    miles: 370, rate: 980, rpm: 2.65, deadheadMiles: 42, loadedMiles: 366, drivenMiles: 408, equipment: '53FT Dry Van', commodity: 'Electronics', weight: 22000,
     broker: 'RXO', status: 'Delivered', completedAt: '2026-05-27',
     photos: [pod('hlh4772a', 'Delivery paperwork')],
   },
@@ -140,7 +145,7 @@ export const loadHistory = [
   },
   {
     id: 'LD-4741', origin: 'Kansas City, MO', destination: 'St. Louis, MO', originState: 'MO', destState: 'MO',
-    miles: 250, rate: 890, rpm: 3.56, equipment: 'Flatbed', commodity: 'Machinery', weight: 39000,
+    miles: 250, rate: 890, rpm: 3.56, deadheadMiles: 31, loadedMiles: 258, drivenMiles: 289, equipment: 'Flatbed', commodity: 'Machinery', weight: 39000,
     broker: 'Echo', status: 'Closed', completedAt: '2026-05-20',
     photos: [pod('hlh4741a', 'Delivery paperwork'), pod('hlh4741b', 'Cargo delivered')],
   },

@@ -61,6 +61,24 @@ export function isPrePickup(status) {
   return ['Posted', 'Assigned', 'EnRouteToPickup', 'AtPickup'].includes(status);
 }
 
+// Which mileage bucket the odometer attributes distance to right now: 'deadhead'
+// while running empty to the pickup, 'loaded' once the freight is aboard, null
+// when there's nothing to measure (posted / terminal). See lib/odometer.
+export function loadPhase(status) {
+  switch (status) {
+    case 'Assigned':
+    case 'EnRouteToPickup':
+    case 'AtPickup':
+      return 'deadhead';
+    case 'Loaded':
+    case 'EnRouteToDropoff':
+    case 'AtDelivery':
+      return 'loaded';
+    default:
+      return null;
+  }
+}
+
 // Resolve the "next stop" the driver is heading to.
 export function nextStop(load, status) {
   if (isPrePickup(status)) {

@@ -7,10 +7,12 @@ import Icon from '../../src/components/ui/Icon';
 import CountUp from '../../src/components/ui/CountUp';
 import FadeInView from '../../src/components/ui/FadeInView';
 import Skeleton from '../../src/components/ui/Skeleton';
+import LoadDetailSheet from '../../src/components/driver/LoadDetailSheet';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { fetchEarnings, fetchLoadHistory } from '../../src/api/main';
+import { getStats, computeLoadStats } from '../../src/lib/odometer';
 import { money, num, rpm } from '../../src/lib/format';
 import haptics from '../../src/lib/haptics';
 import { space, type, radius, FONT, shadow, toneOf } from '../../src/theme/tokens';
@@ -42,6 +44,15 @@ export default function EarningsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [history, setHistory] = useState([]);
   const [lightbox, setLightbox] = useState(null); // { photos, index }
+  const [detail, setDetail] = useState(null);     // { load, stats } — open detail sheet
+
+  // Open the per-load breakdown: pull any stored actual-miles record and merge
+  // it with the load into display-ready stats.
+  const openDetail = useCallback(async (l) => {
+    haptics.tap();
+    const record = await getStats(l.id);
+    setDetail({ load: l, stats: computeLoadStats(l, record) });
+  }, []);
 
   // The hero scrolls away with the content; a slim summary bar fades in to
   // replace it. Driven on the NATIVE driver (opacity + translateY only) so it
@@ -269,6 +280,7 @@ export default function EarningsScreen() {
                   load={l}
                   colors={colors}
                   styles={styles}
+                  onOpen={() => openDetail(l)}
                   onOpenPhoto={(idx) => { haptics.tap(); setLightbox({ photos: l.photos || [], index: idx }); }}
                 />
               </FadeInView>
@@ -276,6 +288,16 @@ export default function EarningsScreen() {
           )}
         </View>
       </Animated.ScrollView>
+
+      {detail ? (
+        <LoadDetailSheet
+          load={detail.load}
+          stats={detail.stats}
+          colors={colors}
+          onClose={() => setDetail(null)}
+          onOpenPhoto={(idx) => setLightbox({ photos: detail.load.photos || [], index: idx })}
+        />
+      ) : null}
 
       {lightbox ? (
         <Lightbox
@@ -507,7 +529,7 @@ function BreakdownRow({ label, value, tone, strong, colors, styles }) {
 
 // One completed load in the history list: route + pay + a tappable strip of its
 // proof-of-delivery photos. Tapping a thumbnail opens the fullscreen lightbox.
-function HistoryCard({ load, colors, styles, onOpenPhoto }) {
+function HistoryCard({ load, colors, styles, onOpen, onOpenPhoto }) {
   const cancelled = load.status === 'Cancelled';
   const t = toneOf(colors, cancelled ? 'danger' : 'go');
   const photos = load.photos || [];
@@ -517,7 +539,12 @@ function HistoryCard({ load, colors, styles, onOpenPhoto }) {
     <View style={[styles.histCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
       <View style={[styles.histStripe, { backgroundColor: t.solid }]} />
       <View style={{ flex: 1, padding: space[4], gap: space[3] }}>
-        <View style={styles.histTop}>
+        <Pressable
+          onPress={onOpen}
+          style={({ pressed }) => [styles.histTop, { opacity: pressed ? 0.7 : 1 }]}
+          accessibilityRole="button"
+          accessibilityLabel={`View ${load.origin} to ${load.destination} details`}
+        >
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.histRoute, { color: colors.textPrimary }]} numberOfLines={1}>
               {load.origin} → {load.destination}
@@ -532,7 +559,10 @@ function HistoryCard({ load, colors, styles, onOpenPhoto }) {
               <Text style={[styles.histBadgeText, { color: t.solid }]}>{cancelled ? 'Cancelled' : 'Delivered'}</Text>
             </View>
           </View>
-        </View>
+          <View style={{ justifyContent: 'center', marginLeft: 4 }}>
+            <Icon name="chevron-right" size={18} color={colors.textMuted} />
+          </View>
+        </Pressable>
 
         {photos.length > 0 ? (
           <View style={styles.histPhotoRow}>

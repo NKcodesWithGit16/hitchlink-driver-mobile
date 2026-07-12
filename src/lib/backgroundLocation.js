@@ -18,6 +18,7 @@ import { sendHeartbeat } from '../api/main';
 import { getValidToken } from './session';
 import { readUserFromToken } from '../utils/jwtUtils';
 import { deriveSpeedKph, isAcceptableFix } from './geo';
+import { recordSegment } from './odometer';
 
 let Location = null;
 let TaskManager = null;
@@ -63,6 +64,9 @@ if (TaskManager?.defineTask) {
     for (const loc of data.locations) {
       if (!isAcceptableFix(lastBgFix, loc)) continue;
       loc._speedKph = deriveSpeedKph(lastBgFix, loc);
+      // Accrue actual miles for the active load. Awaited so the write lands
+      // before the OS suspends this headless task after we return.
+      await recordSegment(lastBgFix, loc);
       lastBgFix = loc;
       toSend = loc;
     }

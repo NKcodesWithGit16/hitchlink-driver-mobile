@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { sendHeartbeat } from '../api/main';
 import { startBackgroundTracking } from '../lib/backgroundLocation';
 import { deriveSpeedKph, isAcceptableFix } from '../lib/geo';
+import { recordSegment } from '../lib/odometer';
 
 /* GPS → dispatcher heartbeats.
 
@@ -92,6 +93,8 @@ export function useLocationSharing() {
             // instead of reporting them as the live position.
             if (!isAcceptableFix(latest.prev, pos)) return;
             pos._speedKph = deriveSpeedKph(latest.prev, pos);
+            // Accrue actual miles for the active load off the same accepted fix.
+            recordSegment(latest.prev, pos);
             latest.prev = pos;
             latest.fix = pos;
             if (!started) { started = true; send(); } // first fix → beat now

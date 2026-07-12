@@ -16,6 +16,15 @@ export function rpm(n) {
   return Number(n).toFixed(2);
 }
 
+// Signed whole number for a delta chip, e.g. +11 / −4 / 0. Uses a real minus
+// glyph (−) so it lines up with tabular figures instead of a skinny hyphen.
+export function signedNum(n) {
+  if (n == null || isNaN(n)) return '—';
+  const v = Math.round(Number(n));
+  if (v === 0) return '0';
+  return (v > 0 ? '+' : '−') + Math.abs(v).toLocaleString('en-US');
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export function fmtDate(iso) {

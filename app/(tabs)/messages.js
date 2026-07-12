@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, Pressable,
-  KeyboardAvoidingView, Platform, Linking, Animated, Image, Modal, Keyboard,
+  Platform, Linking, Animated, Image, Modal, Keyboard, Dimensions,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -56,20 +56,50 @@ export default function MessagesScreen() {
   const [viewerUri,   setViewerUri]   = useState(null);   // photo open in the fullscreen viewer
   const [kbOpen,      setKbOpen]      = useState(false);  // keyboard visibility
   const scrollRef   = useRef(null);
+  const kbPad       = useRef(new Animated.Value(0)).current; // live keyboard height → wrapper padding
 
-  // When the keyboard is up, the floating tab island is hidden behind it, so
-  // the composer no longer needs to reserve room for it — collapse that
-  // padding so the input sits right above the keyboard instead of under it.
+  // Keyboard tracking drives two things: (1) kbOpen collapses the composer's
+  // own bottom padding (the floating tab island is hidden behind the keyboard,
+  // so it no longer needs to reserve room for it); (2) kbPad lifts the whole
+  // thread + composer above the keyboard, replacing KeyboardAvoidingView (see
+  // the wrapper below for why we manage it ourselves).
   useEffect(() => {
     const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const s = Keyboard.addListener(showEvt, () => {
+    const s = Keyboard.addListener(showEvt, (e) => {
       setKbOpen(true);
+      // Pad by the gap between the TOP of the keyboard and the bottom of the
+      // screen — not by endCoordinates.height. Under Android edge-to-edge this
+      // wrapper runs to the physical screen bottom (under the nav bar), but
+      // `.height` excludes that nav-bar strip, so padding by height left the
+      // composer overlapping the keyboard by the nav-bar inset. screenY is
+      // absolute, so screenH − screenY is the true occlusion. Fall back to
+      // height if screenY is missing.
+      const end = e?.endCoordinates;
+      const screenH = Dimensions.get('screen').height;
+      const occlusion = end && typeof end.screenY === 'number' && end.screenY > 0
+        ? Math.max(0, screenH - end.screenY)
+        : (end?.height ?? 0);
+      Animated.timing(kbPad, {
+        toValue: occlusion,
+        duration: e?.duration || 220,
+        useNativeDriver: false,
+      }).start();
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
     });
-    const h = Keyboard.addListener(hideEvt, () => setKbOpen(false));
+    const h = Keyboard.addListener(hideEvt, (e) => {
+      setKbOpen(false);
+      // Reset hard to 0 — don't trust the hide event's coordinates. On Android
+      // (edge-to-edge) keyboardDidHide can report a bogus height, which is what
+      // left the composer stuck lifted instead of dropping back to rest.
+      Animated.timing(kbPad, {
+        toValue: 0,
+        duration: e?.duration || 180,
+        useNativeDriver: false,
+      }).start();
+    });
     return () => { s.remove(); h.remove(); };
-  }, []);
+  }, [kbPad]);
 
   // dispatcher info comes from the driver profile loaded in AuthContext
   const dispatcher = user?.dispatcher;
@@ -266,12 +296,15 @@ export default function MessagesScreen() {
         </Pressable>
       ) : null}
 
-      {/* behavior="padding" on BOTH platforms. Android can't fall back to the
-          OS's adjustResize here: edge-to-edge (mandatory since Expo SDK 54)
-          stops the window from resizing for the keyboard, so with behavior
-          undefined the composer sat *under* the keyboard. Letting the KAV apply
-          the bottom padding itself lifts it above the keyboard on Android too. */}
-      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior="padding" keyboardVerticalOffset={8}>
+      {/* We drive keyboard avoidance ourselves instead of using
+          KeyboardAvoidingView. Edge-to-edge (mandatory since Expo SDK 54) stops
+          Android's window from resizing for the keyboard, and KAV's
+          behavior="padding" left a residual gap after the keyboard closed — the
+          composer stayed lifted instead of dropping back above the tab bar.
+          Padding this wrapper by the live keyboard height (captured in the
+          Keyboard listeners, animated, and reset hard to 0 on hide) lifts the
+          composer above the keyboard and always returns it to rest. */}
+      <Animated.View style={{ flex: 1, backgroundColor: colors.bg, paddingBottom: kbPad }}>
 
         {/* Soft brand glow lighting the top of the thread — ambient depth,
             near-invisible, fixed while messages scroll over it. */}
@@ -401,7 +434,7 @@ export default function MessagesScreen() {
           )}
         </View>
 
-      </KeyboardAvoidingView>
+      </Animated.View>
 
       {/* ── Long-press action sheet ── */}
       <MessageActionSheet
@@ -809,7 +842,10 @@ const makeStyles = (c) => StyleSheet.create({
   loadStatusText: { fontSize: 10, fontFamily: FONT.black },
 
   /* Chat */
-  chatScroll: { backgroundColor: 'transparent' },
+  // flex:1 lets the thread SHRINK when the keyboard padding is applied to the
+  // wrapper — without it the fixed-height column overflows and the composer
+  // sits under the keyboard instead of lifting above it.
+  chatScroll: { flex: 1, backgroundColor: 'transparent' },
   threadGlow: { position: 'absolute', top: 0, left: 0, right: 0, height: 200 },
   chatContent: { padding: space[4], paddingBottom: space[6], gap: 0 },
 

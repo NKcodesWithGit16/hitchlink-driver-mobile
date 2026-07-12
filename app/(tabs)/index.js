@@ -40,6 +40,7 @@ import { useLoadStatusSocket } from '../../src/hooks/useLoadStatusSocket';
 import { useConfirmEveryStep } from '../../src/lib/prefs';
 import { hos, weatherNow } from '../../src/data/mock';
 import { nextAction, statusChip, nextStop, isPrePickup } from '../../src/lib/load';
+import { setActiveLoad, finalizeActiveLoad, computeLoadStats } from '../../src/lib/odometer';
 import { money, num, rpm } from '../../src/lib/format';
 import { space, type, radius, FONT, shadow, toneOf, tap } from '../../src/theme/tokens';
 import { photos } from '../../src/theme/photos';
@@ -65,6 +66,25 @@ export default function LoadScreen() {
   const [pendingAction, setPendingAction] = useState(null);
   const [error, setError] = useState(false);
   const [undo, setUndo] = useState(null); // { prevStatus, message }
+  const [deliveredStats, setDeliveredStats] = useState(null); // frozen actual miles/rpm
+
+  // Point the actual-miles odometer at the running load so it accrues GPS
+  // distance to the right bucket (deadhead vs loaded) as the status advances.
+  // Terminal states don't accrue — delivery is handled by the effect below.
+  useEffect(() => {
+    if (!load?.id || !status || status === 'Delivered') return;
+    setActiveLoad({ loadId: load.id, status, plannedMiles: load.miles, rate: load.rate });
+  }, [load?.id, load?.miles, load?.rate, status]);
+
+  // On delivery (driver tap OR a dispatcher/geofence auto-advance over the
+  // socket), freeze the odometer into a stored record and show it. Guarded so
+  // it finalizes once per delivered load, not on every re-render.
+  useEffect(() => {
+    if (status !== 'Delivered' || !load?.id || deliveredStats) return;
+    finalizeActiveLoad({ loadId: load.id, plannedMiles: load.miles, rate: load.rate })
+      .then(setDeliveredStats)
+      .catch(() => {});
+  }, [status, load?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadData = useCallback(async () => {
     try {
@@ -329,7 +349,13 @@ export default function LoadScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.teal} />}
       >
         {delivered ? (
-          <DeliveredCard colors={colors} styles={styles} load={load} podUri={podUri} />
+          <DeliveredCard
+            colors={colors}
+            styles={styles}
+            load={load}
+            podUri={podUri}
+            stats={deliveredStats ?? computeLoadStats(load, null)}
+          />
         ) : (
           <>
             {/* ── MISSION: full trip at a glance ── */}
@@ -483,13 +509,17 @@ function DetailRow({ colors, styles, icon, label, value }) {
   );
 }
 
-function DeliveredCard({ colors, styles, load, podUri }) {
+function DeliveredCard({ colors, styles, load, podUri, stats }) {
   const reduce = useReduceMotion();
   const scale = useRef(new Animated.Value(reduce ? 1 : 0.9)).current;
   useEffect(() => {
     if (reduce) return;
     Animated.spring(scale, { toValue: 1, damping: 11, stiffness: 150, useNativeDriver: true }).start();
   }, []);
+  const s = stats || {};
+  const ink = colors.onAccent;
+  // Real numbers only — how far he actually drove, what it paid, per mile.
+  const showSplit = s.hasActual && (s.loaded != null || s.deadhead != null);
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
       <LinearGradient colors={colors.gradients.go} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.delivered}>
@@ -497,9 +527,32 @@ function DeliveredCard({ colors, styles, load, podUri }) {
         <View style={styles.deliveredIcon}>
           <Icon name="check" size={30} color={colors.go} />
         </View>
-        <Text style={[styles.deliveredTitle, { color: colors.onAccent }]}>Nice work.</Text>
-        <Text style={[styles.deliveredSub, { color: colors.onAccent }]}>That's delivered — {load.origin} → {load.destination}</Text>
-        <Text style={[styles.deliveredPay, { color: colors.onAccent, opacity: 0.85 }]}>{money(load.rate)} · {num(load.miles)} mi</Text>
+        <Text style={[styles.deliveredTitle, { color: ink }]}>Nice work.</Text>
+        <Text style={[styles.deliveredSub, { color: ink }]}>That's delivered — {load.origin} → {load.destination}</Text>
+
+        <View style={styles.deliveredStats}>
+          <View style={styles.deliveredStatCell}>
+            <Text style={[styles.deliveredStatVal, { color: ink }]}>{num(s.driven ?? load.miles)}</Text>
+            <Text style={[styles.deliveredStatUnit, { color: ink }]}>Mi driven</Text>
+          </View>
+          <View style={[styles.deliveredStatCell, styles.deliveredStatDivider]}>
+            <Text style={[styles.deliveredStatVal, { color: ink }]}>{money(s.rate ?? load.rate)}</Text>
+            <Text style={[styles.deliveredStatUnit, { color: ink }]}>Paid</Text>
+          </View>
+          <View style={[styles.deliveredStatCell, styles.deliveredStatDivider]}>
+            <Text style={[styles.deliveredStatVal, { color: ink }]}>${rpm(s.effectiveRpm ?? load.rpm)}</Text>
+            <Text style={[styles.deliveredStatUnit, { color: ink }]}>Per mile</Text>
+          </View>
+        </View>
+
+        {showSplit ? (
+          <View style={styles.deliveredSplit}>
+            <Text style={[styles.deliveredSplitText, { color: ink }]}>{num(s.loaded)} mi loaded</Text>
+            <View style={[styles.deliveredSplitPip, { backgroundColor: ink }]} />
+            <Text style={[styles.deliveredSplitText, { color: ink }]}>{num(s.deadhead)} mi deadhead</Text>
+          </View>
+        ) : null}
+
         {podUri ? <Image source={{ uri: podUri }} style={styles.podThumb} /> : null}
       </LinearGradient>
     </Animated.View>
@@ -608,7 +661,14 @@ const makeStyles = (c) => StyleSheet.create({
   deliveredIcon: { width: 70, height: 70, borderRadius: 999, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
   deliveredTitle: { fontSize: 32, fontFamily: FONT.black, letterSpacing: -0.8 },
   deliveredSub: { ...type.bodyStrong, textAlign: 'center' },
-  deliveredPay: { ...type.body },
+  deliveredStats: { flexDirection: 'row', alignSelf: 'stretch', marginTop: space[4], borderRadius: radius.md, backgroundColor: 'rgba(6,18,26,0.12)' },
+  deliveredStatCell: { flex: 1, paddingVertical: space[3], paddingHorizontal: space[2], alignItems: 'center' },
+  deliveredStatDivider: { borderLeftWidth: 1, borderLeftColor: 'rgba(6,18,26,0.16)' },
+  deliveredStatVal: { fontSize: 24, fontFamily: FONT.black, letterSpacing: -0.5, fontVariant: ['tabular-nums'] },
+  deliveredStatUnit: { fontSize: 10.5, fontFamily: FONT.bold, letterSpacing: 0.6, textTransform: 'uppercase', marginTop: 6, opacity: 0.72 },
+  deliveredSplit: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: space[2] },
+  deliveredSplitText: { fontSize: 12.5, fontFamily: FONT.bold, opacity: 0.72, fontVariant: ['tabular-nums'] },
+  deliveredSplitPip: { width: 5, height: 5, borderRadius: 3, opacity: 0.55 },
   podThumb: { width: 120, height: 120, borderRadius: radius.md, marginTop: space[4], borderWidth: 2, borderColor: '#fff' },
 
   confirmOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 40, paddingHorizontal: space[5] },
