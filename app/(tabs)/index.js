@@ -309,25 +309,31 @@ export default function LoadScreen() {
     return (
       <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
         <Header colors={colors} styles={styles} name={user?.firstName} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
-        <ImageBackground source={photos.road} style={styles.emptyHero}>
-          <LinearGradient colors={['transparent', colors.bg]} style={StyleSheet.absoluteFill} />
-        </ImageBackground>
-        <View style={[styles.center, { flex: 1, paddingHorizontal: space[6], marginTop: -48 }]}>
-          <View style={styles.emptyIcon}>
-            <Icon name="coffee" size={34} color={colors.go} />
+        <ScrollView
+          contentContainerStyle={{ flexGrow: 1 }}
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.teal} />}
+        >
+          <ImageBackground source={photos.road} style={styles.emptyHero}>
+            <LinearGradient colors={['transparent', colors.bg]} style={StyleSheet.absoluteFill} />
+          </ImageBackground>
+          <View style={[styles.center, { flex: 1, paddingHorizontal: space[6], marginTop: -48 }]}>
+            <View style={styles.emptyIcon}>
+              <Icon name="coffee" size={34} color={colors.go} />
+            </View>
+            <Text style={styles.emptyTitle}>You're all caught up</Text>
+            <Text style={styles.emptySub}>No load right now — enjoy the quiet. Your dispatcher will send your next one straight here.</Text>
+            <Pressable
+              onPress={onRefresh}
+              style={styles.refreshBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Check for new loads"
+            >
+              <Icon name="refresh-cw" size={16} color={colors.teal} />
+              <Text style={styles.refreshText}>Check again</Text>
+            </Pressable>
           </View>
-          <Text style={styles.emptyTitle}>You're all caught up</Text>
-          <Text style={styles.emptySub}>No load right now — enjoy the quiet. Your dispatcher will send your next one straight here.</Text>
-          <Pressable
-            onPress={onRefresh}
-            style={styles.refreshBtn}
-            accessibilityRole="button"
-            accessibilityLabel="Check for new loads"
-          >
-            <Icon name="refresh-cw" size={16} color={colors.teal} />
-            <Text style={styles.refreshText}>Check again</Text>
-          </Pressable>
-        </View>
+        </ScrollView>
       </ScreenFade>
     );
   }
