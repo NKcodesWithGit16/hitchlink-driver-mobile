@@ -37,8 +37,12 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
   useEffect(() => {
     if (!visible) return;
     const f = extraction?.fields;
-    setDocType(TYPE_OPTIONS.includes(f?.documentType) ? f.documentType : 'Other');
-    setLabel(f?.label || '');
+    const nextType = TYPE_OPTIONS.includes(f?.documentType) ? f.documentType : 'Other';
+    setDocType(nextType);
+    // Always start with a usable label, even when there's no AI extraction
+    // (non-image file, AI unavailable, quota exhausted) — otherwise Save has
+    // nothing to submit and the driver has no obvious next step.
+    setLabel(f?.label || DOC_TYPE_META[nextType].label);
     setDocumentNumber(f?.documentNumber || '');
     setExpiresAt(f?.expiresAt || '');
     setFormError('');
@@ -48,10 +52,16 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
 
   const lowConfidence = new Set((extraction?.lowConfidenceFields || []).map((s) => s.toLowerCase()));
 
-  const canSave = label.trim().length > 0 && !saving;
-
+  // Save is never silently disabled — an empty/invalid field surfaces a
+  // message instead of the button just doing nothing when tapped.
   const save = async () => {
-    if (!canSave) return;
+    if (saving) return;
+    const trimmedLabel = label.trim();
+    if (!trimmedLabel) {
+      setFormError('Enter a label for this document.');
+      haptics.error();
+      return;
+    }
     const trimmedDate = expiresAt.trim();
     if (trimmedDate && !DATE_RE.test(trimmedDate)) {
       setFormError('Expiry date must be in YYYY-MM-DD format.');
@@ -69,7 +79,7 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
         sizeBytes: asset.size,
         base64: asset.base64,
         type: docType,
-        label: label.trim(),
+        label: trimmedLabel,
         documentNumber: documentNumber.trim() || null,
         expiresAt: trimmedDate || null,
       });
@@ -92,11 +102,11 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
             <Text style={[styles.headerAction, { color: colors.textSecondary }]}>Cancel</Text>
           </Pressable>
           <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>Review document</Text>
-          <Pressable onPress={save} disabled={!canSave} hitSlop={8} accessibilityRole="button" accessibilityLabel="Save document">
+          <Pressable onPress={save} disabled={saving} hitSlop={8} accessibilityRole="button" accessibilityLabel="Save document">
             {saving ? (
               <ActivityIndicator size="small" color={colors.teal} />
             ) : (
-              <Text style={[styles.headerAction, { color: canSave ? colors.teal : colors.textMuted, fontFamily: FONT.black }]}>Save</Text>
+              <Text style={[styles.headerAction, { color: colors.teal, fontFamily: FONT.black }]}>Save</Text>
             )}
           </Pressable>
         </View>
@@ -123,7 +133,13 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
               return (
                 <Pressable
                   key={t}
-                  onPress={() => { haptics.tap(); setDocType(t); }}
+                  onPress={() => {
+                    haptics.tap();
+                    // Keep the label in sync with the type unless the driver already
+                    // typed something custom over the previous default.
+                    setLabel((prev) => (!prev.trim() || prev === DOC_TYPE_META[docType]?.label) ? meta.label : prev);
+                    setDocType(t);
+                  }}
                   style={[
                     styles.chip,
                     { borderColor: active ? colors.teal : colors.border, backgroundColor: active ? colors.teal + '22' : colors.surface },
