@@ -1,19 +1,24 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, Pressable,
-  Modal, Animated, Alert, RefreshControl,
+  View, Text, StyleSheet, ScrollView, Pressable, Image,
+  Modal, Animated, Alert, RefreshControl, Linking, Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import * as Sharing from 'expo-sharing';
 import Icon from '../../src/components/ui/Icon';
 import FadeInView from '../../src/components/ui/FadeInView';
 import Skeleton from '../../src/components/ui/Skeleton';
+import DocumentReviewModal from '../../src/components/driver/DocumentReviewModal';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
-import { fetchDocuments } from '../../src/api/main';
+import {
+  fetchDocuments, uploadDocument, deleteDocument, fetchDocumentContent,
+  extractDocumentFields, readDocumentBase64,
+} from '../../src/api/main';
 import { expiryStatus, fmtDate, daysUntil } from '../../src/lib/format';
 import { space, type, radius, toneOf, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
@@ -36,6 +41,14 @@ export default function DocumentsScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [adding, setAdding]   = useState(false);
+
+  // Add-document review flow: pick → (maybe) AI-extract → editable review
+  // modal → save. The actual POST /documents happens inside the modal.
+  const [reviewVisible, setReviewVisible]   = useState(false);
+  const [reviewAsset, setReviewAsset]       = useState(null);
+  const [reviewExtraction, setReviewExtraction]           = useState(null);
+  const [reviewExtractionError, setReviewExtractionError] = useState(null);
 
   const loadData = useCallback(async () => {
     if (!userId) return;
@@ -70,13 +83,55 @@ export default function DocumentsScreen() {
     filter === 'all' ? docs : docs.filter(d => expiryStatus(d.expires).key === filter),
     [docs, filter]);
 
+  // Picks a file, tries an AI read of it (images only, size-capped — see
+  // extractDocumentFields), then always opens the review modal so the driver
+  // confirms/corrects before anything is saved. Extraction failing is
+  // expected (no quota left, AI not configured, non-image file) — it just
+  // means the review modal opens blank instead of pre-filled.
   const addDoc = async () => {
+    if (adding) return;
     try {
-      const res = await ImagePicker.launchImageLibraryAsync({ quality: 0.6 });
-      if (!res.canceled) Alert.alert('Saved', 'Document added and available offline.');
+      const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true, base64: true });
+      if (res.canceled) return;
+      const asset = res.assets?.[0];
+      if (!asset) return;
+
+      setAdding(true);
+      const base64 = await readDocumentBase64(asset.uri, asset.base64);
+
+      let extraction = null;
+      let extractionError = null;
+      const isImage = asset.mimeType?.startsWith('image/');
+      const underSizeCap = !asset.size || asset.size <= 8 * 1024 * 1024;
+      if (isImage && underSizeCap) {
+        try {
+          extraction = await extractDocumentFields({ base64, mediaType: asset.mimeType });
+        } catch (e) {
+          extractionError = e;
+        }
+      }
+
+      setReviewAsset({ ...asset, base64 });
+      setReviewExtraction(extraction);
+      setReviewExtractionError(extractionError);
+      setReviewVisible(true);
     } catch {
       Alert.alert('Could not add', 'Please try again.');
+    } finally {
+      setAdding(false);
     }
+  };
+
+  const closeReview = () => {
+    setReviewVisible(false);
+    setReviewAsset(null);
+    setReviewExtraction(null);
+    setReviewExtractionError(null);
+  };
+
+  const handleReviewSaved = async () => {
+    closeReview();
+    await loadData();
   };
 
   return (
@@ -94,11 +149,12 @@ export default function DocumentsScreen() {
         </View>
         <Pressable
           onPress={addDoc}
-          style={[styles.addBtn, { backgroundColor: colors.teal }, shadow.glow(colors.teal)]}
+          disabled={adding}
+          style={[styles.addBtn, { backgroundColor: colors.teal, opacity: adding ? 0.7 : 1 }, shadow.glow(colors.teal)]}
           accessibilityLabel="Add document"
         >
-          <Icon name="plus" size={18} color={colors.onAccent} />
-          <Text style={[styles.addBtnText, { color: colors.onAccent }]}>Add</Text>
+          <Icon name={adding ? 'loader' : 'plus'} size={18} color={colors.onAccent} />
+          <Text style={[styles.addBtnText, { color: colors.onAccent }]}>{adding ? 'Adding…' : 'Add'}</Text>
         </Pressable>
       </View>
 
@@ -197,7 +253,26 @@ export default function DocumentsScreen() {
         )}
       </ScrollView>
 
-      <DocViewer doc={open} onClose={() => setOpen(null)} colors={colors} styles={styles} insets={insets} />
+      <DocViewer
+        doc={open}
+        onClose={() => setOpen(null)}
+        colors={colors}
+        styles={styles}
+        insets={insets}
+        userId={userId}
+        onUploaded={loadData}
+      />
+
+      <DocumentReviewModal
+        visible={reviewVisible}
+        asset={reviewAsset}
+        extraction={reviewExtraction}
+        extractionError={reviewExtractionError}
+        driverId={userId}
+        onSaved={handleReviewSaved}
+        onCancel={closeReview}
+        colors={colors}
+      />
     </ScreenFade>
   );
 }
@@ -322,11 +397,94 @@ function DocCardSkeleton({ colors, styles }) {
 
 /* ─────────── Doc Viewer ─────────── */
 
-function DocViewer({ doc, onClose, colors, styles, insets }) {
+function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded }) {
+  const [uploading, setUploading]   = useState(false);
+  const [viewing, setViewing]       = useState(false);
+  const [deleting, setDeleting]     = useState(false);
+  const [previewUri, setPreviewUri] = useState(null);
   if (!doc) return null;
   const status = expiryStatus(doc.expires);
   const days   = daysUntil(doc.expires);
   const t      = toneOf(colors, status.tone);
+  const hasFile = !!(doc.hasContent || doc.url);
+
+  const viewFile = async () => {
+    if (viewing || !hasFile) return;
+    setViewing(true);
+    try {
+      if (doc.url && !doc.hasContent) {
+        await Linking.openURL(doc.url);
+        return;
+      }
+      const result = await fetchDocumentContent(doc.id, doc.fileName || doc.label);
+      if (!result) {
+        Alert.alert('Not available', "This document's file can't be previewed here.");
+        return;
+      }
+      if (Platform.OS === 'web') {
+        window.open(result.blobUrl, '_blank');
+      } else if (result.contentType?.startsWith('image/')) {
+        setPreviewUri(result.uri);
+      } else {
+        const available = await Sharing.isAvailableAsync();
+        if (!available) throw new Error('Sharing unavailable on this device');
+        await Sharing.shareAsync(result.uri, { mimeType: result.contentType });
+      }
+    } catch {
+      Alert.alert('Could not open', 'Please try again.');
+    } finally {
+      setViewing(false);
+    }
+  };
+
+  const doDelete = () => {
+    Alert.alert('Delete document?', "This can't be undone.", [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          setDeleting(true);
+          try {
+            await deleteDocument(doc.id);
+            await onUploaded?.();
+            onClose();
+          } catch {
+            Alert.alert('Could not delete', 'Please try again.');
+          } finally {
+            setDeleting(false);
+          }
+        },
+      },
+    ]);
+  };
+
+  const uploadRenewal = async () => {
+    if (uploading) return;
+    try {
+      const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true, base64: true });
+      if (res.canceled) return;
+      const asset = res.assets?.[0];
+      if (!asset) return;
+      setUploading(true);
+      await uploadDocument(userId, {
+        uri: asset.uri,
+        name: asset.name,
+        mimeType: asset.mimeType,
+        sizeBytes: asset.size,
+        base64: asset.base64,
+        type: doc.type,
+        expiresAt: doc.expires,
+      });
+      await onUploaded?.();
+      Alert.alert('Uploaded', 'Renewal scan saved.');
+      onClose();
+    } catch {
+      Alert.alert('Could not upload', 'Please try again.');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const daysLabel =
     days == null ? '' :
@@ -400,34 +558,66 @@ function DocViewer({ doc, onClose, colors, styles, insets }) {
 
           {/* Action buttons */}
           <Pressable
-            onPress={() =>
-              ImagePicker.launchImageLibraryAsync({ quality: 0.8 })
-                .then(r => { if (!r.canceled) Alert.alert('Uploaded', 'Renewal scan saved.'); })
-                .catch(() => {})
-            }
+            onPress={uploadRenewal}
+            disabled={uploading}
             style={({ pressed }) => [
               styles.actionBtn,
-              { backgroundColor: t.solid, opacity: pressed ? 0.85 : 1 },
+              { backgroundColor: t.solid, opacity: pressed || uploading ? 0.85 : 1 },
               shadow.glow(t.solid),
             ]}
           >
-            <Icon name="upload" size={18} color={colors.onAccent} />
-            <Text style={[styles.actionBtnText, { color: colors.onAccent }]}>Upload renewal</Text>
+            <Icon name={uploading ? 'loader' : 'upload'} size={18} color={colors.onAccent} />
+            <Text style={[styles.actionBtnText, { color: colors.onAccent }]}>
+              {uploading ? 'Uploading…' : 'Upload renewal'}
+            </Text>
           </Pressable>
 
           <Pressable
-            onPress={() => Alert.alert('Share', 'Sharing coming soon.')}
+            onPress={viewFile}
+            disabled={viewing || !hasFile}
             style={({ pressed }) => [
               styles.actionBtnOutline,
-              { borderColor: colors.border, backgroundColor: colors.surface, opacity: pressed ? 0.85 : 1 },
+              { borderColor: colors.border, backgroundColor: colors.surface, opacity: pressed || viewing ? 0.85 : hasFile ? 1 : 0.5 },
             ]}
           >
-            <Icon name="share-2" size={18} color={colors.textSecondary} />
-            <Text style={[styles.actionBtnText, { color: colors.textSecondary }]}>Share document</Text>
+            <Icon name={viewing ? 'loader' : 'eye'} size={18} color={colors.textSecondary} />
+            <Text style={[styles.actionBtnText, { color: colors.textSecondary }]}>
+              {viewing ? 'Opening…' : hasFile ? 'View document' : 'No file attached'}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={doDelete}
+            disabled={deleting}
+            style={({ pressed }) => [
+              styles.actionBtnOutline,
+              { borderColor: colors.danger + '55', backgroundColor: colors.dangerFill, opacity: pressed || deleting ? 0.85 : 1 },
+            ]}
+          >
+            <Icon name={deleting ? 'loader' : 'trash-2'} size={18} color={colors.danger} />
+            <Text style={[styles.actionBtnText, { color: colors.danger }]}>
+              {deleting ? 'Deleting…' : 'Delete document'}
+            </Text>
           </Pressable>
         </ScrollView>
 
       </View>
+
+      {previewUri ? (
+        <Modal visible animationType="fade" transparent onRequestClose={() => setPreviewUri(null)}>
+          <View style={styles.previewOverlay}>
+            <Pressable
+              onPress={() => setPreviewUri(null)}
+              style={[styles.previewClose, { top: insets.top + space[3] }]}
+              accessibilityRole="button"
+              accessibilityLabel="Close preview"
+            >
+              <Icon name="x" size={22} color="#FFFFFF" />
+            </Pressable>
+            <Image source={{ uri: previewUri }} style={styles.previewImage} resizeMode="contain" />
+          </View>
+        </Modal>
+      ) : null}
     </Modal>
   );
 }
@@ -570,6 +760,14 @@ const makeStyles = (c) => StyleSheet.create({
     gap: 10, borderRadius: radius.lg, paddingVertical: 16, borderWidth: 1,
   },
   actionBtnText: { fontSize: 15, fontFamily: FONT.bold },
+
+  /* Full-screen image preview */
+  previewOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', alignItems: 'center', justifyContent: 'center' },
+  previewClose: {
+    position: 'absolute', right: space[4], width: 40, height: 40, borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center', zIndex: 1,
+  },
+  previewImage: { width: '100%', height: '80%' },
 
   /* Error / retry */
   errorBox: { alignItems: 'center', justifyContent: 'center', gap: space[3], paddingVertical: space[10], paddingHorizontal: space[4] },

@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
-import { apiFetch, apiUpload, USE_MOCK, BASE } from './client';
+import { File, Paths } from 'expo-file-system';
+import { apiFetch, apiUpload, apiFetchRaw, USE_MOCK, BASE } from './client';
 import * as mock from '../data/mock';
 
 const wait = (ms = 350) => new Promise((r) => setTimeout(r, ms));
@@ -322,10 +323,114 @@ export async function fetchEarnings(driverId) {
   }
 }
 
+// The backend's DocumentDto carries type/label/documentNumber/expiresAt but no
+// icon or filter-friendly sub-text; the mock fixtures carry label/sub/number/icon
+// directly. Bridge the two so DocCard/DocViewer can render either shape the same way.
+export const DOC_TYPE_META = {
+  License:      { icon: 'credit-card', label: "Driver's License",   sub: 'CDL' },
+  MedicalCard:  { icon: 'activity',    label: 'Medical Certificate', sub: 'DOT Medical Card' },
+  Insurance:    { icon: 'shield',      label: 'Insurance Card',      sub: 'Insurance' },
+  Registration: { icon: 'truck',       label: 'Truck Registration',  sub: 'Registration' },
+  Inspection:   { icon: 'clipboard',   label: 'Inspection Report',   sub: 'Inspection' },
+  Other:        { icon: 'file-text',   label: 'Document',            sub: 'Other' },
+};
+
+function normalizeDocument(d) {
+  const meta = DOC_TYPE_META[d.type] || DOC_TYPE_META.Other;
+  return {
+    ...d,
+    label: d.label || meta.label,
+    sub: d.notes || meta.sub,
+    number: d.documentNumber || '—',
+    expires: d.expiresAt ? d.expiresAt.slice(0, 10) : null,
+    icon: meta.icon,
+  };
+}
+
 export async function fetchDocuments(driverId) {
   if (USE_MOCK) { await wait(); return mock.documents; }
   const data = await apiFetch(`/documents?driverId=${driverId}`);
-  return data ?? [];
+  return Array.isArray(data) ? data.map(normalizeDocument) : [];
+}
+
+// expo-document-picker only hands back a base64 payload on web (as a
+// "data:<mime>;base64,<data>" URI); strip the prefix so both platforms send
+// the same raw base64 string.
+const stripDataUriPrefix = (b64) => (b64?.startsWith('data:') ? b64.slice(b64.indexOf(',') + 1) : b64);
+
+// Reads a picked file into raw base64 once, so callers (AI extraction + the
+// final upload) can share a single file read instead of re-reading per call.
+export async function readDocumentBase64(uri, base64) {
+  return Platform.OS === 'web' ? stripDataUriPrefix(base64) : await new File(uri).base64();
+}
+
+// Adds a real document file (PDF, scan, etc. — not just a photo) picked via
+// expo-document-picker. Sent as base64 JSON straight to POST /documents,
+// matching the backend's UploadDocumentCommand contract (Kestrel's request
+// body limit is raised specifically for this).
+export async function uploadDocument(driverId, { uri, name, mimeType, sizeBytes, type = 'Other', base64, notes, expiresAt, label, documentNumber } = {}) {
+  if (USE_MOCK) { await wait(300); return { id: String(Date.now()), fileName: name, contentType: mimeType, sizeBytes, type, expiresAt, label, documentNumber }; }
+  if (!driverId || !uri) return null;
+
+  const contentBase64 = await readDocumentBase64(uri, base64);
+
+  return apiFetch('/documents', {
+    method: 'POST',
+    body: JSON.stringify({
+      type,
+      contentBase64,
+      fileName: name,
+      contentType: mimeType,
+      sizeBytes,
+      driverId,
+      uploadedById: driverId,
+      notes,
+      expiresAt,
+      label,
+      documentNumber,
+    }),
+  });
+}
+
+export async function deleteDocument(documentId) {
+  if (USE_MOCK) { await wait(150); return { ok: true }; }
+  return apiFetch(`/documents/${documentId}`, { method: 'DELETE', allow404: true });
+}
+
+// Downloads a document's file bytes for viewing. Native: writes to the cache
+// dir and returns a local file:// uri (for <Image> or Sharing.shareAsync). Web:
+// returns an object URL. No real file storage exists in mock mode, so mock
+// callers get null and the caller falls back to a "can't preview" message.
+export async function fetchDocumentContent(documentId, fileName = 'document') {
+  if (USE_MOCK) return null;
+  const res = await apiFetchRaw(`/documents/${documentId}/content`);
+  if (!res.ok) throw new Error(`API ${res.status} — /documents/${documentId}/content`);
+  const contentType = res.headers.get('Content-Type') || 'application/octet-stream';
+
+  if (Platform.OS === 'web') {
+    const blob = await res.blob();
+    return { blobUrl: URL.createObjectURL(blob), contentType, fileName };
+  }
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const dest = new File(Paths.cache, fileName);
+  if (dest.exists) dest.delete();
+  dest.create();
+  dest.write(bytes);
+  return { uri: dest.uri, contentType, fileName };
+}
+
+// Reads a freshly-picked image via Claude Haiku vision (server-side — see
+// POST /ai/extract-document) and returns editable type/label/number/expiry
+// fields for the add-document review step. Metered server-side against a
+// tight monthly quota, so failures (429/502/503) are expected and non-fatal —
+// callers should fall back to a blank, manually-filled form.
+export async function extractDocumentFields({ base64, mediaType } = {}) {
+  if (USE_MOCK) { await wait(600); return null; }
+  if (!base64) return null;
+  return apiFetch('/ai/extract-document', {
+    method: 'POST',
+    body: JSON.stringify({ imageBase64: base64, mediaType }),
+  });
 }
 
 export async function fetchHos(driverId) {

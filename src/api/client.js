@@ -45,6 +45,19 @@ function apiError(status, path) {
   return err;
 }
 
+// Raw (non-JSON) fetch for binary responses, e.g. GET /documents/{id}/content.
+// Same token-attach + 401-retry as apiFetch, but hands back the raw Response
+// so the caller can choose .blob() (web) or .arrayBuffer() (native).
+export async function apiFetchRaw(path, options = {}) {
+  return authedFetch(`${BASE}${path}`, (token) => ({
+    ...options,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options.headers,
+    },
+  }));
+}
+
 // Multipart upload (e.g. voice notes). We must NOT set Content-Type here — the
 // runtime sets `multipart/form-data` with the correct boundary from the FormData.
 export async function apiUpload(path, formData, options = {}) {
