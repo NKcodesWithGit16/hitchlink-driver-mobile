@@ -21,17 +21,16 @@ const TABS = [
   { name: 'more',      title: 'More',  iconRest: 'cog-outline',    iconActive: 'cog' },
 ];
 
-// Floating-island geometry. Screens render underneath the absolute-positioned
+// Docked-bar geometry. Screens render underneath the absolute-positioned
 // bar, so scrollable content must pad its bottom by TAB_BAR_CLEARANCE
 // (+ safe-area inset) or the last items get trapped behind the glass.
-const BAR_HEIGHT = 76;
-const BAR_BOTTOM_GAP = 10;
-export const TAB_BAR_CLEARANCE = BAR_HEIGHT + BAR_BOTTOM_GAP + 16;
+const BAR_HEIGHT = 60;
+export const TAB_BAR_CLEARANCE = BAR_HEIGHT + 16;
 
 // Load is the app's primary screen — a bigger circular badge that stays
 // teal-tinted even at rest (unlike the other tabs, which go fully muted)
 // so it always reads as the hero tab, not just when it happens to be active.
-const HERO_SIZE = 46;
+const HERO_SIZE = 40;
 
 function TabIcon({ iconRest, iconActive, label, color, focused, fillColor, hero, colors }) {
   // Scale/lift pop on focus — mirrors motion.spring so every tab shares the
@@ -39,8 +38,8 @@ function TabIcon({ iconRest, iconActive, label, color, focused, fillColor, hero,
   const reduceMotion = useReduceMotion();
   // Load (hero) sits deliberately raised at all times so it reads as the
   // app's anchor tab; every tab lifts a little more when it's the active one.
-  const restLift = hero ? -3 : 0;
-  const activeLift = hero ? -6 : -3;
+  const restLift = hero ? -2 : 0;
+  const activeLift = hero ? -4 : -2;
   const scale = useRef(new Animated.Value(focused ? 1 : 0.94)).current;
   const lift = useRef(new Animated.Value(focused ? activeLift : restLift)).current;
   // Gradient cross-fade for the active pill (hard bg switches look cheap).
@@ -115,12 +114,12 @@ function TabIcon({ iconRest, iconActive, label, color, focused, fillColor, hero,
     );
   }
   return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 3 }}>
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2 }}>
       {/* Glow lives on this outer wrapper — the pill itself needs
           overflow:'hidden' for the gradient, which would clip a shadow. */}
       <Animated.View style={[{ transform }, focused ? shadow.glow(colors.teal) : null]}>
         <View style={{
-          width: 48, height: 30, alignItems: 'center', justifyContent: 'center',
+          width: 46, height: 28, alignItems: 'center', justifyContent: 'center',
           borderRadius: radius.pill,
           overflow: 'hidden',
         }}>
@@ -150,11 +149,12 @@ function TabIcon({ iconRest, iconActive, label, color, focused, fillColor, hero,
 // but inlined: GlassView is documented as overlay-only and wraps children
 // we don't need here. The overlay tint is the legibility floor on Android,
 // where blur quality varies by device.
-function IslandBackground({ colors }) {
+//
+// Docked bar, not a floating island: flush with the screen edges, square
+// corners, only a top hairline instead of a full border box — the same
+// silhouette as Instagram/most native apps' bottom bars.
+function DockedBackground({ colors }) {
   const glass = glassFor(colors);
-  // Top-edge sheen is what makes glass read as glass instead of grey
-  // plastic — stronger in daylight, faint at night.
-  const sheen = colors.isDay ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.07)';
   // The shared glass overlay is tuned to be see-through, which left the tab
   // icons/labels illegible when bright content scrolled behind them. The bar
   // is the app's primary navigation, so it gets a stronger scrim than a
@@ -165,10 +165,8 @@ function IslandBackground({ colors }) {
       pointerEvents="none"
       style={{
         ...StyleSheet.absoluteFillObject,
-        borderRadius: radius['2xl'],
-        overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: colors.borderStrong,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: colors.borderStrong,
       }}
     >
       <BlurView
@@ -178,11 +176,6 @@ function IslandBackground({ colors }) {
         style={StyleSheet.absoluteFill}
       />
       <View style={[StyleSheet.absoluteFill, { backgroundColor: scrim }]} />
-      <LinearGradient
-        colors={[sheen, 'rgba(255,255,255,0)']}
-        start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
-        style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '40%' }}
-      />
     </View>
   );
 }
@@ -198,17 +191,19 @@ export default function TabsLayout() {
         tabBarShowLabel: false,
         tabBarActiveTintColor: colors.teal,
         tabBarInactiveTintColor: colors.textMuted,
-        tabBarBackground: () => <IslandBackground colors={colors} />,
+        tabBarBackground: () => <DockedBackground colors={colors} />,
         tabBarStyle: {
-          // Floating glass island: detached from the screen edge, content
-          // scrolls behind it through the blur. Height no longer folds in
-          // insets.bottom — the whole island floats above the home indicator.
+          // Docked bar: flush with the screen's bottom and side edges, like
+          // Instagram/most native apps — content scrolls behind it through
+          // the blur, but the bar itself never floats free of the chrome.
+          // Height folds in insets.bottom so the icon row still centers
+          // above the home indicator instead of getting pushed into it.
           position: 'absolute',
-          left: 16,
-          right: 16,
-          bottom: insets.bottom + BAR_BOTTOM_GAP,
-          height: BAR_HEIGHT,
-          borderRadius: radius['2xl'],
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: BAR_HEIGHT + insets.bottom,
+          borderRadius: 0,
           backgroundColor: 'transparent',
           borderTopWidth: 0,
           // No vertical padding: each tab now owns its own full-height,
@@ -216,11 +211,10 @@ export default function TabsLayout() {
           // share one vertical axis instead of React Navigation biasing the
           // shorter (non-hero) groups toward the top.
           paddingTop: 0,
-          paddingBottom: 0,
-          // A floating island casts a normal drop shadow like a card —
-          // not the upward shadow a docked bar needs. Strongest tier:
-          // the bar floats over content, it can afford it.
-          ...elevation[4],
+          paddingBottom: insets.bottom,
+          // A docked bar gets a light upward shadow, not the strong drop
+          // shadow a floating island needed to separate it from content.
+          ...elevation[2],
         },
         tabBarItemStyle: { flex: 1, minWidth: 0, alignItems: 'center', justifyContent: 'center' },
         // Let the icon container fill the item height so our centered TabIcon
