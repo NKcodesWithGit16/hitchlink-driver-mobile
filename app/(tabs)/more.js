@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Switch, Image } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import ScreenFade from '../../src/components/ui/ScreenFade';
@@ -43,7 +43,7 @@ const SETTING_GROUPS = [
   {
     title: 'Account',
     rows: [
-      { icon: 'user',        label: 'Profile',        tone: 'teal'                                     },
+      { icon: 'user',        label: 'Profile',        tone: 'teal',   route: '/edit-profile'           },
       { icon: 'truck',       label: 'Truck info',     tone: 'blue',   metaKey: 'truck'                 },
       { icon: 'file-text',   label: 'Documents',      tone: 'green',  meta: 'Manage', route: '/(tabs)/documents' },
       { icon: 'credit-card', label: 'Payout method',  tone: 'purple', meta: 'Direct deposit'           },
@@ -127,7 +127,7 @@ export default function MoreScreen() {
             <View style={styles.heroTopRow}>
               <Text style={styles.heroGreeting}>{greeting}</Text>
               <Pressable
-                onPress={() => Alert.alert('Edit profile', 'Profile editing coming soon.')}
+                onPress={() => router.push('/edit-profile')}
                 hitSlop={10}
                 style={styles.heroEditBtn}
                 accessibilityRole="button"
@@ -140,11 +140,15 @@ export default function MoreScreen() {
             {/* Identity */}
             <View style={styles.heroIdentity}>
               <View style={styles.avatarRing}>
-                <View style={styles.avatarInner}>
-                  <Text style={styles.avatarText}>
-                    {(user?.firstName || 'D').slice(0, 1).toUpperCase()}
-                  </Text>
-                </View>
+                {user?.photoUrl ? (
+                  <Image source={{ uri: user.photoUrl }} style={styles.avatarPhoto} />
+                ) : (
+                  <View style={styles.avatarInner}>
+                    <Text style={styles.avatarText}>
+                      {(user?.firstName || 'D').slice(0, 1).toUpperCase()}
+                    </Text>
+                  </View>
+                )}
               </View>
 
               <View style={{ flex: 1, minWidth: 0 }}>
@@ -590,6 +594,7 @@ const makeStyles = (c) => StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center', justifyContent: 'center',
   },
+  avatarPhoto: { flex: 1, borderRadius: 999 },
   avatarText: { fontSize: 24, fontFamily: FONT.black, color: '#FFFFFF' },
   heroName:   { fontSize: 20, fontFamily: FONT.black, color: '#FFFFFF', letterSpacing: -0.4 },
   heroTruck:  { fontSize: 13, fontFamily: FONT.medium, color: 'rgba(255,255,255,0.65)', marginTop: 2 },

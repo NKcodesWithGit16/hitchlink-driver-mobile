@@ -115,6 +115,21 @@ export function AuthProvider({ children }) {
     AsyncStorage.setItem(OKEY, '1').catch(() => {});
   };
 
+  // Called after a successful profile save so the hero header, greeting, etc.
+  // reflect the new name/email immediately — no need to re-fetch the driver.
+  const updateDriverProfile = (patch) => {
+    setDriverProfile((prev) => ({ ...(prev || {}), ...patch }));
+    const newName = [patch.firstName, patch.lastName].filter(Boolean).join(' ').trim();
+    if (newName) {
+      setUserName(newName);
+      AsyncStorage.setItem(NAME_KEY, newName).catch(() => {});
+    }
+    if (patch.email) {
+      setUserEmail(patch.email);
+      AsyncStorage.setItem(EMAIL_KEY, patch.email).catch(() => {});
+    }
+  };
+
   // Expose a `user` object shaped like the old mock driver so existing
   // screens that read user.name / user.truck / user.firstName keep working.
   const user = useMemo(() => {
@@ -127,7 +142,8 @@ export function AuthProvider({ children }) {
       firstName: p.firstName  || (userName.split(' ')[0]) || 'Driver',
       lastName:  p.lastName   || '',
       email:     p.email      || userEmail,
-      phone:     p.phone      || '',
+      phone:     p.phoneNumber || p.phone || '',
+      photoUrl:  p.photoUrl    || null,
       truck:     p.truck      || p.truckInfo     || p.vehicleInfo || '',
       dispatcher: p.dispatcher || null,
     };
@@ -145,6 +161,7 @@ export function AuthProvider({ children }) {
     signIn,
     signOut,
     completeOnboarding,
+    updateDriverProfile,
   }), [user, userId, userRole, onboarded, ready, driverProfile, sessionNotice]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

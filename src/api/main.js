@@ -48,6 +48,49 @@ export async function fetchDriver(driverId) {
   return data ?? null;
 }
 
+// Driver-editable profile fields — everything else (truck, dispatcher, status)
+// is dispatcher-managed and not exposed on this form.
+export async function updateDriver(driverId, { firstName, lastName, phoneNumber, email }) {
+  if (USE_MOCK) { await wait(300); return { ...mock.driver, firstName, lastName, phoneNumber, email }; }
+  return apiFetch(`/drivers/${driverId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ firstName, lastName, phoneNumber, email }),
+  });
+}
+
+// Same three-step flow as uploadLoadPhoto (sign → PUT the bytes straight to
+// R2 → save the storage key), just against the driver's single photo slot
+// instead of a load's photo gallery. Returns { photoUrl }.
+export async function uploadDriverPhoto(driverId, uri) {
+  if (USE_MOCK) { await wait(300); return { photoUrl: uri }; }
+  if (!driverId || !uri) return null;
+
+  const blob = await (await fetch(uri)).blob();
+  const mimeType = blob.type || 'image/jpeg';
+
+  const signed = await apiFetch(`/drivers/${driverId}/photo/sign`, {
+    method: 'POST',
+    body: JSON.stringify({ mimeType, sizeBytes: blob.size }),
+  });
+
+  const put = await fetch(signed.uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': mimeType },
+    body: blob,
+  });
+  if (!put.ok) throw new Error(`Profile photo upload failed (${put.status})`);
+
+  return apiFetch(`/drivers/${driverId}/photo`, {
+    method: 'PATCH',
+    body: JSON.stringify({ storageKey: signed.storageKey }),
+  });
+}
+
+export async function removeDriverPhoto(driverId) {
+  if (USE_MOCK) { await wait(200); return null; }
+  return apiFetch(`/drivers/${driverId}/photo`, { method: 'DELETE' });
+}
+
 // The driver's completed-load history — terminal-state loads (Delivered /
 // Closed / Cancelled), newest first, each with its proof-of-delivery photos
 // resolved inline. Empty history is a normal state, not an error.
