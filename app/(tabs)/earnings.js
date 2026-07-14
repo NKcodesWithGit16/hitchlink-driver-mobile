@@ -700,11 +700,11 @@ const makeStyles = (c) => StyleSheet.create({
 
   /* Stats grid */
   grid: { flexDirection: 'row', gap: space[3] },
-  statCard: { flex: 1, borderRadius: radius.lg, borderWidth: 1, padding: space[4], gap: 4 },
+  statCard: { flex: 1, borderRadius: radius.lg, borderWidth: 1, padding: space[4], gap: 4, alignItems: 'center' },
   statIcon: { width: 34, height: 34, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
-  statValue: { fontSize: 22, fontFamily: FONT.black, letterSpacing: -0.5 },
-  statLabel: { fontSize: 11, fontFamily: FONT.bold },
-  statSub: { fontSize: 11, fontFamily: FONT.medium },
+  statValue: { fontSize: 22, fontFamily: FONT.black, letterSpacing: -0.5, textAlign: 'center' },
+  statLabel: { fontSize: 11, fontFamily: FONT.bold, textAlign: 'center' },
+  statSub: { fontSize: 11, fontFamily: FONT.medium, textAlign: 'center' },
 
   /* Breakdown */
   waterfallWrap: { flexDirection: 'row', height: 14, borderRadius: radius.sm, overflow: 'hidden', gap: 2, transformOrigin: 'left center' },
