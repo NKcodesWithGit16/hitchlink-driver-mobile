@@ -277,7 +277,7 @@ export default function MessagesScreen() {
             accessibilityLabel={`Call ${dispatcher?.name || 'dispatcher'}`}
             accessibilityHint="Starts an in-app call. Long-press to dial their phone number instead."
           >
-            <Icon name="phone-call" size={17} color={colors.go} />
+            <Icon family="ionicons" name="call" size={16} color={colors.go} />
           </Pressable>
         </View>
       </View>

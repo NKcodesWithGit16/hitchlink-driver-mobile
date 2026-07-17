@@ -62,13 +62,13 @@ export default function CallOverlay() {
           <View style={styles.incomingActions}>
             <View style={styles.actionCol}>
               <Pressable onPress={declineCall} style={[styles.bigBtn, { backgroundColor: colors.danger }]} accessibilityRole="button" accessibilityLabel="Decline call">
-                <Icon name="phone-off" size={28} color="#FFFFFF" />
+                <Icon family="material-community" name="phone-hangup" size={30} color="#FFFFFF" />
               </Pressable>
               <Text style={styles.actionLabel}>Decline</Text>
             </View>
             <View style={styles.actionCol}>
               <Pressable onPress={acceptCall} style={[styles.bigBtn, { backgroundColor: colors.go }, styles.bigBtnGlow]} accessibilityRole="button" accessibilityLabel="Accept call">
-                <Icon name="phone-call" size={28} color={colors.onAccent} />
+                <Icon family="ionicons" name="call" size={26} color={colors.onAccent} />
               </Pressable>
               <Text style={styles.actionLabel}>Accept</Text>
             </View>
@@ -83,14 +83,14 @@ export default function CallOverlay() {
                   accessibilityRole="button"
                   accessibilityLabel={muted ? 'Unmute' : 'Mute'}
                 >
-                  <Icon name={muted ? 'mic-off' : 'mic'} size={22} color={muted ? '#FFFFFF' : colors.textPrimary} />
+                  <Icon family="ionicons" name={muted ? 'mic-off' : 'mic'} size={20} color={muted ? '#FFFFFF' : colors.textPrimary} />
                 </Pressable>
                 <Text style={styles.actionLabel}>{muted ? 'Unmute' : 'Mute'}</Text>
               </View>
             )}
             <View style={styles.actionCol}>
               <Pressable onPress={hangUp} style={[styles.bigBtn, { backgroundColor: colors.danger }]} accessibilityRole="button" accessibilityLabel="Hang up">
-                <Icon name="phone-off" size={28} color="#FFFFFF" />
+                <Icon family="material-community" name="phone-hangup" size={30} color="#FFFFFF" />
               </Pressable>
               <Text style={styles.actionLabel}>{ringingOut ? 'Cancel' : 'Hang up'}</Text>
             </View>
