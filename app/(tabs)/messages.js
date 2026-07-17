@@ -272,12 +272,19 @@ export default function MessagesScreen() {
             onPress={startCall}
             onLongPress={() => dispatcher?.phone && Linking.openURL(`tel:${dispatcher.phone}`).catch(() => {})}
             delayLongPress={400}
-            style={[styles.headerBtn, { backgroundColor: colors.goFill, borderColor: colors.go }]}
+            style={styles.callBtn}
             accessibilityRole="button"
             accessibilityLabel={`Call ${dispatcher?.name || 'dispatcher'}`}
             accessibilityHint="Starts an in-app call. Long-press to dial their phone number instead."
           >
-            <Icon family="ionicons" name="call" size={16} color={colors.go} />
+            <LinearGradient
+              colors={colors.gradients.danger}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[styles.callBtnFill, shadow.glow(colors.danger)]}
+            >
+              <Icon family="ionicons" name="call" size={18} color="#FFFFFF" />
+            </LinearGradient>
           </Pressable>
         </View>
       </View>
@@ -835,7 +842,8 @@ const makeStyles = (c) => StyleSheet.create({
   statusDot: { width: 7, height: 7, borderRadius: 999 },
   statusText: { ...type.caption },
   headerActions: { flexDirection: 'row', gap: space[2], marginLeft: space[3] },
-  headerBtn: { width: 44, height: 44, borderRadius: 999, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  callBtn: { width: 44, height: 44, flexShrink: 0 },
+  callBtnFill: { flex: 1, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
 
   /* Load banner */
   loadBanner: {
