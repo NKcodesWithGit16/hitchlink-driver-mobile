@@ -290,7 +290,7 @@ export default function LoadScreen() {
   if (error && !load) {
     return (
       <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
-        <Header colors={colors} styles={styles} name={user?.firstName} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
+        <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
         <View style={[styles.center, { flex: 1, paddingHorizontal: space[6] }]}>
           <View style={[styles.errorIcon, { backgroundColor: colors.cautionFill, borderColor: colors.bg }]}>
             <Icon name="wifi-off" size={34} color={colors.caution} />
@@ -314,7 +314,7 @@ export default function LoadScreen() {
   if (!load) {
     return (
       <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
-        <Header colors={colors} styles={styles} name={user?.firstName} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
+        <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
         <ScrollView
           contentContainerStyle={{ flexGrow: 1 }}
           showsVerticalScrollIndicator={false}
@@ -351,7 +351,7 @@ export default function LoadScreen() {
 
   return (
     <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
-      <Header colors={colors} styles={styles} name={user?.firstName} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
+      <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
       <StatusBar chip={chip} driveMinutesLeft={hos.driveMinutesLeft} online={online} onHosPress={() => router.push('/(tabs)/more')} />
       {!online ? <OfflineBanner pending={pending} /> : null}
 
@@ -467,7 +467,7 @@ export default function LoadScreen() {
 }
 
 /* ───────── Local pieces ───────── */
-function Header({ colors, styles, name, unreadCount = 0, onBell }) {
+function Header({ colors, styles, name, photoUrl, unreadCount = 0, onBell }) {
   const initials = (name || 'Driver').slice(0, 1).toUpperCase();
   const hasUnread = unreadCount > 0;
   return (
@@ -490,7 +490,11 @@ function Header({ colors, styles, name, unreadCount = 0, onBell }) {
           ) : null}
         </Pressable>
         <View style={[styles.avatar, { backgroundColor: colors.surfaceHi, borderColor: colors.border }]}>
-          <Text style={styles.avatarText}>{initials}</Text>
+          {photoUrl ? (
+            <Image source={{ uri: photoUrl }} style={styles.avatarPhoto} />
+          ) : (
+            <Text style={styles.avatarText}>{initials}</Text>
+          )}
         </View>
       </View>
     </View>
@@ -638,8 +642,9 @@ const makeStyles = (c) => StyleSheet.create({
     borderWidth: 1.5, borderColor: c.bg,
   },
   badgeText: { color: '#FFFFFF', fontSize: 10, fontFamily: FONT.extrabold, lineHeight: 12, ...type.num },
-  avatar: { width: 38, height: 38, borderRadius: 999, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  avatar: { width: 38, height: 38, borderRadius: 999, alignItems: 'center', justifyContent: 'center', borderWidth: 1, overflow: 'hidden' },
   avatarText: { ...type.bodyStrong, color: c.textPrimary },
+  avatarPhoto: { width: '100%', height: '100%', borderRadius: 999 },
 
   journeyCard: { gap: space[5], padding: space[6] },
   journeyDivider: { height: 1, marginHorizontal: -space[6] },
