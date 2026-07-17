@@ -14,7 +14,12 @@ import { space, type, radius, FONT } from '../../theme/tokens';
 export default function UndoToast({ visible, message, onUndo, onHide, duration = 5000 }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const ty = useRef(new Animated.Value(140)).current;
+  // Hidden offset must clear the toast fully past the screen edge even on
+  // devices with a large safe-area bottom inset (home-indicator phones) —
+  // the toast's resting "bottom" already includes insets.bottom, so a small
+  // fixed offset here isn't enough and the toast peeks up when "hidden".
+  const HIDDEN_OFFSET = 400;
+  const ty = useRef(new Animated.Value(HIDDEN_OFFSET)).current;
   const timer = useRef(null);
 
   useEffect(() => {
@@ -23,7 +28,7 @@ export default function UndoToast({ visible, message, onUndo, onHide, duration =
       Animated.spring(ty, { toValue: 0, damping: 18, stiffness: 200, useNativeDriver: true }).start();
       timer.current = setTimeout(() => onHide?.(), duration);
     } else {
-      Animated.timing(ty, { toValue: 140, duration: 220, useNativeDriver: true }).start();
+      Animated.timing(ty, { toValue: HIDDEN_OFFSET, duration: 220, useNativeDriver: true }).start();
     }
     return () => clearTimeout(timer.current);
   }, [visible]);

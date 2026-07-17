@@ -137,7 +137,13 @@ export default function LoadScreen() {
   // match the backend — so driver and dispatcher never drift apart.
   useLoadStatusSocket(user?.id, useCallback((loadId, newStatus) => {
     const cur = loadRef.current;
-    if (!cur || String(loadId) !== String(cur.id)) return;
+    if (!cur || String(loadId) !== String(cur.id)) {
+      // No load on screen yet, or this event is for a load we're not
+      // currently showing (e.g. a fresh dispatcher assignment) — refetch so
+      // it appears immediately instead of only after pull-to-refresh.
+      loadData();
+      return;
+    }
     if (newStatus === 'Cancelled' || newStatus === 'Closed') {
       // The load left active service — reconcile to the real "no load / next
       // load" state instead of leaving a half-rendered terminal status.
