@@ -17,6 +17,7 @@ function normalizeMessage(m) {
   const att = Array.isArray(m.attachments) ? m.attachments[0] : null;
   const isVoice = m.type === 'voice';
   const isImage = !isVoice && (m.type === 'photo' || ['photo', 'image', 'gif', 'sticker'].includes(att?.kind));
+  const isMissedCall = m.type === 'missed_call';
   const deleted = !!m.deletedForEveryone;
   return {
     id: m.id,
@@ -26,7 +27,7 @@ function normalizeMessage(m) {
     deleted,
     editedAt: m.editedAt ?? undefined,
     text: deleted ? undefined : (m.text ?? undefined),
-    kind: deleted ? undefined : (isVoice ? 'voice' : isImage ? 'image' : undefined),
+    kind: deleted ? undefined : (isMissedCall ? 'missed_call' : isVoice ? 'voice' : isImage ? 'image' : undefined),
     // audioUrl is a relative path on the main API; images come back as signed URLs.
     uri: deleted ? undefined : (isVoice ? (m.audioUrl ? `${BASE}${m.audioUrl}` : undefined) : (isImage ? att?.url : undefined)),
     durationSec: deleted ? undefined : (m.durationSeconds ?? undefined),

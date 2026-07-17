@@ -599,6 +599,20 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage }) {
 
   const isVoice = msg.kind === 'voice';
   const isImage = msg.kind === 'image';
+  const isMissedCall = msg.kind === 'missed_call';
+
+  if (isMissedCall) {
+    return (
+      <View style={styles.missedCallRow}>
+        <Icon family="material-community" name="phone-missed" size={15} color={mine ? '#FFFFFF' : colors.danger} />
+        <Text style={[styles.missedCallText, { color: mine ? '#FFFFFF' : colors.danger }]}>
+          {mine ? 'Missed call' : 'Missed call from dispatcher'}
+        </Text>
+        <Text style={[styles.metaTime, { color: sub, marginLeft: 'auto' }]}>{msg.at}</Text>
+      </View>
+    );
+  }
+
   return (
     <>
       {msg.replyTo ? (
@@ -889,6 +903,9 @@ const makeStyles = (c) => StyleSheet.create({
   metaTime: { fontSize: 10, fontFamily: FONT.medium },
   metaEdited: { fontSize: 10, fontFamily: FONT.medium, fontStyle: 'italic', marginRight: 1 },
   deletedText: { ...type.body, fontStyle: 'italic' },
+
+  missedCallRow: { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 160 },
+  missedCallText: { ...type.body, fontFamily: FONT.bold },
 
   /* Reply quote inside a bubble */
   replyQuote: { borderLeftWidth: 3, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 5, marginBottom: 5, gap: 1 },
