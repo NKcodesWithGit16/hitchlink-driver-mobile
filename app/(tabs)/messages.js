@@ -278,12 +278,12 @@ export default function MessagesScreen() {
             accessibilityHint="Starts an in-app call. Long-press to dial their phone number instead."
           >
             <LinearGradient
-              colors={colors.gradients.danger}
+              colors={colors.gradients.go}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
-              style={[styles.callBtnFill, shadow.glow(colors.danger)]}
+              style={[styles.callBtnFill, shadow.glow(colors.go)]}
             >
-              <Icon family="ionicons" name="call" size={18} color="#FFFFFF" />
+              <Icon family="ionicons" name="call" size={18} color={colors.onAccent} />
             </LinearGradient>
           </Pressable>
         </View>
