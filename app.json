@@ -61,6 +61,7 @@
           "location",
           "remote-notification"
         ],
+        "NSMicrophoneUsageDescription": "HitchLink needs your microphone for in-app calls with your dispatcher.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },

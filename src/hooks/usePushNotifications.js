@@ -91,7 +91,7 @@ export async function unregisterPushNotifications(driverId) {
  * Mount once (root layout). Handles notification taps — including the tap
  * that cold-started the app — and clears the badge when the app opens.
  * Data shapes come from the backend: { type: "LoadAssigned"|"LoadCancelled",
- * loadId } and { type: "chat", driverId }.
+ * loadId }, { type: "chat", driverId }, and { type: "call", callId }.
  */
 export function usePushNotificationRouting(signedIn) {
   const router = useRouter();
@@ -102,6 +102,7 @@ export function usePushNotificationRouting(signedIn) {
 
     const route = (data) => {
       if (data?.type === 'chat') router.push('/(tabs)/messages');
+      else if (data?.type === 'call' && data?.callId) router.push(`/call/${data.callId}`);
       else if (data?.type === 'LoadAssigned' || data?.type === 'LoadCancelled') router.push('/(tabs)');
     };
 

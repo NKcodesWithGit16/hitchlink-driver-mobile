@@ -14,6 +14,7 @@ import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
+import { useCall } from '../../src/context/CallContext';
 import {
   fetchMessages, sendMessage, sendVoiceMessage, sendPhotoMessage, fetchActiveLoad,
   editMessage, deleteMessage, reactToMessage, removeReaction,
@@ -44,6 +45,7 @@ export default function MessagesScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { user } = useAuth();
+  const { startCall } = useCall();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [items,       setItems]       = useState([]);
   const [text,        setText]        = useState('');
@@ -267,10 +269,13 @@ export default function MessagesScreen() {
         </View>
         <View style={styles.headerActions}>
           <Pressable
-            onPress={() => dispatcher?.phone && Linking.openURL(`tel:${dispatcher.phone}`).catch(() => {})}
+            onPress={startCall}
+            onLongPress={() => dispatcher?.phone && Linking.openURL(`tel:${dispatcher.phone}`).catch(() => {})}
+            delayLongPress={400}
             style={[styles.headerBtn, { backgroundColor: colors.goFill, borderColor: colors.go }]}
             accessibilityRole="button"
             accessibilityLabel={`Call ${dispatcher?.name || 'dispatcher'}`}
+            accessibilityHint="Starts an in-app call. Long-press to dial their phone number instead."
           >
             <Icon name="phone-call" size={17} color={colors.go} />
           </Pressable>

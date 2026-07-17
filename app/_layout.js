@@ -13,6 +13,8 @@ import {
 import { ThemeProvider, useTheme } from '../src/theme/ThemeContext';
 import { AuthProvider, useAuth } from '../src/context/AuthContext';
 import { AlertProvider } from '../src/context/AlertContext';
+import { CallProvider } from '../src/context/CallContext';
+import CallOverlay from '../src/components/call/CallOverlay';
 import { WeatherToast, WeatherAlertModalGlobal } from '../src/components/ui/WeatherToast';
 import { useLocationSharing } from '../src/hooks/useLocationSharing';
 import { usePushNotificationRouting } from '../src/hooks/usePushNotifications';
@@ -91,6 +93,7 @@ function ThemedShell() {
       {/* Global overlays — render above everything */}
       <WeatherToast />
       <WeatherAlertModalGlobal />
+      <CallOverlay />
     </View>
   );
 }
@@ -122,7 +125,9 @@ export default function RootLayout() {
               fetched per signed-in user, so it needs useAuth(). */}
           <AuthProvider>
             <AlertProvider>
-              <ThemedShell />
+              <CallProvider>
+                <ThemedShell />
+              </CallProvider>
             </AlertProvider>
           </AuthProvider>
         </ThemeProvider>
