@@ -1,0 +1,7 @@
+{
+  "name": "hitchlink-voip",
+  "version": "1.0.0",
+  "description": "Minimal PKPushRegistry (VoIP push) wrapper for HitchLink's driver calling feature. Reports incoming calls to react-native-callkeep directly from the native push handler, before JS is necessarily running.",
+  "main": "index.js",
+  "license": "MIT"
+}

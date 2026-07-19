@@ -49,19 +49,7 @@
         }
       ],
       "expo-sharing",
-      [
-        "expo-callkit-telecom",
-        {
-          "microphonePermission": "HitchLink needs your microphone for in-app calls with your dispatcher.",
-          "cameraPermission": false,
-          "incomingCallTimeout": 45,
-          "outgoingCallTimeout": 60,
-          "fulfillAnswerCallTimeout": 30,
-          "sounds": ["./assets/sounds/ringtone.wav", "./assets/sounds/ringback.wav"],
-          "defaultRingtoneIos": "ringtone.wav",
-          "defaultDialtone": "ringback.wav"
-        }
-      ]
+      "@config-plugins/react-native-callkeep"
     ],
     "ios": {
       "supportsTablet": true,

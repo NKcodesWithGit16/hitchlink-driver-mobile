@@ -6,14 +6,15 @@
 // Audio-only MVP: never requests the camera.
 //
 // iOS lock-screen ringing: a dispatcher-initiated call also triggers an APNs
-// VoIP push (see backend DriverCallPushService), which expo-callkit-telecom
-// reports straight to CallKit natively — before this JS is necessarily
-// running — so the phone genuinely rings even locked/backgrounded. The
-// SignalR "IncomingCall" path below stays as the foreground-live path and as
-// the fallback for as long as VoIP push isn't configured/registered yet
-// (Android always, iOS until Apple credentials are set up) — see
-// callKitCallIdsRef, which lets CallKit's path take exclusive ownership of a
-// call the moment it reports it, without the two paths double-ringing.
+// VoIP push (see backend DriverCallPushService), which the local
+// `hitchlink-voip` native module (PKPushRegistry) reports straight to
+// CallKit via react-native-callkeep — before this JS is necessarily running —
+// so the phone genuinely rings even locked/backgrounded. The SignalR
+// "IncomingCall" path below stays as the foreground-live path and as the
+// fallback for as long as VoIP push isn't configured/registered yet (Android
+// always, iOS until Apple credentials are set up) — see callKitCallIdsRef,
+// which lets CallKit's path take exclusive ownership of a call the moment it
+// reports it, without the two paths double-ringing.
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { useAuth } from './AuthContext';
@@ -28,12 +29,27 @@ try {
   Daily = null;
 }
 
-let CallKit = null;
+let RNCallKeep = null;
+let Voip = null;
 try {
-  CallKit = Platform.OS === 'ios' ? require('expo-callkit-telecom') : null;
+  if (Platform.OS === 'ios') {
+    RNCallKeep = require('react-native-callkeep').default;
+    Voip = require('hitchlink-voip');
+  }
 } catch {
-  CallKit = null;
+  RNCallKeep = null;
+  Voip = null;
 }
+
+// Raw native event-name constants react-native-callkeep replays through
+// `didLoadWithEvents` for anything that fired before JS attached its
+// listeners (e.g. the call was answered from the lock screen while the app
+// was killed) — see the cold-start replay in the effect below.
+const RAW_EVENT = {
+  didDisplayIncomingCall: 'RNCallKeepDidDisplayIncomingCall',
+  answerCall: 'RNCallKeepPerformAnswerCallAction',
+  endCall: 'RNCallKeepPerformEndCallAction',
+};
 
 const CallContext = createContext(null);
 
@@ -55,11 +71,10 @@ export function CallProvider({ children }) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // CallKit bookkeeping: nativeSessionId -> the call metadata carried in the
-  // VoIP push (serverCallId/roomUrl/token/callerName), and the set of
-  // serverCallIds CallKit has already reported (so the SignalR path below
-  // knows to stand down for that call instead of double-ringing).
-  const callKitMetaRef = useRef(new Map());
+  // The set of serverCallIds CallKit has already reported (via a VoIP push) —
+  // lets the SignalR path below stand down for that call instead of
+  // double-ringing. The actual call metadata (roomUrl/token/callerName) lives
+  // natively, keyed by CallKit's call UUID — see Voip.getPendingCallMetadata.
   const callKitCallIdsRef = useRef(new Set());
 
   const teardownCallObject = useCallback(async () => {
@@ -212,29 +227,22 @@ export function CallProvider({ children }) {
   // screen — see the module-level comment for how this and the SignalR path
   // above divide ownership of a given call.
   useEffect(() => {
-    if (!CallKit) return undefined;
+    if (!RNCallKeep || !Voip) return undefined;
 
-    // Fired once CallKit accepts the native call report (from the VoIP push
-    // the backend sent alongside "IncomingCall") — cache the metadata we need
-    // to actually answer it later, keyed by CallKit's own session id.
-    const onSessionAdded = (event) => {
-      const session = event?.session ?? event;
-      const info = session?.incomingCallEvent;
-      if (!session?.id || !info?.serverCallId) return;
-      callKitMetaRef.current.set(session.id, {
-        serverCallId: info.serverCallId,
-        roomUrl: info.metadata?.roomUrl,
-        token: info.metadata?.token,
-        callerName: info.caller?.displayName || 'Dispatcher',
-      });
-      callKitCallIdsRef.current.add(String(info.serverCallId));
+    // Fired once CallKit displays the native call screen (the completion of
+    // hitchlink-voip's reportNewIncomingCall) — `handle` is the serverCallId
+    // we passed natively, so this is enough to mark the call CallKit-owned.
+    const onDisplayed = ({ handle }) => {
+      if (handle) callKitCallIdsRef.current.add(String(handle));
     };
 
     // Fired when the user taps Accept on CallKit's native screen — including
-    // from the lock screen. Joins Daily the same way acceptCall() does, then
-    // tells CallKit the media connected once it has.
-    const onAnswered = (event) => {
-      const meta = callKitMetaRef.current.get(event?.id);
+    // from the lock screen. hitchlink-voip cached the call's metadata
+    // natively, keyed by this same callUUID, when the push first arrived.
+    // Joins Daily the same way acceptCall() does, then marks the call active
+    // for CallKit once Daily's media actually connects.
+    const onAnswered = ({ callUUID }) => {
+      const meta = Voip.getPendingCallMetadata(callUUID);
       if (!meta?.serverCallId || !meta.roomUrl) return;
       setState({
         ...initialState,
@@ -246,7 +254,7 @@ export function CallProvider({ children }) {
       });
       apiAcceptCall(meta.serverCallId)
         .then(() => joinDailyRoom(meta.roomUrl, meta.token))
-        .then(() => CallKit.fulfillIncomingCallConnected(event.requestId))
+        .then(() => RNCallKeep.setCurrentCallActive(callUUID))
         .catch((err) => {
           console.error('[Call] CallKit accept failed:', err);
           reset();
@@ -258,15 +266,13 @@ export function CallProvider({ children }) {
     };
 
     // Fired when the call ends for any reason — user hit CallKit's decline/
-    // end button, the other side hung up (reflected back into CallKit by our
-    // own SignalR handlers above via reportCallEnded — not wired yet, so for
-    // now this only covers the local end/decline action), or it timed out.
-    const onEnded = (event) => {
-      const session = event?.session;
-      const meta = callKitMetaRef.current.get(event?.id)
-        ?? { serverCallId: session?.incomingCallEvent?.serverCallId };
-      callKitMetaRef.current.delete(event?.id);
-      const serverCallId = meta.serverCallId;
+    // end button, or it timed out. If the call was never answered,
+    // getPendingCallMetadata still has it (onAnswered never consumed it); if
+    // it was answered, that already happened and stateRef carries the
+    // serverCallId instead.
+    const onEndedCall = ({ callUUID }) => {
+      const meta = Voip.getPendingCallMetadata(callUUID);
+      const serverCallId = meta?.serverCallId ?? stateRef.current.callId;
       if (serverCallId) callKitCallIdsRef.current.delete(String(serverCallId));
       const wasActive = stateRef.current.status === 'active' && String(stateRef.current.callId) === String(serverCallId);
       reset();
@@ -275,11 +281,29 @@ export function CallProvider({ children }) {
       else apiDeclineCall(serverCallId).catch(() => {});
     };
 
+    // Cold-start reliability: react-native-callkeep buffers any of the above
+    // events that fire before JS attaches listeners (e.g. the call was
+    // answered from the lock screen while the app was fully killed) and
+    // replays them once here via "didLoadWithEvents".
+    const onLoadWithEvents = (events) => {
+      (events || []).forEach(({ name, data }) => {
+        if (name === RAW_EVENT.didDisplayIncomingCall) onDisplayed(data);
+        else if (name === RAW_EVENT.answerCall) onAnswered(data);
+        else if (name === RAW_EVENT.endCall) onEndedCall(data);
+      });
+    };
+
     const subs = [
-      CallKit.addCallSessionAddedListener(onSessionAdded),
-      CallKit.addCallAnsweredListener(onAnswered),
-      CallKit.addCallEndedListener(onEnded),
+      RNCallKeep.addEventListener('didDisplayIncomingCall', onDisplayed),
+      RNCallKeep.addEventListener('answerCall', onAnswered),
+      RNCallKeep.addEventListener('endCall', onEndedCall),
+      RNCallKeep.addEventListener('didLoadWithEvents', onLoadWithEvents),
     ];
+    RNCallKeep.setup({
+      ios: { appName: 'HitchLink', supportsVideo: false, includesCallsInRecents: true },
+      android: {},
+    }).catch((err) => console.error('[Call] RNCallKeep.setup failed:', err));
+
     return () => subs.forEach((s) => s.remove());
   }, [joinDailyRoom, reset]);
 
