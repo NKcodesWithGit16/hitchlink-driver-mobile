@@ -476,6 +476,17 @@ export async function registerPushToken(driverId, pushToken) {
   });
 }
 
+// Separate from the regular Expo push token above — this is the APNs VoIP
+// token (from PKPushRegistry via expo-callkit-telecom), which lets an
+// incoming call ring through CallKit even while the phone is locked.
+export async function registerVoipPushToken(driverId, voipPushToken) {
+  if (USE_MOCK) return { ok: true };
+  return apiFetch(`/drivers/${driverId}/voip-push-token`, {
+    method: 'PATCH',
+    body: JSON.stringify({ voipPushToken }),
+  });
+}
+
 // ── Notifications ────────────────────────────────────────────────────
 // The backend speaks { id, title, message, type, isRead, createdAt }; the
 // Alerts UI speaks { id, category, tone, icon, critical, title, body,

@@ -23,6 +23,7 @@
     "expo": "~55.0.27",
     "expo-audio": "~55.0.15",
     "expo-blur": "~55.0.15",
+    "expo-callkit-telecom": "^0.4.0",
     "expo-constants": "~55.0.16",
     "expo-dev-client": "~55.0.36",
     "expo-document-picker": "~55.0.14",

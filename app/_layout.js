@@ -18,6 +18,7 @@ import CallOverlay from '../src/components/call/CallOverlay';
 import { WeatherToast, WeatherAlertModalGlobal } from '../src/components/ui/WeatherToast';
 import { useLocationSharing } from '../src/hooks/useLocationSharing';
 import { usePushNotificationRouting } from '../src/hooks/usePushNotifications';
+import { useVoipPushTokenSync } from '../src/hooks/useVoipPushToken';
 // Side-effect import: registers the background location task with TaskManager
 // at app entry, so it exists when the OS relaunches the app headlessly to
 // deliver location updates.
@@ -55,6 +56,14 @@ function PushRouter() {
   return null;
 }
 
+// Registers/keeps in sync the APNs VoIP token an incoming call needs to ring
+// through CallKit — see useVoipPushToken.js and CallContext.js.
+function VoipPushRegistrar() {
+  const { user, signedIn } = useAuth();
+  useVoipPushTokenSync(signedIn ? user?.id : null);
+  return null;
+}
+
 function RouteGate() {
   const { ready, signedIn, onboarded } = useAuth();
   const segments = useSegments();
@@ -89,6 +98,7 @@ function ThemedShell() {
       <RouteGate />
       <LocationReporter />
       <PushRouter />
+      <VoipPushRegistrar />
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
       {/* Global overlays — render above everything */}
       <WeatherToast />

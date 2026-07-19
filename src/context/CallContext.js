@@ -4,7 +4,18 @@
 // also has a `tel:` fallback (see Messages screen) for cellular dead zones.
 //
 // Audio-only MVP: never requests the camera.
+//
+// iOS lock-screen ringing: a dispatcher-initiated call also triggers an APNs
+// VoIP push (see backend DriverCallPushService), which expo-callkit-telecom
+// reports straight to CallKit natively — before this JS is necessarily
+// running — so the phone genuinely rings even locked/backgrounded. The
+// SignalR "IncomingCall" path below stays as the foreground-live path and as
+// the fallback for as long as VoIP push isn't configured/registered yet
+// (Android always, iOS until Apple credentials are set up) — see
+// callKitCallIdsRef, which lets CallKit's path take exclusive ownership of a
+// call the moment it reports it, without the two paths double-ringing.
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { Platform } from 'react-native';
 import { useAuth } from './AuthContext';
 import { useCallSocket } from '../hooks/useCallSocket';
 import { startCall as apiStartCall, getCall, acceptCall as apiAcceptCall, declineCall as apiDeclineCall, endCall as apiEndCall } from '../api/calls';
@@ -15,6 +26,13 @@ try {
   Daily = require('@daily-co/react-native-daily-js').default;
 } catch {
   Daily = null;
+}
+
+let CallKit = null;
+try {
+  CallKit = Platform.OS === 'ios' ? require('expo-callkit-telecom') : null;
+} catch {
+  CallKit = null;
 }
 
 const CallContext = createContext(null);
@@ -36,6 +54,13 @@ export function CallProvider({ children }) {
   const callObjectRef = useRef(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  // CallKit bookkeeping: nativeSessionId -> the call metadata carried in the
+  // VoIP push (serverCallId/roomUrl/token/callerName), and the set of
+  // serverCallIds CallKit has already reported (so the SignalR path below
+  // knows to stand down for that call instead of double-ringing).
+  const callKitMetaRef = useRef(new Map());
+  const callKitCallIdsRef = useRef(new Set());
 
   const teardownCallObject = useCallback(async () => {
     const co = callObjectRef.current;
@@ -80,6 +105,10 @@ export function CallProvider({ children }) {
   // ── Incoming: dispatcher called the driver (live SignalR event) ────────
   const onIncomingCall = useCallback((p) => {
     if (stateRef.current.status !== 'idle') return; // already on a call
+    // CallKit already reported (or is about to report) this exact call
+    // natively — let its own screen/ringtone own it instead of also showing
+    // our JS overlay + ringtone on top of it.
+    if (callKitCallIdsRef.current.has(String(p.callId))) return;
     setState({
       ...initialState,
       status: 'ringing-in',
@@ -167,6 +196,74 @@ export function CallProvider({ children }) {
   }, [reset]);
 
   useCallSocket(signedIn ? user?.id : null, { onIncomingCall, onCallAccepted, onCallDeclined, onCallEnded, onCallCancelled });
+
+  // ── CallKit (iOS): reacts to the native call UI a VoIP push already put on
+  // screen — see the module-level comment for how this and the SignalR path
+  // above divide ownership of a given call.
+  useEffect(() => {
+    if (!CallKit) return undefined;
+
+    // Fired once CallKit accepts the native call report (from the VoIP push
+    // the backend sent alongside "IncomingCall") — cache the metadata we need
+    // to actually answer it later, keyed by CallKit's own session id.
+    const onSessionAdded = (event) => {
+      const session = event?.session ?? event;
+      const info = session?.incomingCallEvent;
+      if (!session?.id || !info?.serverCallId) return;
+      callKitMetaRef.current.set(session.id, {
+        serverCallId: info.serverCallId,
+        roomUrl: info.metadata?.roomUrl,
+        token: info.metadata?.token,
+        callerName: info.caller?.displayName || 'Dispatcher',
+      });
+      callKitCallIdsRef.current.add(String(info.serverCallId));
+    };
+
+    // Fired when the user taps Accept on CallKit's native screen — including
+    // from the lock screen. Joins Daily the same way acceptCall() does, then
+    // tells CallKit the media connected once it has.
+    const onAnswered = (event) => {
+      const meta = callKitMetaRef.current.get(event?.id);
+      if (!meta?.serverCallId || !meta.roomUrl) return;
+      setState({
+        ...initialState,
+        status: 'ringing-in',
+        callId: meta.serverCallId,
+        peerName: meta.callerName,
+        roomUrl: meta.roomUrl,
+        token: meta.token,
+      });
+      apiAcceptCall(meta.serverCallId)
+        .then(() => joinDailyRoom(meta.roomUrl, meta.token))
+        .then(() => CallKit.fulfillIncomingCallConnected(event.requestId))
+        .catch(() => reset());
+    };
+
+    // Fired when the call ends for any reason — user hit CallKit's decline/
+    // end button, the other side hung up (reflected back into CallKit by our
+    // own SignalR handlers above via reportCallEnded — not wired yet, so for
+    // now this only covers the local end/decline action), or it timed out.
+    const onEnded = (event) => {
+      const session = event?.session;
+      const meta = callKitMetaRef.current.get(event?.id)
+        ?? { serverCallId: session?.incomingCallEvent?.serverCallId };
+      callKitMetaRef.current.delete(event?.id);
+      const serverCallId = meta.serverCallId;
+      if (serverCallId) callKitCallIdsRef.current.delete(String(serverCallId));
+      const wasActive = stateRef.current.status === 'active' && String(stateRef.current.callId) === String(serverCallId);
+      reset();
+      if (!serverCallId) return;
+      if (wasActive) apiEndCall(serverCallId).catch(() => {});
+      else apiDeclineCall(serverCallId).catch(() => {});
+    };
+
+    const subs = [
+      CallKit.addCallSessionAddedListener(onSessionAdded),
+      CallKit.addCallAnsweredListener(onAnswered),
+      CallKit.addCallEndedListener(onEnded),
+    ];
+    return () => subs.forEach((s) => s.remove());
+  }, [joinDailyRoom, reset]);
 
   // Ring for as long as the call is waiting on either side — ringtone for an
   // incoming call, a quieter ringback tone while our own call rings out.
