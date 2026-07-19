@@ -214,8 +214,18 @@ export function CallProvider({ children }) {
   const onCallAccepted = useCallback(({ callId }) => {
     const s = stateRef.current;
     if (s.callId !== callId || s.status !== 'ringing-out') return;
-    joinDailyRoom(s.roomUrl, s.token);
-  }, [joinDailyRoom]);
+    // The dispatcher answered — join our own side. If *our* join fails, end the
+    // call so they're not left alone in an already-connected room, and surface
+    // why. Mirrors acceptCall()'s error handling, which was previously missing
+    // on this caller-side path (an unhandled rejection that left the dispatcher
+    // stranded until the ring timeout eventually fired).
+    joinDailyRoom(s.roomUrl, s.token).catch(() => {
+      teardownCallObject();
+      setState({ ...initialState, status: 'ended', error: 'Could not connect the call.' });
+      setTimeout(() => setState((cur) => (cur.status === 'ended' ? initialState : cur)), 2500);
+      if (callId) apiEndCall(callId).catch(() => {});
+    });
+  }, [joinDailyRoom, teardownCallObject]);
 
   const onCallDeclined = useCallback(({ callId }) => {
     if (stateRef.current.callId !== callId) return;
@@ -255,6 +265,14 @@ export function CallProvider({ children }) {
     const onAnswered = ({ callUUID }) => {
       const meta = Voip.getPendingCallMetadata(callUUID);
       if (!meta?.serverCallId || !meta.roomUrl) return;
+      // Same synchronous re-entrancy guard as acceptCall(). If the JS overlay's
+      // Accept and this CallKit answer both resolve for the same call (possible
+      // when the SignalR IncomingCall raced ahead of CallKit's didDisplay, so
+      // both surfaces showed), the second /accept 409s and its catch below would
+      // /end the very call the first invocation just connected. A ref closes the
+      // race a React-state guard can't.
+      if (acceptInFlightRef.current) return;
+      acceptInFlightRef.current = true;
       setState({
         ...initialState,
         status: 'ringing-in',
@@ -273,7 +291,8 @@ export function CallProvider({ children }) {
           // landed server-side, so /end (not /decline) is what actually
           // clears it instead of leaving a stuck Accepted call.
           apiEndCall(meta.serverCallId).catch(() => {});
-        });
+        })
+        .finally(() => { acceptInFlightRef.current = false; });
     };
 
     // Fired when the call ends for any reason — user hit CallKit's decline/
