@@ -8,6 +8,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { useAuth } from './AuthContext';
 import { useCallSocket } from '../hooks/useCallSocket';
 import { startCall as apiStartCall, getCall, acceptCall as apiAcceptCall, declineCall as apiDeclineCall, endCall as apiEndCall } from '../api/calls';
+import { startRinging, stopRinging } from '../lib/sound';
 
 let Daily = null;
 try {
@@ -167,7 +168,15 @@ export function CallProvider({ children }) {
 
   useCallSocket(signedIn ? user?.id : null, { onIncomingCall, onCallAccepted, onCallDeclined, onCallEnded, onCallCancelled });
 
-  useEffect(() => () => { teardownCallObject(); }, [teardownCallObject]);
+  // Ring for as long as the call is waiting on either side — ringtone for an
+  // incoming call, a quieter ringback tone while our own call rings out.
+  useEffect(() => {
+    if (state.status === 'ringing-in') startRinging('incoming');
+    else if (state.status === 'ringing-out') startRinging('outgoing');
+    else stopRinging();
+  }, [state.status]);
+
+  useEffect(() => () => { teardownCallObject(); stopRinging(); }, [teardownCallObject]);
 
   return (
     <CallContext.Provider value={{ ...state, startCall, acceptCall, declineCall, hangUp, toggleMute, loadCallFallback }}>

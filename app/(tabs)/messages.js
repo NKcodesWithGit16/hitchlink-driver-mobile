@@ -21,6 +21,7 @@ import {
 } from '../../src/api/main';
 import { useChatSocket } from '../../src/hooks/useChatSocket';
 import { useVoiceRecorder } from '../../src/hooks/useVoiceRecorder';
+import { playMessageSound } from '../../src/lib/sound';
 import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 
@@ -59,6 +60,8 @@ export default function MessagesScreen() {
   const [kbOpen,      setKbOpen]      = useState(false);  // keyboard visibility
   const scrollRef   = useRef(null);
   const kbPad       = useRef(new Animated.Value(0)).current; // live keyboard height → wrapper padding
+  const seenIdsRef  = useRef(new Set());    // dispatcher-message ids already dinged/accounted for
+  const firstLoadRef = useRef(true);        // skip the sound on the initial history fetch
 
   // Keyboard tracking drives two things: (1) kbOpen collapses the composer's
   // own bottom padding (the floating tab island is hidden behind the keyboard,
@@ -112,6 +115,15 @@ export default function MessagesScreen() {
     if (!user?.id) return;
     try {
       const server = await fetchMessages(user.id);
+      // One ding for any dispatcher message we haven't seen yet — covers both
+      // the socket nudge and the polling fallback with a single code path, and
+      // skips the driver's own sends (from === 'driver').
+      if (!firstLoadRef.current) {
+        const hasNewIncoming = server.some((m) => m.from !== 'driver' && !seenIdsRef.current.has(m.id));
+        if (hasNewIncoming) playMessageSound();
+      }
+      server.forEach((m) => seenIdsRef.current.add(m.id));
+      firstLoadRef.current = false;
       setItems((prev) => {
         const serverDriverTexts = new Set(
           server.filter((m) => m.from === 'driver' && m.text).map((m) => m.text)
