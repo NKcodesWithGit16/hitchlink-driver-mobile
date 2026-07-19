@@ -33,32 +33,39 @@ export default function CallOverlay() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  const { status, peerName, muted, startedAt, acceptCall, declineCall, hangUp, toggleMute } = useCall();
+  const { status, peerName, error, muted, startedAt, acceptCall, declineCall, hangUp, toggleMute } = useCall();
   const duration = useElapsed(status === 'active' ? startedAt : null);
 
-  const visible = status !== 'idle' && status !== 'ended';
+  // 'ended' briefly shows why the call didn't connect (CallContext auto-reverts
+  // to idle a couple seconds later) — without this it silently vanished, which
+  // is why a failed accept used to look like nothing happened at all.
+  const visible = status !== 'idle';
   if (!visible) return null;
 
   const ringingIn = status === 'ringing-in';
   const ringingOut = status === 'ringing-out';
   const active = status === 'active';
+  const ended = status === 'ended';
 
   return (
     <Modal visible transparent={false} animationType="fade" statusBarTranslucent>
       <LinearGradient colors={colors.gradients.brand ? [colors.navy, colors.bg] : [colors.bg, colors.bg]} style={[styles.screen, { paddingTop: insets.top + space[8], paddingBottom: insets.bottom + space[8] }]}>
         <View style={styles.body}>
-          <View style={[styles.avatar, ringingIn && styles.avatarPulse]}>
-            <Text style={styles.avatarText}>{initials(peerName)}</Text>
+          <View style={[styles.avatar, ringingIn && styles.avatarPulse, ended && { borderColor: colors.danger }]}>
+            {ended
+              ? <Icon family="material-community" name="phone-hangup" size={34} color={colors.danger} />
+              : <Text style={styles.avatarText}>{initials(peerName)}</Text>}
           </View>
           <Text style={styles.peerName}>{peerName || 'Dispatcher'}</Text>
-          <Text style={styles.statusLine}>
+          <Text style={[styles.statusLine, ended && { color: colors.danger }]}>
             {ringingIn && 'Incoming call…'}
             {ringingOut && 'Calling…'}
             {active && duration}
+            {ended && (error || 'Call ended')}
           </Text>
         </View>
 
-        {ringingIn ? (
+        {ended ? null : ringingIn ? (
           <View style={styles.incomingActions}>
             <View style={styles.actionCol}>
               <Pressable onPress={declineCall} style={[styles.bigBtn, { backgroundColor: colors.danger }]} accessibilityRole="button" accessibilityLabel="Decline call">

@@ -78,6 +78,7 @@ export function CallProvider({ children }) {
 
   const joinDailyRoom = useCallback(async (roomUrl, token) => {
     if (!Daily) {
+      console.error('[Call] Daily native module unavailable — is this build using a dev client with @daily-co/react-native-daily-js linked?');
       setState((s) => ({ ...initialState, status: 'ended', error: 'Calling is unavailable on this build.' }));
       return;
     }
@@ -146,10 +147,20 @@ export function CallProvider({ children }) {
     try {
       await apiAcceptCall(callId);
       await joinDailyRoom(roomUrl, token);
-    } catch {
-      reset();
+    } catch (err) {
+      console.error('[Call] acceptCall failed:', err);
+      teardownCallObject();
+      setState({ ...initialState, status: 'ended', error: 'Could not connect the call.' });
+      setTimeout(() => setState((s) => (s.status === 'ended' ? initialState : s)), 2500);
+      // apiAcceptCall above may already have flipped the call to Accepted
+      // server-side before the join itself failed — /decline only works while
+      // still Ringing and would silently 409 here, leaving the call stuck
+      // "Accepted" and blocking every future call for this driver until the
+      // backend's 20-minute self-heal catches it. /end is idempotent across
+      // both Ringing and Accepted, so it always actually clears the call.
+      if (callId) apiEndCall(callId).catch(() => {});
     }
-  }, [joinDailyRoom, reset]);
+  }, [joinDailyRoom, teardownCallObject]);
 
   const declineCall = useCallback(() => {
     const { callId } = stateRef.current;
@@ -236,7 +247,14 @@ export function CallProvider({ children }) {
       apiAcceptCall(meta.serverCallId)
         .then(() => joinDailyRoom(meta.roomUrl, meta.token))
         .then(() => CallKit.fulfillIncomingCallConnected(event.requestId))
-        .catch(() => reset());
+        .catch((err) => {
+          console.error('[Call] CallKit accept failed:', err);
+          reset();
+          // Same reasoning as acceptCall() above — accept may have already
+          // landed server-side, so /end (not /decline) is what actually
+          // clears it instead of leaving a stuck Accepted call.
+          apiEndCall(meta.serverCallId).catch(() => {});
+        });
     };
 
     // Fired when the call ends for any reason — user hit CallKit's decline/
@@ -272,6 +290,32 @@ export function CallProvider({ children }) {
     else if (state.status === 'ringing-out') startRinging('outgoing');
     else stopRinging();
   }, [state.status]);
+
+  // Ring timeout — mirrors the dispatcher web app's RING_TIMEOUT_MS. Without
+  // this, a ring nobody answers (app killed, notch of dead air, CallKit's own
+  // timeout not firing because VoIP push isn't configured yet) leaves this
+  // side stuck on the ringing overlay forever with no way back except a
+  // reload, and never tells the backend to free up the call. Re-armed
+  // whenever status/callId change, and torn down the moment either does
+  // (accept, decline, hang up, or a remote CallAccepted/Declined/Ended event).
+  const RING_TIMEOUT_MS = 45000;
+  useEffect(() => {
+    if (state.status !== 'ringing-in' && state.status !== 'ringing-out') return undefined;
+    const { status, callId } = state;
+    const timer = setTimeout(() => {
+      const s = stateRef.current;
+      if (s.status !== status || s.callId !== callId) return; // already resolved elsewhere
+      teardownCallObject();
+      if (status === 'ringing-out') {
+        setState({ ...initialState, status: 'ended', error: 'No answer.' });
+        setTimeout(() => setState((cur) => (cur.status === 'ended' ? initialState : cur)), 2500);
+      } else {
+        setState(initialState);
+      }
+      if (callId) apiEndCall(callId, 'timeout').catch(() => {});
+    }, RING_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [state.status, state.callId, teardownCallObject]);
 
   useEffect(() => () => { teardownCallObject(); stopRinging(); }, [teardownCallObject]);
 
