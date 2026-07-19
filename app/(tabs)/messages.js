@@ -360,6 +360,7 @@ export default function MessagesScreen() {
               onAction={() => !m.deleted && !String(m.id).startsWith('local-') && setMenuFor(m)}
               onReactQuick={(emoji) => !String(m.id).startsWith('local-') && react(m, emoji)}
               onOpenImage={setViewerUri}
+              onCallBack={startCall}
             />
           ))}
           {typing ? <TypingIndicator colors={colors} styles={styles} /> : null}
@@ -502,7 +503,7 @@ function DateSeparator({ label, colors, styles }) {
   );
 }
 
-function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onOpenImage }) {
+function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onOpenImage, onCallBack }) {
   const mine = msg.from === 'driver';
   const prevSame = prev?.from === msg.from;
   const nextSame = next?.from === msg.from;
@@ -517,6 +518,13 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onOpe
     if (reduce) return;
     Animated.timing(enter, { toValue: 1, duration: 240, useNativeDriver: true }).start();
   }, []);
+
+  // Missed calls are a system-style event, not a directional chat bubble —
+  // render as a centered card (like a date separator) instead of the usual
+  // left/right gradient bubble, so it reads distinctly at a glance.
+  if (msg.kind === 'missed_call' && !msg.deleted) {
+    return <MissedCallCard msg={msg} mine={mine} colors={colors} styles={styles} enter={enter} onCallBack={onCallBack} />;
+  }
 
   // Tail shape: only the last bubble in a group gets a tail
   const tailMine   = !nextSame && mine;
@@ -599,6 +607,47 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onOpe
   );
 }
 
+// Centered system-style event card for a missed call — distinct from the
+// left/right chat bubbles so a missed call reads at a glance instead of
+// blending into the message stream as plain text. `mine` means the driver
+// placed the call and it went unanswered; otherwise the dispatcher called
+// and the driver missed it, so a one-tap "Call back" is worth surfacing.
+function MissedCallCard({ msg, mine, colors, styles, enter, onCallBack }) {
+  return (
+    <Animated.View style={[
+      styles.missedCallCardRow,
+      { opacity: enter, transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }] },
+    ]}>
+      <View style={[styles.missedCallCard, { backgroundColor: colors.dangerFill, borderColor: colors.danger }]}>
+        <View style={[styles.missedCallIcon, { backgroundColor: colors.danger }]}>
+          <Icon family="material-community" name="phone-missed" size={16} color={colors.onAccent} />
+        </View>
+
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.missedCallTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+            {mine ? 'Missed call' : 'Missed call from dispatcher'}
+          </Text>
+          <Text style={[styles.missedCallSub, { color: colors.textMuted }]} numberOfLines={1}>
+            {mine ? "Dispatcher didn't pick up" : "You didn't pick up"} · {msg.at}
+          </Text>
+        </View>
+
+        {!mine ? (
+          <Pressable
+            onPress={onCallBack}
+            style={[styles.missedCallBtn, { backgroundColor: colors.teal }]}
+            accessibilityRole="button"
+            accessibilityLabel="Call dispatcher back"
+          >
+            <Icon family="ionicons" name="call" size={13} color={colors.onAccent} />
+            <Text style={[styles.missedCallBtnText, { color: colors.onAccent }]}>Call back</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    </Animated.View>
+  );
+}
+
 function BubbleBody({ msg, mine, colors, styles, onOpenImage }) {
   const ink = mine ? '#FFFFFF' : colors.textPrimary;
   const sub = mine ? 'rgba(255,255,255,0.62)' : colors.textMuted;
@@ -611,19 +660,6 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage }) {
 
   const isVoice = msg.kind === 'voice';
   const isImage = msg.kind === 'image';
-  const isMissedCall = msg.kind === 'missed_call';
-
-  if (isMissedCall) {
-    return (
-      <View style={styles.missedCallRow}>
-        <Icon family="material-community" name="phone-missed" size={15} color={mine ? '#FFFFFF' : colors.danger} />
-        <Text style={[styles.missedCallText, { color: mine ? '#FFFFFF' : colors.danger }]}>
-          {mine ? 'Missed call' : 'Missed call from dispatcher'}
-        </Text>
-        <Text style={[styles.metaTime, { color: sub, marginLeft: 'auto' }]}>{msg.at}</Text>
-      </View>
-    );
-  }
 
   return (
     <>
@@ -916,8 +952,20 @@ const makeStyles = (c) => StyleSheet.create({
   metaEdited: { fontSize: 10, fontFamily: FONT.medium, fontStyle: 'italic', marginRight: 1 },
   deletedText: { ...type.body, fontStyle: 'italic' },
 
-  missedCallRow: { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 160 },
-  missedCallText: { ...type.body, fontFamily: FONT.bold },
+  missedCallCardRow: { alignItems: 'center', marginVertical: space[2] },
+  missedCallCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    maxWidth: '92%', borderWidth: 1, borderRadius: radius.lg,
+    paddingHorizontal: space[3], paddingVertical: space[2] + 2,
+  },
+  missedCallIcon: { width: 28, height: 28, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  missedCallTitle: { fontSize: 13, fontFamily: FONT.bold },
+  missedCallSub: { fontSize: 11, fontFamily: FONT.medium, marginTop: 1 },
+  missedCallBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 0,
+    borderRadius: radius.pill, paddingHorizontal: 11, paddingVertical: 7,
+  },
+  missedCallBtnText: { fontSize: 12, fontFamily: FONT.bold },
 
   /* Reply quote inside a bubble */
   replyQuote: { borderLeftWidth: 3, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 5, marginBottom: 5, gap: 1 },
