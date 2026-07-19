@@ -70,6 +70,7 @@ export function CallProvider({ children }) {
   const callObjectRef = useRef(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+  const acceptInFlightRef = useRef(false);
 
   // The set of serverCallIds CallKit has already reported (via a VoIP push) —
   // lets the SignalR path below stand down for that call instead of
@@ -157,8 +158,16 @@ export function CallProvider({ children }) {
   }, [user?.dispatcher]);
 
   const acceptCall = useCallback(async () => {
+    // Synchronous re-entrancy guard — without it, a double-fire (double tap,
+    // or CallKit's onAnswered firing while the SignalR path is also mid-way
+    // through this) sends a second /accept that always 409s (the first
+    // already flipped the call to Accepted), whose catch block then calls
+    // /end and tears down the call the FIRST invocation just connected. A
+    // React-state guard can't close this race; a ref can.
+    if (acceptInFlightRef.current) return;
     const { callId, roomUrl, token } = stateRef.current;
     if (!callId || !roomUrl) return;
+    acceptInFlightRef.current = true;
     try {
       await apiAcceptCall(callId);
       await joinDailyRoom(roomUrl, token);
@@ -174,6 +183,8 @@ export function CallProvider({ children }) {
       // backend's 20-minute self-heal catches it. /end is idempotent across
       // both Ringing and Accepted, so it always actually clears the call.
       if (callId) apiEndCall(callId).catch(() => {});
+    } finally {
+      acceptInFlightRef.current = false;
     }
   }, [joinDailyRoom, teardownCallObject]);
 
