@@ -9,12 +9,17 @@
 // VoIP push (see backend DriverCallPushService), which the local
 // `hitchlink-voip` native module (PKPushRegistry) reports straight to
 // CallKit via react-native-callkeep — before this JS is necessarily running —
-// so the phone genuinely rings even locked/backgrounded. The SignalR
-// "IncomingCall" path below stays as the foreground-live path and as the
-// fallback for as long as VoIP push isn't configured/registered yet (Android
-// always, iOS until Apple credentials are set up) — see callKitCallIdsRef,
-// which lets CallKit's path take exclusive ownership of a call the moment it
-// reports it, without the two paths double-ringing.
+// so the phone genuinely rings even locked/backgrounded. On iOS, CallKit's
+// native screen is the ONE incoming-call experience we want (product
+// decision — more "professional" than our own in-app modal, and CallKit is
+// the only path that rings from the lock screen at all). But its VoIP push
+// is a separate delivery path from the live SignalR "IncomingCall" below and
+// can arrive later — so on iOS, onIncomingCall holds off showing our own
+// overlay for a short grace window (pendingSignalRIncomingRef) to let CallKit
+// claim the call first (callKitCallIdsRef), and only falls back to the in-app
+// overlay if CallKit never shows up in that window (a failed/unregistered
+// push). On Android, which has no CallKit, the SignalR path is the only path
+// and shows immediately, same as always.
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { useAuth } from './AuthContext';
@@ -85,6 +90,19 @@ export function CallProvider({ children }) {
   // Dynamic Island, in-call UI) that never clears, and can block/confuse the
   // next call.
   const callKitUuidBySrvIdRef = useRef(new Map());
+  // Product decision: on iOS, CallKit's native incoming-call screen is the
+  // one experience we want (more "professional" than our own in-app modal —
+  // also gets the driver a lock-screen/Dynamic-Island ring our JS overlay
+  // never could). But the VoIP push that triggers it is a separate delivery
+  // path from this live SignalR event and can arrive later (or, rarely, not
+  // at all — a failed push, an unregistered token). So on iOS we hold this
+  // SignalR "IncomingCall" back for a short grace window instead of showing
+  // our overlay immediately: if CallKit claims the call (onDisplayed) within
+  // that window, we never show anything; if it doesn't, we fall back to the
+  // in-app overlay rather than silently dropping the call. On Android there's
+  // no CallKit to defer to, so this whole mechanism is skipped.
+  const pendingSignalRIncomingRef = useRef(null); // { callId, timer } | null
+  const CALLKIT_GRACE_MS = 3000;
   // "CallAccepted"/"CallDeclined" for our own outgoing call can arrive over
   // SignalR before the /start POST that tells us our own callId even
   // resolves. Without this, that event is unmatchable (we don't know our
@@ -175,13 +193,7 @@ export function CallProvider({ children }) {
     }
   }, [user?.id, user?.dispatcher, joinDailyRoom, teardownCallObject]);
 
-  // ── Incoming: dispatcher called the driver (live SignalR event) ────────
-  const onIncomingCall = useCallback((p) => {
-    if (stateRef.current.status !== 'idle') return; // already on a call
-    // CallKit already reported (or is about to report) this exact call
-    // natively — let its own screen/ringtone own it instead of also showing
-    // our JS overlay + ringtone on top of it.
-    if (callKitCallIdsRef.current.has(String(p.callId))) return;
+  const showIncomingOverlay = useCallback((p) => {
     setState({
       ...initialState,
       status: 'ringing-in',
@@ -191,6 +203,33 @@ export function CallProvider({ children }) {
       token: p.token,
     });
   }, []);
+
+  // ── Incoming: dispatcher called the driver (live SignalR event) ────────
+  const onIncomingCall = useCallback((p) => {
+    if (stateRef.current.status !== 'idle') return; // already on a call
+    // CallKit already reported this exact call natively — let its own
+    // screen/ringtone own it instead of also showing our JS overlay + ringtone
+    // on top of it.
+    if (callKitCallIdsRef.current.has(String(p.callId))) return;
+
+    if (RNCallKeep && Voip) {
+      // iOS with CallKit available — give its VoIP push a short grace window
+      // to show up (see pendingSignalRIncomingRef above) instead of racing it.
+      if (pendingSignalRIncomingRef.current) clearTimeout(pendingSignalRIncomingRef.current.timer);
+      const callId = p.callId;
+      const timer = setTimeout(() => {
+        pendingSignalRIncomingRef.current = null;
+        if (stateRef.current.status !== 'idle') return; // resolved some other way meanwhile
+        if (callKitCallIdsRef.current.has(String(callId))) return; // CallKit claimed it just in time
+        console.info(`[Call] CallKit never displayed ${callId} within ${CALLKIT_GRACE_MS}ms — falling back to the in-app overlay.`);
+        showIncomingOverlay(p);
+      }, CALLKIT_GRACE_MS);
+      pendingSignalRIncomingRef.current = { callId: String(callId), timer };
+      return;
+    }
+
+    showIncomingOverlay(p);
+  }, [showIncomingOverlay]);
 
   // ── Fallback: push-notification tap (app was backgrounded/killed, so the
   // live SignalR event above was never caught). Re-fetches the call if it's
@@ -340,7 +379,15 @@ export function CallProvider({ children }) {
     // hitchlink-voip's reportNewIncomingCall) — `handle` is the serverCallId
     // we passed natively, so this is enough to mark the call CallKit-owned.
     const onDisplayed = ({ handle }) => {
-      if (handle) callKitCallIdsRef.current.add(String(handle));
+      if (!handle) return;
+      callKitCallIdsRef.current.add(String(handle));
+      // CallKit made it in time — cancel the in-app-overlay fallback so we
+      // don't show a redundant second call UI a moment later.
+      if (pendingSignalRIncomingRef.current?.callId === String(handle)) {
+        clearTimeout(pendingSignalRIncomingRef.current.timer);
+        pendingSignalRIncomingRef.current = null;
+        console.info(`[Call] CallKit displayed ${handle} — in-app overlay fallback cancelled.`);
+      }
     };
 
     // Fired when the user taps Accept on CallKit's native screen — including
@@ -469,7 +516,11 @@ export function CallProvider({ children }) {
     return () => clearTimeout(timer);
   }, [state.status, state.callId, teardownCallObject, endCallKitSession]);
 
-  useEffect(() => () => { teardownCallObject(); stopRinging(); }, [teardownCallObject]);
+  useEffect(() => () => {
+    teardownCallObject();
+    stopRinging();
+    if (pendingSignalRIncomingRef.current) clearTimeout(pendingSignalRIncomingRef.current.timer);
+  }, [teardownCallObject]);
 
   return (
     <CallContext.Provider value={{ ...state, startCall, acceptCall, declineCall, hangUp, toggleMute, loadCallFallback }}>
