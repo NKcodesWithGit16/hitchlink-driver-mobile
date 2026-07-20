@@ -34,15 +34,21 @@ public class HitchlinkVoipCoordinator: NSObject {
     }
   }
 
+  // Keys are lowercased before every store/lookup — NSUUID().UUIDString
+  // (used to mint the UUID in HitchlinkVoipPushDelegate.m) is uppercase, but
+  // react-native-callkeep hands the same UUID back to JS lowercased, so
+  // takeMetadata(forUUID:) was always missing on a case-sensitive Dictionary
+  // (confirmed via logging: onAnswered's callUUID arrives lowercase, meaning
+  // every CallKit-answered call silently had no metadata to accept with).
   @objc public func putMetadata(_ metadata: [String: Any], forUUID uuid: String) {
     lock.lock()
-    metadataByUUID[uuid] = metadata
+    metadataByUUID[uuid.lowercased()] = metadata
     lock.unlock()
   }
 
   @objc public func takeMetadata(forUUID uuid: String) -> [String: Any]? {
     lock.lock()
     defer { lock.unlock() }
-    return metadataByUUID.removeValue(forKey: uuid)
+    return metadataByUUID.removeValue(forKey: uuid.lowercased())
   }
 }
