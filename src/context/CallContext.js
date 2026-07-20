@@ -379,6 +379,7 @@ export function CallProvider({ children }) {
     // hitchlink-voip's reportNewIncomingCall) — `handle` is the serverCallId
     // we passed natively, so this is enough to mark the call CallKit-owned.
     const onDisplayed = ({ handle }) => {
+      console.info(`[Call] CallKit onDisplayed fired, handle=${handle}.`);
       if (!handle) return;
       callKitCallIdsRef.current.add(String(handle));
       // CallKit made it in time — cancel the in-app-overlay fallback so we
@@ -396,8 +397,22 @@ export function CallProvider({ children }) {
     // Joins Daily the same way acceptCall() does, then marks the call active
     // for CallKit once Daily's media actually connects.
     const onAnswered = ({ callUUID }) => {
+      console.info(`[Call] CallKit onAnswered fired, callUUID=${callUUID}.`);
       const meta = Voip.getPendingCallMetadata(callUUID);
-      if (!meta?.serverCallId || !meta.roomUrl) return;
+      if (!meta?.serverCallId || !meta.roomUrl) {
+        // getPendingCallMetadata is one-shot (native side removes the entry
+        // on read — see HitchlinkVoipCoordinator.takeMetadata), so this is
+        // either: called twice for the same callUUID (a re-fire we can't do
+        // anything about, the data is genuinely gone), or the native push
+        // handler never stored roomUrl/token for it in the first place
+        // (HitchlinkVoipPushDelegate.m only sets those keys if
+        // metadata.roomUrl/metadata.token are present in the APNs payload —
+        // if ApnsVoipPushService.cs's shape ever drifts from what that file
+        // parses, this is where it silently breaks). Logging the raw object
+        // itself is what actually tells us which of those it is.
+        console.error(`[Call] CallKit answered ${callUUID} but had no usable call metadata — cannot accept. meta=`, JSON.stringify(meta));
+        return;
+      }
       // Record the mapping up front (before the accept/join chain below even
       // starts) so that however this call ends — success, failure, or a
       // remote hangup arriving mid-join — reset()'s endCallKitSession can
@@ -409,7 +424,10 @@ export function CallProvider({ children }) {
       // both surfaces showed), the second /accept 409s and its catch below would
       // /end the very call the first invocation just connected. A ref closes the
       // race a React-state guard can't.
-      if (acceptInFlightRef.current) return;
+      if (acceptInFlightRef.current) {
+        console.warn(`[Call] onAnswered for ${callUUID} skipped — another accept is already in flight.`);
+        return;
+      }
       acceptInFlightRef.current = true;
       setState({
         ...initialState,
@@ -419,8 +437,9 @@ export function CallProvider({ children }) {
         roomUrl: meta.roomUrl,
         token: meta.token,
       });
+      console.info(`[Call] Accepting ${meta.serverCallId} via CallKit — calling /accept then joining Daily.`);
       apiAcceptCall(meta.serverCallId)
-        .then(() => joinDailyRoom(meta.roomUrl, meta.token))
+        .then(() => { console.info(`[Call] /accept succeeded for ${meta.serverCallId} — dispatcher should now see CallAccepted.`); return joinDailyRoom(meta.roomUrl, meta.token); })
         .then(() => RNCallKeep.setCurrentCallActive(callUUID))
         .catch((err) => {
           console.error('[Call] CallKit accept failed:', err);
