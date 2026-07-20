@@ -25,6 +25,7 @@ try {
  *   onCallDeclined: (payload) => void,
  *   onCallEnded: (payload) => void,
  *   onCallCancelled: (payload) => void,
+ *   onCallHandledElsewhere: (payload) => void,
  * }} handlers
  */
 export function useCallSocket(driverId, handlers) {
@@ -47,12 +48,17 @@ export function useCallSocket(driverId, handlers) {
     const onDeclined  = (p) => handlersRef.current.onCallDeclined?.(p);
     const onEnded     = (p) => handlersRef.current.onCallEnded?.(p);
     const onCancelled = (p) => handlersRef.current.onCallCancelled?.(p);
+    // Sent to every one of this driver's own connections once any ONE of them
+    // has accepted/declined a call — lets a sibling session (e.g. the app
+    // reconnecting on a second device) stand down instead of ringing forever.
+    const onHandledElsewhere = (p) => handlersRef.current.onCallHandledElsewhere?.(p);
 
     conn.on('IncomingCall', onIncoming);
     conn.on('CallAccepted', onAccepted);
     conn.on('CallDeclined', onDeclined);
     conn.on('CallEnded', onEnded);
     conn.on('CallCancelled', onCancelled);
+    conn.on('CallHandledElsewhere', onHandledElsewhere);
 
     const joinRoom = () => conn.invoke('JoinDriverRoom', String(driverId)).catch(() => {});
     conn.onreconnected(joinRoom);

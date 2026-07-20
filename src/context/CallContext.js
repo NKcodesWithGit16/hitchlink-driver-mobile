@@ -77,20 +77,48 @@ export function CallProvider({ children }) {
   // double-ringing. The actual call metadata (roomUrl/token/callerName) lives
   // natively, keyed by CallKit's call UUID — see Voip.getPendingCallMetadata.
   const callKitCallIdsRef = useRef(new Set());
+  // serverCallId -> CallKit's own callUUID, for calls CallKit answered (see
+  // onAnswered below). Lets any JS-driven end of the call (remote hangup,
+  // local hangup/decline, ring timeout) also retire CallKit's native session
+  // — without this, ending the call any way OTHER than tapping CallKit's own
+  // end button leaves iOS showing a phantom "active call" (lock screen,
+  // Dynamic Island, in-call UI) that never clears, and can block/confuse the
+  // next call.
+  const callKitUuidBySrvIdRef = useRef(new Map());
+  // "CallAccepted"/"CallDeclined" for our own outgoing call can arrive over
+  // SignalR before the /start POST that tells us our own callId even
+  // resolves. Without this, that event is unmatchable (we don't know our
+  // callId yet) and gets silently dropped: the dispatcher is already
+  // connected/hung up, and we sit on "Calling…" until the 45s ring timeout
+  // eventually cleans it up. Set by onCallAccepted/onCallDeclined when that
+  // happens; consumed by startCall once its POST resolves. There's only ever
+  // one outgoing call in flight per client, so an early resolution can only
+  // be about it.
+  const pendingResolutionRef = useRef(null);
+
+  const endCallKitSession = useCallback((serverCallId) => {
+    if (!RNCallKeep || !serverCallId) return;
+    const uuid = callKitUuidBySrvIdRef.current.get(String(serverCallId));
+    if (!uuid) return;
+    callKitUuidBySrvIdRef.current.delete(String(serverCallId));
+    console.info(`[Call] Retiring CallKit session ${uuid} for call ${serverCallId}.`);
+    try { RNCallKeep.endCall(uuid); } catch (err) { console.warn(`[Call] RNCallKeep.endCall(${uuid}) failed:`, err); }
+  }, []);
 
   const teardownCallObject = useCallback(async () => {
     const co = callObjectRef.current;
     callObjectRef.current = null;
     if (co) {
-      try { await co.leave(); } catch {}
-      try { co.destroy(); } catch {}
+      try { await co.leave(); } catch (err) { console.warn('[Call] co.leave() failed during teardown (likely already left):', err); }
+      try { co.destroy(); } catch (err) { console.warn('[Call] co.destroy() failed during teardown (likely already destroyed):', err); }
     }
   }, []);
 
   const reset = useCallback(() => {
+    endCallKitSession(stateRef.current.callId);
     teardownCallObject();
     setState(initialState);
-  }, [teardownCallObject]);
+  }, [teardownCallObject, endCallKitSession]);
 
   const joinDailyRoom = useCallback(async (roomUrl, token) => {
     if (!Daily) {
@@ -107,17 +135,45 @@ export function CallProvider({ children }) {
   // ── Outgoing: driver taps Call on the Messages header ──────────────────
   const startCall = useCallback(async () => {
     if (!user?.id || stateRef.current.status !== 'idle') return;
+    pendingResolutionRef.current = null;
     setState({ ...initialState, status: 'ringing-out', peerName: user?.dispatcher?.name || 'Dispatcher' });
     try {
       const res = await apiStartCall(user.id);
+      const pending = pendingResolutionRef.current;
+      pendingResolutionRef.current = null;
+      if (stateRef.current.status !== 'ringing-out') return; // cancelled locally while /start was in flight
+
+      if (pending && pending.callId === res.callId && pending.type === 'accepted') {
+        // The dispatcher already answered before we even learned our own
+        // callId (see pendingResolutionRef above) — join right away instead
+        // of sitting on "Calling…" for a resolution that already happened.
+        console.info(`[Call] ${res.callId} was already accepted before we learned our own callId — joining now instead of waiting.`);
+        setState((s) => ({ ...s, callId: res.callId, roomUrl: res.roomUrl, token: res.token }));
+        joinDailyRoom(res.roomUrl, res.token).catch((err) => {
+          console.error(`[Call] Join failed for ${res.callId} (early-accepted path):`, err);
+          teardownCallObject();
+          setState({ ...initialState, status: 'ended', error: 'Could not connect the call.' });
+          setTimeout(() => setState((cur) => (cur.status === 'ended' ? initialState : cur)), 2500);
+          apiEndCall(res.callId).catch(() => {});
+        });
+        return;
+      }
+      if (pending && pending.callId === res.callId) {
+        // Declined (or ended) before we learned our own callId.
+        console.info(`[Call] ${res.callId} was already ${pending.type} before we learned our own callId.`);
+        setState({ ...initialState, status: 'ended', error: pending.type === 'declined' ? 'Call declined.' : 'Call ended.' });
+        setTimeout(() => setState((cur) => (cur.status === 'ended' ? initialState : cur)), 2500);
+        return;
+      }
       setState((s) => (s.status === 'ringing-out'
         ? { ...s, callId: res.callId, roomUrl: res.roomUrl, token: res.token }
         : s));
     } catch (err) {
+      console.error('[Call] startCall failed:', err);
       setState({ ...initialState, status: 'ended', error: 'Could not start the call.' });
       setTimeout(() => setState((s) => (s.status === 'ended' ? initialState : s)), 2500);
     }
-  }, [user?.id, user?.dispatcher]);
+  }, [user?.id, user?.dispatcher, joinDailyRoom, teardownCallObject]);
 
   // ── Incoming: dispatcher called the driver (live SignalR event) ────────
   const onIncomingCall = useCallback((p) => {
@@ -173,6 +229,7 @@ export function CallProvider({ children }) {
       await joinDailyRoom(roomUrl, token);
     } catch (err) {
       console.error('[Call] acceptCall failed:', err);
+      endCallKitSession(callId);
       teardownCallObject();
       setState({ ...initialState, status: 'ended', error: 'Could not connect the call.' });
       setTimeout(() => setState((s) => (s.status === 'ended' ? initialState : s)), 2500);
@@ -186,7 +243,7 @@ export function CallProvider({ children }) {
     } finally {
       acceptInFlightRef.current = false;
     }
-  }, [joinDailyRoom, teardownCallObject]);
+  }, [joinDailyRoom, teardownCallObject, endCallKitSession]);
 
   const declineCall = useCallback(() => {
     const { callId } = stateRef.current;
@@ -213,13 +270,23 @@ export function CallProvider({ children }) {
 
   const onCallAccepted = useCallback(({ callId }) => {
     const s = stateRef.current;
-    if (s.callId !== callId || s.status !== 'ringing-out') return;
+    if (s.status !== 'ringing-out') return;
+    if (s.callId === null) {
+      // Our own /start hasn't resolved yet — remember it and let startCall's
+      // continuation pick it up once it knows the callId (and has
+      // roomUrl/token to actually join with). See pendingResolutionRef above.
+      console.info(`[Call] CallAccepted for ${callId} arrived before our own callId was known — queuing it.`);
+      pendingResolutionRef.current = { type: 'accepted', callId };
+      return;
+    }
+    if (s.callId !== callId) return;
     // The dispatcher answered — join our own side. If *our* join fails, end the
     // call so they're not left alone in an already-connected room, and surface
     // why. Mirrors acceptCall()'s error handling, which was previously missing
     // on this caller-side path (an unhandled rejection that left the dispatcher
     // stranded until the ring timeout eventually fired).
-    joinDailyRoom(s.roomUrl, s.token).catch(() => {
+    joinDailyRoom(s.roomUrl, s.token).catch((err) => {
+      console.error(`[Call] Join failed for ${callId} after the dispatcher accepted:`, err);
       teardownCallObject();
       setState({ ...initialState, status: 'ended', error: 'Could not connect the call.' });
       setTimeout(() => setState((cur) => (cur.status === 'ended' ? initialState : cur)), 2500);
@@ -228,7 +295,13 @@ export function CallProvider({ children }) {
   }, [joinDailyRoom, teardownCallObject]);
 
   const onCallDeclined = useCallback(({ callId }) => {
-    if (stateRef.current.callId !== callId) return;
+    const s = stateRef.current;
+    if (s.status === 'ringing-out' && s.callId === null) {
+      console.info(`[Call] CallDeclined for ${callId} arrived before our own callId was known — queuing it.`);
+      pendingResolutionRef.current = { type: 'declined', callId };
+      return;
+    }
+    if (s.callId !== callId) return;
     reset();
   }, [reset]);
 
@@ -242,7 +315,20 @@ export function CallProvider({ children }) {
     reset();
   }, [reset]);
 
-  useCallSocket(signedIn ? user?.id : null, { onIncomingCall, onCallAccepted, onCallDeclined, onCallEnded, onCallCancelled });
+  // A sibling session (e.g. this same driver signed in on a second device)
+  // already answered/declined this call — stand down instead of being left
+  // ringing here forever. Ignored while we ourselves are mid-accept
+  // (acceptInFlightRef) so this can't race the call this device is in the
+  // middle of connecting.
+  const onCallHandledElsewhere = useCallback(({ callId }) => {
+    if (acceptInFlightRef.current) return;
+    const s = stateRef.current;
+    if (s.callId !== callId || s.status !== 'ringing-in') return;
+    console.info(`[Call] ${callId} was answered/declined on another session — dismissing here.`);
+    reset();
+  }, [reset]);
+
+  useCallSocket(signedIn ? user?.id : null, { onIncomingCall, onCallAccepted, onCallDeclined, onCallEnded, onCallCancelled, onCallHandledElsewhere });
 
   // ── CallKit (iOS): reacts to the native call UI a VoIP push already put on
   // screen — see the module-level comment for how this and the SignalR path
@@ -265,6 +351,11 @@ export function CallProvider({ children }) {
     const onAnswered = ({ callUUID }) => {
       const meta = Voip.getPendingCallMetadata(callUUID);
       if (!meta?.serverCallId || !meta.roomUrl) return;
+      // Record the mapping up front (before the accept/join chain below even
+      // starts) so that however this call ends — success, failure, or a
+      // remote hangup arriving mid-join — reset()'s endCallKitSession can
+      // find this UUID and retire CallKit's native session with it.
+      callKitUuidBySrvIdRef.current.set(String(meta.serverCallId), callUUID);
       // Same synchronous re-entrancy guard as acceptCall(). If the JS overlay's
       // Accept and this CallKit answer both resolve for the same call (possible
       // when the SignalR IncomingCall raced ahead of CallKit's didDisplay, so
@@ -303,7 +394,13 @@ export function CallProvider({ children }) {
     const onEndedCall = ({ callUUID }) => {
       const meta = Voip.getPendingCallMetadata(callUUID);
       const serverCallId = meta?.serverCallId ?? stateRef.current.callId;
-      if (serverCallId) callKitCallIdsRef.current.delete(String(serverCallId));
+      if (serverCallId) {
+        callKitCallIdsRef.current.delete(String(serverCallId));
+        // CallKit is already tearing this session down natively (this event
+        // IS that teardown) — drop the mapping without calling
+        // RNCallKeep.endCall again via reset()'s endCallKitSession below.
+        callKitUuidBySrvIdRef.current.delete(String(serverCallId));
+      }
       const wasActive = stateRef.current.status === 'active' && String(stateRef.current.callId) === String(serverCallId);
       reset();
       if (!serverCallId) return;
@@ -359,6 +456,7 @@ export function CallProvider({ children }) {
     const timer = setTimeout(() => {
       const s = stateRef.current;
       if (s.status !== status || s.callId !== callId) return; // already resolved elsewhere
+      endCallKitSession(callId);
       teardownCallObject();
       if (status === 'ringing-out') {
         setState({ ...initialState, status: 'ended', error: 'No answer.' });
@@ -369,7 +467,7 @@ export function CallProvider({ children }) {
       if (callId) apiEndCall(callId, 'timeout').catch(() => {});
     }, RING_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [state.status, state.callId, teardownCallObject]);
+  }, [state.status, state.callId, teardownCallObject, endCallKitSession]);
 
   useEffect(() => () => { teardownCallObject(); stopRinging(); }, [teardownCallObject]);
 
