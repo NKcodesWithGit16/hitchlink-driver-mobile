@@ -1,10 +1,12 @@
 import { View, StyleSheet, Linking, Platform } from 'react-native';
 import IconButton from '../ui/IconButton';
+import { useT } from '../../i18n/LanguageContext';
 import { space } from '../../theme/tokens';
 
 /* Navigate / Call / Chat — the three things a driver reaches for.
    Navigate HANDS OFF to the phone's own maps app (never in-app). */
 export default function ActionGrid({ address, phone, onChat }) {
+  const t = useT();
   const navigate = () => {
     const q = encodeURIComponent(address || '');
     const url = Platform.select({
@@ -21,9 +23,9 @@ export default function ActionGrid({ address, phone, onChat }) {
 
   return (
     <View style={styles.row}>
-      <IconButton icon="navigation" label="Navigate" tone="teal" onPress={navigate} />
-      <IconButton icon="phone" label="Call" tone="go" onPress={call} />
-      <IconButton icon="message-circle" label="Chat" tone="teal" onPress={onChat} />
+      <IconButton icon="navigation" label={t('load.navigate')} tone="teal" onPress={navigate} />
+      <IconButton icon="phone" label={t('load.call')} tone="go" onPress={call} />
+      <IconButton icon="message-circle" label={t('tabs.chat')} tone="teal" onPress={onChat} />
     </View>
   );
 }

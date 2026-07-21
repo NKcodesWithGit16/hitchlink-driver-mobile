@@ -12,25 +12,27 @@ import UndoToast from '../src/components/ui/UndoToast';
 import NotificationCard from '../src/components/driver/NotificationCard';
 import haptics from '../src/lib/haptics';
 import { useTheme } from '../src/theme/ThemeContext';
+import { useT } from '../src/i18n/LanguageContext';
 import { useNotifications } from '../src/context/AlertContext';
 import { space, type, radius, FONT, motion, shadow } from '../src/theme/tokens';
-
-// Chip → which categories it shows (+ an icon so it reads at a glance).
-// 'all' is a passthrough.
-const FILTERS = [
-  { key: 'all', label: 'All', icon: 'inbox', cats: null },
-  { key: 'load', label: 'Loads', icon: 'truck', cats: ['load'] },
-  { key: 'hos', label: 'Safety', icon: 'shield', cats: ['hos'] },
-  { key: 'document', label: 'Docs', icon: 'file-text', cats: ['document'] },
-  { key: 'earnings', label: 'Pay', icon: 'dollar-sign', cats: ['earnings'] },
-  { key: 'weather', label: 'Weather', icon: 'cloud', cats: ['weather'] },
-];
 
 export default function AlertsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
+  const t = useT();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+
+  // Chip → which categories it shows (+ an icon so it reads at a glance).
+  // 'all' is a passthrough.
+  const FILTERS = [
+    { key: 'all', label: t('alerts.filterAll'), icon: 'inbox', cats: null },
+    { key: 'load', label: t('alerts.filterLoads'), icon: 'truck', cats: ['load'] },
+    { key: 'hos', label: t('alerts.filterSafety'), icon: 'shield', cats: ['hos'] },
+    { key: 'document', label: t('alerts.filterDocs'), icon: 'file-text', cats: ['document'] },
+    { key: 'earnings', label: t('alerts.filterPay'), icon: 'dollar-sign', cats: ['earnings'] },
+    { key: 'weather', label: t('alerts.filterWeather'), icon: 'cloud', cats: ['weather'] },
+  ];
   const {
     notifications, unreadCount, markRead, markAllRead, dismiss, clearAll, restoreAll,
     commitPending, refresh, openModal,
@@ -51,15 +53,15 @@ export default function AlertsScreen() {
   // whatever was there — whether the driver removed one card or all of them.
   const removeOne = useCallback((item) => {
     haptics.press();
-    setUndo({ message: 'Notification removed', snapshot: notifications });
+    setUndo({ message: t('alerts.notificationRemoved'), snapshot: notifications });
     dismiss(item.id);
-  }, [notifications, dismiss]);
+  }, [notifications, dismiss, t]);
 
   const handleRemoveAll = useCallback(() => {
     haptics.press();
-    setUndo({ message: 'All notifications removed', snapshot: notifications });
+    setUndo({ message: t('alerts.allRemoved'), snapshot: notifications });
     clearAll();
-  }, [notifications, clearAll]);
+  }, [notifications, clearAll, t]);
 
   const active = FILTERS.find((f) => f.key === filter) || FILTERS[0];
   const list = useMemo(
@@ -84,8 +86,8 @@ export default function AlertsScreen() {
   const total = notifications.length;
 
   const summary = unreadCount > 0
-    ? `${unreadCount} unread · ${total} total`
-    : total > 0 ? `All read · ${total} total` : "You're all clear";
+    ? t('alerts.summaryUnread', { unread: unreadCount, total })
+    : total > 0 ? t('alerts.summaryAllRead', { total }) : t('alerts.summaryClear');
 
   const handle = useCallback((item) => {
     haptics.tap();
@@ -136,7 +138,7 @@ export default function AlertsScreen() {
             style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
             hitSlop={8}
             accessibilityRole="button"
-            accessibilityLabel="Back"
+            accessibilityLabel={t('alerts.backA11y')}
           >
             <Icon name="chevron-left" size={22} color={colors.textPrimary} />
           </Pressable>
@@ -146,14 +148,14 @@ export default function AlertsScreen() {
               style={[styles.markAll, { backgroundColor: colors.tealFill, borderColor: colors.teal + '40' }]}
               hitSlop={8}
               accessibilityRole="button"
-              accessibilityLabel="Mark all as read"
+              accessibilityLabel={t('alerts.markAllReadA11y')}
             >
               <Icon name="check" size={14} color={colors.teal} />
-              <Text style={styles.markAllText}>Mark all read</Text>
+              <Text style={styles.markAllText}>{t('alerts.markAllRead')}</Text>
             </Pressable>
           ) : null}
         </View>
-        <Text style={styles.bigTitle}>Alerts</Text>
+        <Text style={styles.bigTitle}>{t('alerts.title')}</Text>
         <Text style={styles.bigSub}>{summary}</Text>
       </View>
 
@@ -218,10 +220,9 @@ export default function AlertsScreen() {
           <View style={styles.emptyIcon}>
             <Icon name="check-circle" size={34} color={colors.go} />
           </View>
-          <Text style={styles.emptyTitle}>You're all caught up</Text>
+          <Text style={styles.emptyTitle}>{t('alerts.allCaughtUp')}</Text>
           <Text style={styles.emptyText}>
-            No {active.key === 'all' ? '' : active.label.toLowerCase() + ' '}alerts right now. We'll
-            let you know the moment something needs you.
+            {t('alerts.emptyFiltered', { filter: active.key === 'all' ? '' : active.label.toLowerCase() + ' ' })}
           </Text>
         </View>
       ) : (
@@ -232,19 +233,19 @@ export default function AlertsScreen() {
         >
           {critical.length > 0 && (
             <View style={styles.section}>
-              <SectionHead label="Needs attention" count={critical.length} accent={colors.caution} />
+              <SectionHead label={t('alerts.needsAttention')} count={critical.length} accent={colors.caution} />
               <View style={styles.stack}>{critical.map(renderCard)}</View>
             </View>
           )}
           {news.length > 0 && (
             <View style={styles.section}>
-              <SectionHead label="New" count={news.length} accent={colors.teal} live />
+              <SectionHead label={t('alerts.new')} count={news.length} accent={colors.teal} live />
               <View style={styles.stack}>{news.map(renderCard)}</View>
             </View>
           )}
           {earlier.length > 0 && (
             <View style={styles.section}>
-              <SectionHead label="Earlier" count={earlier.length} />
+              <SectionHead label={t('alerts.earlier')} count={earlier.length} />
               <View style={styles.stack}>{earlier.map(renderCard)}</View>
             </View>
           )}
@@ -258,7 +259,7 @@ export default function AlertsScreen() {
             onPress={handleRemoveAll}
             style={({ pressed }) => [styles.removeAll, shadow.glow(colors.danger), { transform: [{ scale: pressed ? 0.96 : 1 }] }]}
             accessibilityRole="button"
-            accessibilityLabel="Remove all notifications"
+            accessibilityLabel={t('alerts.removeAllA11y')}
           >
             <LinearGradient
               colors={['#A81719', '#7E1012']}
@@ -267,7 +268,7 @@ export default function AlertsScreen() {
               style={styles.removeAllInner}
             >
               <Icon name="trash-2" size={17} color="#FFFFFF" />
-              <Text style={styles.removeAllText}>Remove all</Text>
+              <Text style={styles.removeAllText}>{t('alerts.removeAll')}</Text>
             </LinearGradient>
           </Pressable>
         </View>

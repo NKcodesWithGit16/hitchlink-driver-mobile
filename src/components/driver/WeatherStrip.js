@@ -1,25 +1,27 @@
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import Icon from '../ui/Icon';
 import { useTheme } from '../../theme/ThemeContext';
+import { useT } from '../../i18n/LanguageContext';
 import { radius, space, type, toneOf, FONT } from '../../theme/tokens';
 
 /* Calm when clear, loud when dangerous. Tapping an alert opens the takeover. */
 export default function WeatherStrip({ now, alert, onPress }) {
   const { colors } = useTheme();
+  const t = useT();
 
   if (alert) {
-    const t = toneOf(colors, alert.severity === 'severe' ? 'danger' : 'caution');
+    const tone = toneOf(colors, alert.severity === 'severe' ? 'danger' : 'caution');
     return (
       <Pressable
         onPress={onPress}
-        style={[styles.alert, { backgroundColor: t.fill, borderColor: t.solid + '55' }]}
+        style={[styles.alert, { backgroundColor: tone.fill, borderColor: tone.solid + '55' }]}
         accessibilityRole="button"
       >
-        <Icon name="alert-triangle" size={20} color={t.solid} />
+        <Icon name="alert-triangle" size={20} color={tone.solid} />
         <View style={{ flex: 1 }}>
-          <Text style={[styles.alertTitle, { color: t.solid }]} numberOfLines={1}>{alert.title}</Text>
+          <Text style={[styles.alertTitle, { color: tone.solid }]} numberOfLines={1}>{alert.title}</Text>
           <Text style={[styles.alertSub, { color: colors.textSecondary }]} numberOfLines={1}>
-            Near {alert.near} · ~{alert.etaMinutes} min ahead
+            {t('load.nearEtaAhead', { place: alert.near, mins: alert.etaMinutes })}
           </Text>
         </View>
         <Icon name="chevron-right" size={18} color={colors.textMuted} />
@@ -31,7 +33,7 @@ export default function WeatherStrip({ now, alert, onPress }) {
     <View style={[styles.calm, { backgroundColor: colors.surface, borderColor: colors.border }]}>
       <Icon name={now?.icon || 'cloud'} size={16} color={colors.textSecondary} />
       <Text style={[styles.calmText, { color: colors.textSecondary }]}>
-        {now ? `${now.condition} · ${now.tempF}°F ahead` : 'Weather looks clear ahead'}
+        {now ? t('load.conditionAhead', { condition: now.condition, temp: now.tempF }) : t('load.weatherClearAhead')}
       </Text>
     </View>
   );

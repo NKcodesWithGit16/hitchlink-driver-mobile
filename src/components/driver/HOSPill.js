@@ -1,6 +1,7 @@
 import { Text, StyleSheet, Pressable } from 'react-native';
 import Icon from '../ui/Icon';
 import { useTheme } from '../../theme/ThemeContext';
+import { useT } from '../../i18n/LanguageContext';
 import { radius, type, toneOf, FONT } from '../../theme/tokens';
 import { hm } from '../../lib/format';
 
@@ -14,16 +15,17 @@ export function hosState(driveMinutesLeft) {
 
 export default function HOSPill({ driveMinutesLeft, onPress }) {
   const { colors } = useTheme();
-  const t = toneOf(colors, hosState(driveMinutesLeft));
+  const t = useT();
+  const tone = toneOf(colors, hosState(driveMinutesLeft));
   return (
     <Pressable
       onPress={onPress}
-      style={[styles.wrap, { backgroundColor: t.fill, borderColor: t.solid + '40' }]}
+      style={[styles.wrap, { backgroundColor: tone.fill, borderColor: tone.solid + '40' }]}
       accessibilityRole="button"
-      accessibilityLabel={`Hours of service: ${hm(driveMinutesLeft)} of drive time left`}
+      accessibilityLabel={t('load.hosA11y', { time: hm(driveMinutesLeft) })}
     >
-      <Icon name="clock" size={13} color={t.solid} />
-      <Text style={[styles.label, { color: t.solid }]}>DRIVE</Text>
+      <Icon name="clock" size={13} color={tone.solid} />
+      <Text style={[styles.label, { color: tone.solid }]}>{t('load.driveLabel')}</Text>
       <Text style={[styles.value, { color: colors.textPrimary }, type.num]}>{hm(driveMinutesLeft)}</Text>
     </Pressable>
   );

@@ -2,11 +2,13 @@ import { View, Text, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from '../ui/Icon';
 import { useTheme } from '../../theme/ThemeContext';
+import { useT } from '../../i18n/LanguageContext';
 import { space, radius, FONT, shadow } from '../../theme/tokens';
 import { money, num } from '../../lib/format';
 
 export default function MissionStrip({ load }) {
   const { colors } = useTheme();
+  const t = useT();
   return (
     <LinearGradient
       colors={colors.gradients.brand}
@@ -37,7 +39,7 @@ export default function MissionStrip({ load }) {
         {load.deliverBy ? (
           <>
             <View style={styles.pipDivider} />
-            <Pill icon="clock" label={`By ${load.deliverBy}`} />
+            <Pill icon="clock" label={t('load.byDeliverBy', { date: load.deliverBy })} />
           </>
         ) : null}
       </View>

@@ -2,12 +2,14 @@ import { View, Text, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from '../ui/Icon';
 import { useTheme } from '../../theme/ThemeContext';
+import { useT } from '../../i18n/LanguageContext';
 import { radius, space, type, shadow, FONT } from '../../theme/tokens';
 
 /* The hero glance card: one giant destination, deadline, distance, ETA.
    Readable in under a second from the wheel. */
 export default function NextStopCard({ stop }) {
   const { colors } = useTheme();
+  const t = useT();
   const isPickup = stop.kind === 'PICKUP';
   return (
     <LinearGradient
@@ -17,9 +19,11 @@ export default function NextStopCard({ stop }) {
     >
       <View style={styles.head}>
         <Icon name={isPickup ? 'package' : 'flag'} size={15} color={colors.teal} />
-        <Text style={[styles.kicker, { color: colors.teal }]}>NEXT: {isPickup ? 'PICKUP' : 'DELIVERY'}</Text>
+        <Text style={[styles.kicker, { color: colors.teal }]}>
+          {t('load.nextKicker', { kind: isPickup ? t('load.pickupCaps') : t('load.deliveryCaps') })}
+        </Text>
         <View style={{ flex: 1, minWidth: space[3] }} />
-        <Text style={[styles.by, { color: colors.textSecondary }]} numberOfLines={1}>{stop.date} · by {stop.by}</Text>
+        <Text style={[styles.by, { color: colors.textSecondary }]} numberOfLines={1}>{stop.date} · {t('load.byTime', { time: stop.by })}</Text>
       </View>
 
       <Text style={[styles.city, { color: colors.textPrimary }]} numberOfLines={1} adjustsFontSizeToFit>{stop.city}</Text>
@@ -28,12 +32,12 @@ export default function NextStopCard({ stop }) {
       <View style={[styles.metrics, { backgroundColor: colors.isDay ? 'rgba(8,15,30,0.05)' : 'rgba(0,0,0,0.22)' }]}>
         <View style={styles.metric}>
           <Text style={[styles.metricVal, { color: colors.textPrimary }, type.num]}>{stop.remainingMiles ?? '—'}</Text>
-          <Text style={[styles.metricUnit, { color: colors.textMuted }]}>mi away</Text>
+          <Text style={[styles.metricUnit, { color: colors.textMuted }]}>{t('load.miAway')}</Text>
         </View>
         <View style={[styles.divider, { backgroundColor: colors.border }]} />
         <View style={styles.metric}>
           <Text style={[styles.metricVal, { color: colors.textPrimary }, type.num]}>{stop.eta ?? '—'}</Text>
-          <Text style={[styles.metricUnit, { color: colors.textMuted }]}>drive time</Text>
+          <Text style={[styles.metricUnit, { color: colors.textMuted }]}>{t('load.driveTimeLabel')}</Text>
         </View>
       </View>
     </LinearGradient>
