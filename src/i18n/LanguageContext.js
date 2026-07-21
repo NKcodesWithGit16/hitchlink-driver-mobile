@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import * as Localization from 'expo-localization';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { en } from './en';
 import { ka } from './ka';
@@ -11,8 +10,13 @@ const DICTS = { en, ka };
 const LanguageContext = createContext(null);
 
 // Georgian locale tags look like "ka", "ka-GE" — match on the primary subtag.
+// expo-localization ships a native module, so a dev client built before it
+// was linked (or Expo Go without it) would throw at import time. require()
+// it lazily inside the try so that case degrades to English instead of
+// crashing app boot — the in-app language switcher still works either way.
 function systemDefault() {
   try {
+    const Localization = require('expo-localization');
     const tag = Localization.getLocales?.()[0]?.languageCode;
     return tag === 'ka' ? 'ka' : 'en';
   } catch {
