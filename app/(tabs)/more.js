@@ -9,6 +9,7 @@ import CountUp from '../../src/components/ui/CountUp';
 import FadeInView from '../../src/components/ui/FadeInView';
 import { hosState } from '../../src/components/driver/HOSPill';
 import { useTheme } from '../../src/theme/ThemeContext';
+import { useT, useLanguage } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useConfirmEveryStep, setConfirmEveryStep } from '../../src/lib/prefs';
 import { fetchHos, fetchActiveLoad } from '../../src/api/main';
@@ -17,62 +18,17 @@ import { hm } from '../../src/lib/format';
 import { space, type, radius, elevation, toneOf, FONT, shadow, ACCENT_PRESETS, BG_PRESETS_NIGHT } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 
-const THEME_OPTIONS = [
-  { key: 'auto',  label: 'Auto',  icon: 'zap'  },
-  { key: 'day',   label: 'Day',   icon: 'sun'  },
-  { key: 'night', label: 'Night', icon: 'moon' },
-];
-
 // Demo "standing" metrics — the reputation numbers a real app would pull from
 // the dispatch backend. Kept here (not in the shared fixtures) because they're
 // presentation-only for this screen.
-const STANDING = { score: 96, tier: 'Elite', percentile: 5, rating: 4.9, onTimePct: 98, streak: 12, acceptPct: 94 };
-
-// Icon hues carry a `tone` resolved against the live theme at render — the
-// brand tone follows the driver's chosen accent; the rest are fixed category
-// colors from the design system (never raw inline hex).
-const QUICK_ACTIONS = [
-  { icon: 'zap',            label: 'ELD',      sub: 'Connect device', tone: 'teal',   onPress: () => Alert.alert('ELD', 'ELD integration coming soon.') },
-  { icon: 'message-circle', label: 'Support',  sub: 'Chat with us',   tone: 'blue',   onPress: () => Alert.alert('Support', "We're a tap away. Call 1-800-HITCH.") },
-  { icon: 'star',           label: 'Feedback', sub: 'Rate the app',   tone: 'purple', onPress: () => Alert.alert('Feedback', 'Thank you! Rating coming soon.') },
-];
-
-// Settings grouped into labeled sections the way top-tier apps organize them.
-// `route` navigates; otherwise a row falls back to an informational alert.
-const SETTING_GROUPS = [
-  {
-    title: 'Account',
-    rows: [
-      { icon: 'user',        label: 'Profile',        tone: 'teal',   route: '/edit-profile'           },
-      { icon: 'truck',       label: 'Truck info',     tone: 'blue',   metaKey: 'truck'                 },
-      { icon: 'file-text',   label: 'Documents',      tone: 'green',  meta: 'Manage', route: '/(tabs)/documents' },
-      { icon: 'credit-card', label: 'Payout method',  tone: 'purple', meta: 'Direct deposit'           },
-    ],
-  },
-  {
-    title: 'Preferences',
-    rows: [
-      { icon: 'bell',        label: 'Notifications',  tone: 'orange', meta: 'On'         },
-      { icon: 'globe',       label: 'Language',       tone: 'green',  meta: 'English'    },
-      { icon: 'map',         label: 'Distance units', tone: 'teal',   meta: 'Miles'      },
-      { icon: 'navigation',  label: 'Navigation app', tone: 'blue',   meta: 'Apple Maps' },
-    ],
-  },
-  {
-    title: 'Support',
-    rows: [
-      { icon: 'help-circle', label: 'Help center',     tone: 'teal'   },
-      { icon: 'phone',       label: 'Contact support', tone: 'green',  meta: '1-800-HITCH' },
-      { icon: 'star',        label: 'Rate the app',    tone: 'orange' },
-      { icon: 'shield',      label: 'Terms & privacy', tone: 'purple' },
-    ],
-  },
-];
+const STANDING = { score: 96, tierKey: 'more.eliteTier', percentile: 5, rating: 4.9, onTimePct: 98, streak: 12, acceptPct: 94 };
 
 export default function MoreScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { colors, mode, setMode, accentKey, setAccent, bgKey, setBg, scheme } = useTheme();
+  const t = useT();
+  const { lang, setLang } = useLanguage();
   const { user, userId, signOut } = useAuth();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   // Resolve icon tones: `teal` tracks the chosen accent; others are design-system hues.
@@ -83,6 +39,67 @@ export default function MoreScreen() {
     orange: ACCENT_PRESETS.orange.color,
     green: ACCENT_PRESETS.green.color,
   }), [colors]);
+
+  const THEME_OPTIONS = [
+    { key: 'auto',  label: t('more.themeAuto'),  icon: 'zap'  },
+    { key: 'day',   label: t('more.themeDay'),   icon: 'sun'  },
+    { key: 'night', label: t('more.themeNight'), icon: 'moon' },
+  ];
+
+  const QUICK_ACTIONS = [
+    { icon: 'zap',            label: t('more.eld'),      sub: t('more.eldSub'),      tone: 'teal',
+      onPress: () => Alert.alert(t('more.eldAlertTitle'), t('more.eldAlertBody')) },
+    { icon: 'message-circle', label: t('more.support'),  sub: t('more.supportSub'),  tone: 'blue',
+      onPress: () => Alert.alert(t('more.support'), t('more.supportAlertBody')) },
+    { icon: 'star',           label: t('more.feedback'), sub: t('more.feedbackSub'), tone: 'purple',
+      onPress: () => Alert.alert(t('more.feedback'), t('more.feedbackAlertBody')) },
+  ];
+
+  const languageLabel = lang === 'ka' ? t('more.languageGeorgian') : t('more.languageEnglish');
+
+  // ACCENT_PRESETS/BG_PRESETS_NIGHT live in theme/tokens.js (design tokens,
+  // not text) with English preset.label values — translate at the render
+  // site instead of threading i18n into the shared token file.
+  const COLOR_LABELS = {
+    teal: t('more.colorTeal'), blue: t('more.colorBlue'), purple: t('more.colorPurple'),
+    green: t('more.colorGreen'), orange: t('more.colorOrange'), rose: t('more.colorRose'),
+  };
+  const BG_LABELS = {
+    navy: t('more.bgNavy'), black: t('more.bgOled'), charcoal: t('more.bgCharcoal'), slate: t('more.bgSlate'),
+  };
+
+  // Settings grouped into labeled sections the way top-tier apps organize them.
+  // `route` navigates; `key: 'language'` opens the language picker; otherwise a
+  // row falls back to an informational alert.
+  const SETTING_GROUPS = [
+    {
+      title: t('more.groupAccount'),
+      rows: [
+        { icon: 'user',        label: t('more.profile'),       tone: 'teal',   route: '/edit-profile' },
+        { icon: 'truck',       label: t('more.truckInfo'),     tone: 'blue',   metaKey: 'truck' },
+        { icon: 'file-text',   label: t('more.documents'),     tone: 'green',  meta: t('more.manage'), route: '/(tabs)/documents' },
+        { icon: 'credit-card', label: t('more.payoutMethod'),  tone: 'purple', meta: t('more.directDeposit') },
+      ],
+    },
+    {
+      title: t('more.groupPreferences'),
+      rows: [
+        { icon: 'bell',        label: t('more.notifications'), tone: 'orange', meta: t('more.on') },
+        { icon: 'globe',       label: t('more.language'),      tone: 'green',  meta: languageLabel, key: 'language' },
+        { icon: 'map',         label: t('more.distanceUnits'), tone: 'teal',   meta: t('more.miles') },
+        { icon: 'navigation',  label: t('more.navigationApp'), tone: 'blue',   meta: t('more.appleMaps') },
+      ],
+    },
+    {
+      title: t('more.groupSupport'),
+      rows: [
+        { icon: 'help-circle', label: t('more.helpCenter'),     tone: 'teal'   },
+        { icon: 'phone',       label: t('more.contactSupport'), tone: 'green',  meta: '1-800-HITCH' },
+        { icon: 'star',        label: t('more.rateApp'),        tone: 'orange' },
+        { icon: 'shield',      label: t('more.termsPrivacy'),   tone: 'purple' },
+      ],
+    },
+  ];
   const [hos,        setHos]        = useState(mockHos);
   const [activeLoad, setActiveLoad] = useState(null);
   const confirmEveryStep = useConfirmEveryStep();
@@ -95,18 +112,26 @@ export default function MoreScreen() {
 
   const greeting = useMemo(() => {
     const h = new Date().getHours();
-    return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
-  }, []);
+    return h < 12 ? t('more.greetingMorning') : h < 18 ? t('more.greetingAfternoon') : t('more.greetingEvening');
+  }, [t]);
 
-  const onRow = (row) =>
-    row.route
-      ? router.push(row.route)
-      : Alert.alert(row.label, row.meta ?? user?.[row.metaKey] ?? 'Coming soon.');
+  const onRow = (row) => {
+    if (row.key === 'language') {
+      Alert.alert(t('more.language'), undefined, [
+        { text: t('more.languageEnglish'), onPress: () => setLang('en') },
+        { text: t('more.languageGeorgian'), onPress: () => setLang('ka') },
+        { text: t('common.cancel'), style: 'cancel' },
+      ]);
+      return;
+    }
+    if (row.route) { router.push(row.route); return; }
+    Alert.alert(row.label, row.meta ?? user?.[row.metaKey] ?? t('common.comingSoon'));
+  };
 
   const confirmSignOut = () =>
-    Alert.alert('Sign out', 'Sign out of HitchLink?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign out', style: 'destructive', onPress: signOut },
+    Alert.alert(t('more.signOutConfirmTitle'), t('more.signOutConfirmBody'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: t('more.signOut'), style: 'destructive', onPress: signOut },
     ]);
 
   return (
@@ -131,7 +156,7 @@ export default function MoreScreen() {
                 hitSlop={10}
                 style={styles.heroEditBtn}
                 accessibilityRole="button"
-                accessibilityLabel="Edit profile"
+                accessibilityLabel={t('more.editProfileA11y')}
               >
                 <Icon name="edit-2" size={15} color="rgba(255,255,255,0.9)" />
               </Pressable>
@@ -145,18 +170,18 @@ export default function MoreScreen() {
                 ) : (
                   <View style={styles.avatarInner}>
                     <Text style={styles.avatarText}>
-                      {(user?.firstName || 'D').slice(0, 1).toUpperCase()}
+                      {(user?.firstName || t('more.driver')).slice(0, 1).toUpperCase()}
                     </Text>
                   </View>
                 )}
               </View>
 
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.heroName} numberOfLines={1}>{user?.name ?? 'Driver'}</Text>
+                <Text style={styles.heroName} numberOfLines={1}>{user?.name ?? t('more.driver')}</Text>
                 <Text style={styles.heroTruck} numberOfLines={1}>{user?.truck}</Text>
                 <View style={styles.heroStatusRow}>
                   <View style={styles.onDutyDot} />
-                  <Text style={styles.heroStatus}>On Duty</Text>
+                  <Text style={styles.heroStatus}>{t('more.onDuty')}</Text>
                   {activeLoad ? <Text style={styles.heroLoadId}>· {activeLoad.id}</Text> : null}
                 </View>
               </View>
@@ -164,30 +189,30 @@ export default function MoreScreen() {
 
             {/* Glass stats strip */}
             <View style={styles.heroStats}>
-              <HeroStat icon="star"       value={STANDING.rating.toFixed(1)} label="Rating"    styles={styles} />
+              <HeroStat icon="star"       value={STANDING.rating.toFixed(1)} label={t('more.rating')}    styles={styles} />
               <View style={styles.heroStatDivider} />
-              <HeroStat icon="check-circle" value={`${STANDING.onTimePct}%`}   label="On-time"   styles={styles} />
+              <HeroStat icon="check-circle" value={`${STANDING.onTimePct}%`}   label={t('more.onTime')}   styles={styles} />
               <View style={styles.heroStatDivider} />
-              <HeroStat icon="navigation" value={`${(earnings.week.miles / 1000).toFixed(1)}k`} label="Mi / week" styles={styles} />
+              <HeroStat icon="navigation" value={`${(earnings.week.miles / 1000).toFixed(1)}k`} label={t('more.miPerWeek')} styles={styles} />
             </View>
           </LinearGradient>
         </FadeInView>
 
         {/* ── Driver standing ── */}
         <FadeInView delay={60} style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Your standing</Text>
-          <StandingCard colors={colors} styles={styles} />
+          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('more.yourStanding')}</Text>
+          <StandingCard colors={colors} styles={styles} t={t} />
         </FadeInView>
 
         {/* ── HOS ── */}
         <FadeInView delay={120} style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Hours of Service</Text>
-          <HosCard hos={hos} colors={colors} styles={styles} />
+          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('more.hoursOfService')}</Text>
+          <HosCard hos={hos} colors={colors} styles={styles} t={t} />
         </FadeInView>
 
         {/* ── Quick actions ── */}
         <FadeInView delay={180} style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Quick actions</Text>
+          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('more.quickActions')}</Text>
           <View style={styles.quickRow}>
             {QUICK_ACTIONS.map(({ icon, label, sub, tone, onPress }) => {
               const color = hue[tone];
@@ -242,16 +267,16 @@ export default function MoreScreen() {
 
         {/* ── Load updates (safety) ── */}
         <FadeInView delay={340} style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Load updates</Text>
+          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('more.loadUpdates')}</Text>
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border, padding: 0, overflow: 'hidden' }, elevation[1]]}>
             <View style={styles.toggleRow}>
               <View style={[styles.settingIconBox, { backgroundColor: hue.teal + '22' }]}>
                 <Icon name="check-circle" size={17} color={hue.teal} />
               </View>
               <View style={{ flex: 1, gap: 2 }}>
-                <Text style={[styles.toggleTitle, { color: colors.textPrimary }]}>Confirm every status update</Text>
+                <Text style={[styles.toggleTitle, { color: colors.textPrimary }]}>{t('more.confirmEveryStatus')}</Text>
                 <Text style={[styles.toggleSub, { color: colors.textMuted }]}>
-                  Ask before each step. Loaded &amp; Delivered always confirm.
+                  {t('more.confirmEveryStatusSub')}
                 </Text>
               </View>
               <Switch
@@ -267,12 +292,12 @@ export default function MoreScreen() {
 
         {/* ── Appearance ── */}
         <FadeInView delay={360} style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Appearance</Text>
+          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('more.appearance')}</Text>
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, elevation[1]]}>
 
             {/* Theme */}
             <View style={styles.settingBlock}>
-              <Text style={[styles.blockLabel, { color: colors.textMuted }]}>Theme</Text>
+              <Text style={[styles.blockLabel, { color: colors.textMuted }]}>{t('more.theme')}</Text>
               <View style={styles.themeRow}>
                 {THEME_OPTIONS.map(({ key, label, icon }) => {
                   const active = mode === key;
@@ -288,7 +313,7 @@ export default function MoreScreen() {
                       hitSlop={6}
                       accessibilityRole="button"
                       accessibilityState={{ selected: active }}
-                      accessibilityLabel={`${label} theme`}
+                      accessibilityLabel={t('more.themeA11y', { label })}
                     >
                       <Icon name={icon} size={15} color={active ? colors.teal : colors.textMuted} />
                       <Text style={[styles.themeBtnText, { color: active ? colors.teal : colors.textMuted }]}>
@@ -304,10 +329,11 @@ export default function MoreScreen() {
 
             {/* Accent color */}
             <View style={styles.settingBlock}>
-              <Text style={[styles.blockLabel, { color: colors.textMuted }]}>Accent color</Text>
+              <Text style={[styles.blockLabel, { color: colors.textMuted }]}>{t('more.accentColor')}</Text>
               <View style={styles.accentRow}>
                 {Object.entries(ACCENT_PRESETS).map(([key, preset]) => {
                   const active = accentKey === key;
+                  const label = COLOR_LABELS[key] || preset.label;
                   return (
                     <Pressable
                       key={key}
@@ -316,7 +342,7 @@ export default function MoreScreen() {
                       hitSlop={8}
                       accessibilityRole="button"
                       accessibilityState={{ selected: active }}
-                      accessibilityLabel={`${preset.label} accent color`}
+                      accessibilityLabel={t('more.accentA11y', { label })}
                     >
                       <View style={[
                         styles.accentDot,
@@ -326,7 +352,7 @@ export default function MoreScreen() {
                         {active ? <Icon name="check" size={11} color="#fff" /> : null}
                       </View>
                       <Text style={[styles.accentLabel, { color: active ? colors.textPrimary : colors.textMuted }]}>
-                        {preset.label}
+                        {label}
                       </Text>
                     </Pressable>
                   );
@@ -339,10 +365,11 @@ export default function MoreScreen() {
               <>
                 <View style={[styles.blockDivider, { backgroundColor: colors.border }]} />
                 <View style={styles.settingBlock}>
-                  <Text style={[styles.blockLabel, { color: colors.textMuted }]}>Background</Text>
+                  <Text style={[styles.blockLabel, { color: colors.textMuted }]}>{t('more.background')}</Text>
                   <View style={styles.bgRow}>
                     {Object.entries(BG_PRESETS_NIGHT).map(([key, preset]) => {
                       const active = bgKey === key;
+                      const label = BG_LABELS[key] || preset.label;
                       return (
                         <Pressable
                           key={key}
@@ -354,7 +381,7 @@ export default function MoreScreen() {
                           ]}
                           accessibilityRole="button"
                           accessibilityState={{ selected: active }}
-                          accessibilityLabel={`${preset.label} background`}
+                          accessibilityLabel={t('more.backgroundA11y', { label })}
                         >
                           {active ? (
                             <View style={[styles.bgCheck, { backgroundColor: colors.teal }]}>
@@ -362,7 +389,7 @@ export default function MoreScreen() {
                             </View>
                           ) : null}
                           <Text style={[styles.bgLabel, { color: active ? colors.teal : colors.textMuted }]}>
-                            {preset.label}
+                            {label}
                           </Text>
                         </Pressable>
                       );
@@ -384,12 +411,12 @@ export default function MoreScreen() {
                 backgroundColor: pressed ? colors.dangerFill : 'transparent' },
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Sign out of HitchLink"
+            accessibilityLabel={t('more.signOutA11y')}
           >
             <Icon name="log-out" size={18} color={colors.danger} />
-            <Text style={[styles.signOutText, { color: colors.danger }]}>Sign out</Text>
+            <Text style={[styles.signOutText, { color: colors.danger }]}>{t('more.signOut')}</Text>
           </Pressable>
-          <Text style={[styles.version, { color: colors.textMuted }]}>HitchLink Driver · v1.0.0</Text>
+          <Text style={[styles.version, { color: colors.textMuted }]}>{t('more.version')}</Text>
         </FadeInView>
 
       </ScrollView>
@@ -413,7 +440,7 @@ function HeroStat({ icon, value, label, styles }) {
 
 /* ─────────── Standing Card ─────────── */
 
-function StandingCard({ colors, styles }) {
+function StandingCard({ colors, styles, t }) {
   const pct = Math.max(0, Math.min(1, STANDING.score / 100));
   return (
     <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, elevation[2]]}>
@@ -430,14 +457,14 @@ function StandingCard({ colors, styles }) {
 
         <View style={{ flex: 1, gap: 6 }}>
           <View style={styles.tierRow}>
-            <Text style={[styles.tierName, { color: colors.textPrimary }]}>{STANDING.tier} driver</Text>
+            <Text style={[styles.tierName, { color: colors.textPrimary }]}>{t('more.tierDriver', { tier: t(STANDING.tierKey) })}</Text>
             <View style={[styles.tierBadge, { backgroundColor: colors.goFill, borderColor: colors.go + '55' }]}>
               <Icon name="award" size={11} color={colors.go} />
-              <Text style={[styles.tierBadgeText, { color: colors.go }]}>Top {STANDING.percentile}%</Text>
+              <Text style={[styles.tierBadgeText, { color: colors.go }]}>{t('more.topPercentile', { pct: STANDING.percentile })}</Text>
             </View>
           </View>
           <Text style={[styles.tierSub, { color: colors.textMuted }]}>
-            Keep it up to unlock priority loads.
+            {t('more.standingSub')}
           </Text>
           <View style={[styles.scoreTrack, { backgroundColor: colors.surfaceHi }]}>
             <LinearGradient
@@ -450,11 +477,11 @@ function StandingCard({ colors, styles }) {
       </View>
 
       <View style={styles.standingGrid}>
-        <StandingStat icon="check-circle" value={`${STANDING.onTimePct}%`} label="On-time"    colors={colors} styles={styles} />
+        <StandingStat icon="check-circle" value={`${STANDING.onTimePct}%`} label={t('more.onTime')}    colors={colors} styles={styles} />
         <View style={[styles.standingVDivider, { backgroundColor: colors.border }]} />
-        <StandingStat icon="zap"          value={`${STANDING.streak}`}     label="Load streak" colors={colors} styles={styles} />
+        <StandingStat icon="zap"          value={`${STANDING.streak}`}     label={t('more.loadStreak')} colors={colors} styles={styles} />
         <View style={[styles.standingVDivider, { backgroundColor: colors.border }]} />
-        <StandingStat icon="thumbs-up"    value={`${STANDING.acceptPct}%`} label="Acceptance"  colors={colors} styles={styles} />
+        <StandingStat icon="thumbs-up"    value={`${STANDING.acceptPct}%`} label={t('more.acceptance')}  colors={colors} styles={styles} />
       </View>
     </View>
   );
@@ -472,14 +499,14 @@ function StandingStat({ icon, value, label, colors, styles }) {
 
 /* ─────────── HOS Card ─────────── */
 
-function HosCard({ hos, colors, styles }) {
-  const t     = toneOf(colors, hosState(hos.driveMinutesLeft));
+function HosCard({ hos, colors, styles, t }) {
+  const tone  = toneOf(colors, hosState(hos.driveMinutesLeft));
   const pct   = Math.max(0, Math.min(1, hos.driveMinutesLeft / (11 * 60)));
   const state = hosState(hos.driveMinutesLeft);
 
   const stateLabel =
-    state === 'go'      ? 'Plenty of road left' :
-    state === 'caution' ? 'Plan a stop soon'     : 'Time to stop';
+    state === 'go'      ? t('more.roadLeftPlenty') :
+    state === 'caution' ? t('more.planStopSoon')   : t('more.timeToStop');
 
   return (
     <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, elevation[1]]}>
@@ -487,45 +514,45 @@ function HosCard({ hos, colors, styles }) {
       {/* Top row */}
       <View style={styles.hosTop}>
         <View style={{ gap: 2 }}>
-          <Text style={[styles.hosSmallLabel, { color: colors.textMuted }]}>DRIVE TIME LEFT</Text>
+          <Text style={[styles.hosSmallLabel, { color: colors.textMuted }]}>{t('more.driveTimeLeft')}</Text>
           <CountUp
             value={hos.driveMinutesLeft}
             duration={1200}
             format={hm}
-            style={[styles.hosValue, { color: t.solid }]}
+            style={[styles.hosValue, { color: tone.solid }]}
           />
         </View>
-        <View style={[styles.hosBadge, { backgroundColor: t.fill, borderColor: t.solid + '55' }]}>
-          <View style={[styles.hosDot, { backgroundColor: t.solid }]} />
-          <Text style={[styles.hosBadgeText, { color: t.solid }]}>{stateLabel}</Text>
+        <View style={[styles.hosBadge, { backgroundColor: tone.fill, borderColor: tone.solid + '55' }]}>
+          <View style={[styles.hosDot, { backgroundColor: tone.solid }]} />
+          <Text style={[styles.hosBadgeText, { color: tone.solid }]}>{stateLabel}</Text>
         </View>
       </View>
 
       {/* Progress bar */}
       <View style={[styles.hosTrack, { backgroundColor: colors.surfaceHi }]}>
         <LinearGradient
-          colors={t.grad}
+          colors={tone.grad}
           start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
           style={[styles.hosFill, { width: `${pct * 100}%` }]}
         />
       </View>
       <View style={styles.hosTickRow}>
         <Text style={[styles.hosTick, { color: colors.textMuted }]}>0h</Text>
-        <Text style={[styles.hosTick, { color: colors.textMuted }]}>11h max</Text>
+        <Text style={[styles.hosTick, { color: colors.textMuted }]}>{t('more.hosMax')}</Text>
       </View>
 
       {/* Stats 2×2 */}
       <View style={styles.hosGrid}>
-        <HosStat icon="navigation" label="Driven today"  value={hm(hos.drivenTodayMinutes)}  colors={colors} styles={styles} />
-        <HosStat icon="coffee"     label="Break in"       value={hm(hos.breakInMinutes)}       colors={colors} styles={styles} />
-        <HosStat icon="clock"      label="On-duty left"  value={hm(hos.onDutyMinutesLeft)}    colors={colors} styles={styles} />
-        <HosStat icon="repeat"     label="Cycle left"    value={`${hos.cycleHoursLeft}h`}     colors={colors} styles={styles} />
+        <HosStat icon="navigation" label={t('more.drivenToday')}  value={hm(hos.drivenTodayMinutes)}  colors={colors} styles={styles} />
+        <HosStat icon="coffee"     label={t('more.breakIn')}       value={hm(hos.breakInMinutes)}       colors={colors} styles={styles} />
+        <HosStat icon="clock"      label={t('more.onDutyLeft')}  value={hm(hos.onDutyMinutesLeft)}    colors={colors} styles={styles} />
+        <HosStat icon="repeat"     label={t('more.cycleLeft')}    value={`${hos.cycleHoursLeft}h`}     colors={colors} styles={styles} />
       </View>
 
       <View style={[styles.hosNote, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
         <Icon name="zap" size={12} color={colors.textMuted} />
         <Text style={[styles.hosNoteText, { color: colors.textMuted }]}>
-          Connect an ELD for certified hours logs.
+          {t('more.eldNote')}
         </Text>
       </View>
     </View>
