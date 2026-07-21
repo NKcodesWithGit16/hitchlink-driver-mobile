@@ -11,6 +11,7 @@ import Icon from '../../src/components/ui/Icon';
 import PrimaryAction from '../../src/components/ui/PrimaryAction';
 import FadeInView from '../../src/components/ui/FadeInView';
 import { useTheme } from '../../src/theme/ThemeContext';
+import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { login } from '../../src/api/auth';
 import { space, type, radius, FONT, elevation } from '../../src/theme/tokens';
@@ -21,6 +22,7 @@ const BRAND_BAND = ['#04285A', '#063C6E', '#0B6F82'];
 
 export default function SignIn() {
   const { colors } = useTheme();
+  const t = useT();
   const { signIn, sessionNotice } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -35,7 +37,7 @@ export default function SignIn() {
 
   const onSubmit = async () => {
     if (loading) return;
-    if (!email.trim() || !password) { setError('Enter your username and password.'); return; }
+    if (!email.trim() || !password) { setError(t('auth.enterCredentials')); return; }
     setError('');
     setLoading(true);
     try {
@@ -46,7 +48,7 @@ export default function SignIn() {
       await signIn(token, '', email.trim(), data?.refreshToken || null);
       router.replace('/(tabs)');
     } catch (e) {
-      setError(e.message === 'Login failed' ? 'Wrong username or password.' : (e.message || 'Something went wrong.'));
+      setError(e.message === 'Login failed' ? t('auth.wrongCredentials') : (e.message || t('auth.somethingWrong')));
     } finally {
       setLoading(false);
     }
@@ -80,8 +82,8 @@ export default function SignIn() {
           showsVerticalScrollIndicator={false}
         >
           <FadeInView style={[styles.card, elevation[3]]}>
-            <Text style={styles.title}>Welcome back</Text>
-            <Text style={styles.sub}>Sign in with the login your dispatcher set up for you.</Text>
+            <Text style={styles.title}>{t('auth.welcomeBack')}</Text>
+            <Text style={styles.sub}>{t('auth.signInSub')}</Text>
             {sessionNotice ? <Text style={styles.notice}>{sessionNotice}</Text> : null}
 
             {/* Username / email */}
@@ -90,7 +92,7 @@ export default function SignIn() {
               <TextInput
                 value={email}
                 onChangeText={v => { setEmail(v); setError(''); }}
-                placeholder="Username or email"
+                placeholder={t('auth.usernamePlaceholder')}
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -105,7 +107,7 @@ export default function SignIn() {
               <TextInput
                 value={password}
                 onChangeText={v => { setPassword(v); setError(''); }}
-                placeholder="Password"
+                placeholder={t('auth.passwordPlaceholder')}
                 placeholderTextColor={colors.textMuted}
                 secureTextEntry={!showPw}
                 autoComplete="password"
@@ -113,7 +115,7 @@ export default function SignIn() {
                 onSubmitEditing={onSubmit}
                 returnKeyType="done"
               />
-              <Pressable onPress={() => setShowPw(p => !p)} hitSlop={10} accessibilityRole="button" accessibilityLabel={showPw ? 'Hide password' : 'Show password'}>
+              <Pressable onPress={() => setShowPw(p => !p)} hitSlop={10} accessibilityRole="button" accessibilityLabel={showPw ? t('auth.hidePasswordA11y') : t('auth.showPasswordA11y')}>
                 <Icon name={showPw ? 'eye-off' : 'eye'} size={18} color={colors.textMuted} />
               </Pressable>
             </View>
@@ -127,10 +129,10 @@ export default function SignIn() {
             ) : null}
 
             <View style={{ height: 2 }} />
-            <PrimaryAction label="Sign in" icon="arrow-right" onPress={onSubmit} loading={loading} />
+            <PrimaryAction label={t('auth.signIn')} icon="arrow-right" onPress={onSubmit} loading={loading} />
           </FadeInView>
 
-          <Text style={styles.help}>Trouble signing in? Call your dispatcher.</Text>
+          <Text style={styles.help}>{t('auth.troubleSigningIn')}</Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </View>

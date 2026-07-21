@@ -7,6 +7,7 @@ import BrandLogo from '../src/components/BrandLogo';
 import Icon from '../src/components/ui/Icon';
 import CinematicHero from '../src/components/ui/CinematicHero';
 import { useTheme } from '../src/theme/ThemeContext';
+import { useT } from '../src/i18n/LanguageContext';
 import { useAuth } from '../src/context/AuthContext';
 import { photos } from '../src/theme/photos';
 import { space, type, radius } from '../src/theme/tokens';
@@ -15,32 +16,21 @@ import { space, type, radius } from '../src/theme/tokens';
    so a driver who is new to phones always knows where "forward" is. Copy names
    the permissions we'll ask for, so the OS prompts later don't feel out of the
    blue. */
-const SLIDES = [
-  {
-    icon: 'home', photo: photos.road,
-    title: 'Your whole day,\none screen',
-    body: 'Where you’re headed, when it’s due, and what it pays — all in one place. No more digging through texts.',
-  },
-  {
-    icon: 'cloud-snow', photo: photos.dusk,
-    title: 'We watch the\nroad ahead',
-    body: 'Storm, ice, and high-wind warnings before you reach them — and your hours kept legal. We’ll ask to use your location.',
-  },
-  {
-    icon: 'message-circle', photo: photos.cab,
-    title: 'Your dispatcher,\none tap away',
-    body: 'Message, send a voice note, or call — and snap proof of delivery in seconds. We’ll ask about notifications and your camera.',
-  },
-];
-
 export default function Onboarding() {
   const { colors } = useTheme();
+  const t = useT();
   const { completeOnboarding } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const scroller = useRef(null);
   const [i, setI] = useState(0);
+
+  const SLIDES = [
+    { icon: 'home', photo: photos.road, title: t('onboarding.slide1Title'), body: t('onboarding.slide1Body') },
+    { icon: 'cloud-snow', photo: photos.dusk, title: t('onboarding.slide2Title'), body: t('onboarding.slide2Body') },
+    { icon: 'message-circle', photo: photos.cab, title: t('onboarding.slide3Title'), body: t('onboarding.slide3Body') },
+  ];
   const last = i === SLIDES.length - 1;
   const styles = makeStyles(colors);
   // Cap the hero so the body always clears the pinned action bar, even on short phones.
@@ -84,7 +74,7 @@ export default function Onboarding() {
         <BrandLogo layout="wordmark" tone="light" size={22} />
         {!last ? (
           <Pressable onPress={finish} hitSlop={12} accessibilityRole="button">
-            <Text style={styles.skip}>Skip</Text>
+            <Text style={styles.skip}>{t('onboarding.skip')}</Text>
           </Pressable>
         ) : <View style={{ width: 44 }} />}
       </View>
@@ -99,7 +89,7 @@ export default function Onboarding() {
             />
           ))}
         </View>
-        <PrimaryAction label={last ? 'Get started' : 'Next'} icon={last ? 'check' : 'arrow-right'} onPress={next} />
+        <PrimaryAction label={last ? t('welcome.getStarted') : t('onboarding.next')} icon={last ? 'check' : 'arrow-right'} onPress={next} />
       </View>
     </View>
   );

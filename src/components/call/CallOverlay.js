@@ -4,6 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../ui/Icon';
 import { useTheme } from '../../theme/ThemeContext';
+import { useT } from '../../i18n/LanguageContext';
 import { useCall } from '../../context/CallContext';
 import { space, type, radius, FONT } from '../../theme/tokens';
 
@@ -31,6 +32,7 @@ function useElapsed(startedAt) {
 // "screen" to navigate to or lose track of.
 export default function CallOverlay() {
   const { colors } = useTheme();
+  const t = useT();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const { status, peerName, error, muted, startedAt, acceptCall, declineCall, hangUp, toggleMute } = useCall();
@@ -56,28 +58,28 @@ export default function CallOverlay() {
               ? <Icon family="material-community" name="phone-hangup" size={34} color={colors.danger} />
               : <Text style={styles.avatarText}>{initials(peerName)}</Text>}
           </View>
-          <Text style={styles.peerName}>{peerName || 'Dispatcher'}</Text>
+          <Text style={styles.peerName}>{peerName || t('messages.dispatcherFallback')}</Text>
           <Text style={[styles.statusLine, ended && { color: colors.danger }]}>
-            {ringingIn && 'Incoming call…'}
-            {ringingOut && 'Calling…'}
+            {ringingIn && t('call.incomingCall')}
+            {ringingOut && t('call.calling')}
             {active && duration}
-            {ended && (error || 'Call ended')}
+            {ended && (error || t('call.callEnded'))}
           </Text>
         </View>
 
         {ended ? null : ringingIn ? (
           <View style={styles.incomingActions}>
             <View style={styles.actionCol}>
-              <Pressable onPress={declineCall} style={[styles.bigBtn, { backgroundColor: colors.danger }]} accessibilityRole="button" accessibilityLabel="Decline call">
+              <Pressable onPress={declineCall} style={[styles.bigBtn, { backgroundColor: colors.danger }]} accessibilityRole="button" accessibilityLabel={t('call.declineCallA11y')}>
                 <Icon family="material-community" name="phone-hangup" size={30} color="#FFFFFF" />
               </Pressable>
-              <Text style={styles.actionLabel}>Decline</Text>
+              <Text style={styles.actionLabel}>{t('call.decline')}</Text>
             </View>
             <View style={styles.actionCol}>
-              <Pressable onPress={acceptCall} style={[styles.bigBtn, { backgroundColor: colors.go }, styles.bigBtnGlow]} accessibilityRole="button" accessibilityLabel="Accept call">
+              <Pressable onPress={acceptCall} style={[styles.bigBtn, { backgroundColor: colors.go }, styles.bigBtnGlow]} accessibilityRole="button" accessibilityLabel={t('call.acceptCallA11y')}>
                 <Icon family="ionicons" name="call" size={26} color={colors.onAccent} />
               </Pressable>
-              <Text style={styles.actionLabel}>Accept</Text>
+              <Text style={styles.actionLabel}>{t('call.accept')}</Text>
             </View>
           </View>
         ) : (
@@ -88,18 +90,18 @@ export default function CallOverlay() {
                   onPress={toggleMute}
                   style={[styles.midBtn, { backgroundColor: muted ? colors.danger : colors.surface2, borderColor: colors.border }]}
                   accessibilityRole="button"
-                  accessibilityLabel={muted ? 'Unmute' : 'Mute'}
+                  accessibilityLabel={muted ? t('call.unmuteA11y') : t('call.muteA11y')}
                 >
                   <Icon family="ionicons" name={muted ? 'mic-off' : 'mic'} size={20} color={muted ? '#FFFFFF' : colors.textPrimary} />
                 </Pressable>
-                <Text style={styles.actionLabel}>{muted ? 'Unmute' : 'Mute'}</Text>
+                <Text style={styles.actionLabel}>{muted ? t('call.unmute') : t('call.mute')}</Text>
               </View>
             )}
             <View style={styles.actionCol}>
-              <Pressable onPress={hangUp} style={[styles.bigBtn, { backgroundColor: colors.danger }]} accessibilityRole="button" accessibilityLabel="Hang up">
+              <Pressable onPress={hangUp} style={[styles.bigBtn, { backgroundColor: colors.danger }]} accessibilityRole="button" accessibilityLabel={t('call.hangUpA11y')}>
                 <Icon family="material-community" name="phone-hangup" size={30} color="#FFFFFF" />
               </Pressable>
-              <Text style={styles.actionLabel}>{ringingOut ? 'Cancel' : 'Hang up'}</Text>
+              <Text style={styles.actionLabel}>{ringingOut ? t('common.cancel') : t('call.hangUp')}</Text>
             </View>
           </View>
         )}

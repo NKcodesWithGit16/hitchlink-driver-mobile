@@ -9,6 +9,7 @@ import { fetchDriver } from '../api/main';
 import { registerForPushNotifications, unregisterPushNotifications } from '../hooks/usePushNotifications';
 import { stopBackgroundTracking } from '../lib/backgroundLocation';
 import { onSessionExpired, refreshNow } from '../lib/session';
+import { useT } from '../i18n/LanguageContext';
 
 const AuthContext = createContext(null);
 
@@ -17,6 +18,7 @@ const EMAIL_KEY = 'hl_driver_email';
 const OKEY      = 'hl_onboarded';
 
 export function AuthProvider({ children }) {
+  const t = useT();
   const [userId,        setUserId]        = useState(null);
   const [userRole,      setUserRole]      = useState(null);
   const [userName,      setUserName]      = useState('');
@@ -106,9 +108,9 @@ export function AuthProvider({ children }) {
   const signOutRef = useRef(signOut);
   signOutRef.current = signOut;
   useEffect(() => onSessionExpired(() => {
-    setSessionNotice('Your session expired — please sign in again.');
+    setSessionNotice(t('auth.sessionExpired'));
     signOutRef.current();
-  }), []);
+  }), [t]);
 
   const completeOnboarding = () => {
     setOnboarded(true);

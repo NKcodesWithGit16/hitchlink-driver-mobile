@@ -12,6 +12,7 @@ import Icon from '../src/components/ui/Icon';
 import FadeInView from '../src/components/ui/FadeInView';
 import haptics from '../src/lib/haptics';
 import { useTheme } from '../src/theme/ThemeContext';
+import { useT } from '../src/i18n/LanguageContext';
 import { useAuth } from '../src/context/AuthContext';
 import { updateDriver, uploadDriverPhoto, removeDriverPhoto } from '../src/api/main';
 import { space, radius, FONT, elevation } from '../src/theme/tokens';
@@ -22,6 +23,7 @@ export default function EditProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
+  const t = useT();
   const { userId, driverProfile, user, updateDriverProfile } = useAuth();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
@@ -55,9 +57,9 @@ export default function EditProfileScreen() {
   const onSave = async () => {
     if (!canSave) return;
     const fn = firstName.trim(), ln = lastName.trim(), ph = phone.trim(), em = email.trim();
-    if (!fn || !ln) { setFormError('First and last name are required.'); haptics.error(); return; }
-    if (!ph)        { setFormError('Enter a phone number.');             haptics.error(); return; }
-    if (!EMAIL_RE.test(em)) { setFormError('Enter a valid email address.'); haptics.error(); return; }
+    if (!fn || !ln) { setFormError(t('editProfile.firstLastRequired')); haptics.error(); return; }
+    if (!ph)        { setFormError(t('editProfile.enterPhone'));        haptics.error(); return; }
+    if (!EMAIL_RE.test(em)) { setFormError(t('editProfile.enterValidEmail')); haptics.error(); return; }
 
     setFormError('');
     setSaving(true);
@@ -70,8 +72,8 @@ export default function EditProfileScreen() {
     } catch (e) {
       setFormError(
         e.status === 400
-          ? 'That email or phone number is already in use.'
-          : "Couldn't save — check your connection and try again."
+          ? t('editProfile.emailPhoneInUse')
+          : t('editProfile.saveFailedError')
       );
       haptics.error();
     } finally {
@@ -94,7 +96,7 @@ export default function EditProfileScreen() {
     } catch {
       setPhotoUrl(prev);
       haptics.error();
-      Alert.alert("Couldn't upload", 'Your photo could not be saved. Check your connection and try again.');
+      Alert.alert(t('editProfile.couldntUploadTitle'), t('editProfile.couldntUploadBody'));
     } finally {
       setPhotoBusy(false);
     }
@@ -111,7 +113,7 @@ export default function EditProfileScreen() {
     } catch {
       setPhotoUrl(prev);
       haptics.error();
-      Alert.alert("Couldn't remove photo", 'Check your connection and try again.');
+      Alert.alert(t('editProfile.couldntRemoveTitle'), t('editProfile.couldntRemoveBody'));
     } finally {
       setPhotoBusy(false);
     }
@@ -124,8 +126,8 @@ export default function EditProfileScreen() {
         : await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
         Alert.alert(
-          'Permission needed',
-          `Allow ${source === 'camera' ? 'camera' : 'photo library'} access to change your profile photo.`,
+          t('editProfile.permissionNeededTitle'),
+          t('editProfile.permissionNeededBody', { source: source === 'camera' ? t('editProfile.cameraAccess') : t('editProfile.libraryAccess') }),
         );
         return;
       }
@@ -135,18 +137,18 @@ export default function EditProfileScreen() {
       const uri = res.assets?.[0]?.uri;
       if (uri) await savePhoto(uri);
     } catch {
-      Alert.alert("Couldn't open", 'Something went wrong opening the camera or photo library.');
+      Alert.alert(t('editProfile.couldntOpenTitle'), t('editProfile.couldntOpenBody'));
     }
   };
 
   const choosePhoto = () => {
     if (photoBusy) return;
     haptics.tap();
-    Alert.alert('Profile photo', undefined, [
-      { text: 'Take Photo', onPress: () => pickFrom('camera') },
-      { text: 'Choose from Library', onPress: () => pickFrom('library') },
-      ...(photoUrl ? [{ text: 'Remove Photo', style: 'destructive', onPress: removePhoto }] : []),
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(t('editProfile.profilePhoto'), undefined, [
+      { text: t('editProfile.takePhoto'), onPress: () => pickFrom('camera') },
+      { text: t('editProfile.chooseFromLibrary'), onPress: () => pickFrom('library') },
+      ...(photoUrl ? [{ text: t('editProfile.removePhoto'), style: 'destructive', onPress: removePhoto }] : []),
+      { text: t('common.cancel'), style: 'cancel' },
     ]);
   };
 
@@ -159,24 +161,24 @@ export default function EditProfileScreen() {
           style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
           hitSlop={8}
           accessibilityRole="button"
-          accessibilityLabel="Cancel"
+          accessibilityLabel={t('common.cancel')}
         >
           <Icon name="chevron-left" size={22} color={colors.textPrimary} />
         </Pressable>
-        <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>Edit profile</Text>
+        <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>{t('editProfile.editProfileTitle')}</Text>
         <Pressable
           onPress={onSave}
           disabled={!canSave}
           hitSlop={8}
           style={styles.saveBtn}
           accessibilityRole="button"
-          accessibilityLabel="Save changes"
+          accessibilityLabel={t('editProfile.saveChangesA11y')}
           accessibilityState={{ disabled: !canSave }}
         >
           {saving ? (
             <ActivityIndicator size="small" color={colors.teal} />
           ) : (
-            <Text style={[styles.saveText, { color: canSave ? colors.teal : colors.textMuted }]}>Save</Text>
+            <Text style={[styles.saveText, { color: canSave ? colors.teal : colors.textMuted }]}>{t('editProfile.save')}</Text>
           )}
         </Pressable>
       </View>
@@ -192,13 +194,13 @@ export default function EditProfileScreen() {
             <Pressable
               onPress={choosePhoto}
               accessibilityRole="button"
-              accessibilityLabel="Change profile photo"
+              accessibilityLabel={t('editProfile.changePhotoA11y')}
             >
               {photoUrl ? (
                 <Image source={{ uri: photoUrl }} style={styles.avatar} />
               ) : (
                 <LinearGradient colors={colors.gradients.brand} style={styles.avatar}>
-                  <Text style={styles.avatarText}>{(firstName || 'D').slice(0, 1).toUpperCase()}</Text>
+                  <Text style={styles.avatarText}>{(firstName || t('more.driver')).slice(0, 1).toUpperCase()}</Text>
                 </LinearGradient>
               )}
               {photoBusy ? (
@@ -216,23 +218,23 @@ export default function EditProfileScreen() {
           {/* Fields */}
           <FadeInView delay={40} style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, elevation[1]]}>
             <FieldRow
-              label="First name" value={firstName} onChangeText={setFirstName}
-              placeholder="First name" autoCapitalize="words" colors={colors} styles={styles}
+              label={t('editProfile.firstName')} value={firstName} onChangeText={setFirstName}
+              placeholder={t('editProfile.firstName')} autoCapitalize="words" colors={colors} styles={styles}
             />
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             <FieldRow
-              label="Last name" value={lastName} onChangeText={setLastName}
-              placeholder="Last name" autoCapitalize="words" colors={colors} styles={styles}
+              label={t('editProfile.lastName')} value={lastName} onChangeText={setLastName}
+              placeholder={t('editProfile.lastName')} autoCapitalize="words" colors={colors} styles={styles}
             />
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             <FieldRow
-              label="Phone" value={phone} onChangeText={setPhone}
-              placeholder="Phone number" keyboardType="phone-pad" colors={colors} styles={styles}
+              label={t('editProfile.phone')} value={phone} onChangeText={setPhone}
+              placeholder={t('editProfile.phoneNumberPlaceholder')} keyboardType="phone-pad" colors={colors} styles={styles}
             />
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             <FieldRow
-              label="Email" value={email} onChangeText={setEmail}
-              placeholder="Email address" keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
+              label={t('editProfile.email')} value={email} onChangeText={setEmail}
+              placeholder={t('editProfile.emailAddressPlaceholder')} keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
               colors={colors} styles={styles}
             />
           </FadeInView>
@@ -245,7 +247,7 @@ export default function EditProfileScreen() {
           ) : null}
 
           <Text style={[styles.hint, { color: colors.textMuted }]}>
-            Truck and dispatcher info are managed by your dispatcher.
+            {t('editProfile.managedByDispatcher')}
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>

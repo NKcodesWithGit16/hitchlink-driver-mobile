@@ -5,6 +5,7 @@ import PrimaryAction from '../src/components/ui/PrimaryAction';
 import BrandLogo from '../src/components/BrandLogo';
 import CinematicHero from '../src/components/ui/CinematicHero';
 import FadeInView from '../src/components/ui/FadeInView';
+import { useT } from '../src/i18n/LanguageContext';
 import { photos } from '../src/theme/photos';
 import { space, type } from '../src/theme/tokens';
 
@@ -15,6 +16,7 @@ import { space, type } from '../src/theme/tokens';
 export default function Welcome() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const t = useT();
 
   return (
     <View style={styles.screen}>
@@ -28,23 +30,23 @@ export default function Welcome() {
         <View style={{ flex: 1 }} />
 
         <FadeInView delay={120}>
-          <Text style={styles.kicker}>BUILT FOR DRIVERS</Text>
-          <Text style={styles.headline}>Everything you{'\n'}need for the haul.</Text>
+          <Text style={styles.kicker}>{t('welcome.kicker')}</Text>
+          <Text style={styles.headline}>{t('welcome.headline')}</Text>
           <Text style={styles.sub}>
-            Your loads, your pay, and your dispatcher — in one simple app, made for the road.
+            {t('welcome.sub')}
           </Text>
         </FadeInView>
 
         <FadeInView delay={240} style={styles.actions}>
-          <PrimaryAction label="Get started" icon="arrow-right" onPress={() => router.push('/onboarding')} />
+          <PrimaryAction label={t('welcome.getStarted')} icon="arrow-right" onPress={() => router.push('/onboarding')} />
           <Pressable
             onPress={() => router.push('/(auth)/sign-in')}
             style={styles.signInBtn}
             hitSlop={8}
             accessibilityRole="button"
-            accessibilityLabel="I already have a login, sign in"
+            accessibilityLabel={t('welcome.signInA11y')}
           >
-            <Text style={styles.signInText}>I already have a login</Text>
+            <Text style={styles.signInText}>{t('welcome.haveLogin')}</Text>
           </Pressable>
         </FadeInView>
       </View>
