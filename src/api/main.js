@@ -13,10 +13,20 @@ const fmtTime = (iso) => {
   return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
+function replyKind(type) {
+  if (type === 'voice') return 'voice';
+  if (type === 'document') return 'document';
+  if (type === 'video') return 'video';
+  if (type && type !== 'text') return 'image';
+  return undefined;
+}
+
 function normalizeMessage(m) {
   const att = Array.isArray(m.attachments) ? m.attachments[0] : null;
   const isVoice = m.type === 'voice';
   const isImage = !isVoice && (m.type === 'photo' || ['photo', 'image', 'gif', 'sticker'].includes(att?.kind));
+  const isDocument = !isVoice && !isImage && (m.type === 'document' || att?.kind === 'document');
+  const isVideo = !isVoice && !isImage && !isDocument && (m.type === 'video' || att?.kind === 'video');
   const isMissedCall = m.type === 'missed_call';
   const deleted = !!m.deletedForEveryone;
   return {
@@ -27,16 +37,20 @@ function normalizeMessage(m) {
     deleted,
     editedAt: m.editedAt ?? undefined,
     text: deleted ? undefined : (m.text ?? undefined),
-    kind: deleted ? undefined : (isMissedCall ? 'missed_call' : isVoice ? 'voice' : isImage ? 'image' : undefined),
-    // audioUrl is a relative path on the main API; images come back as signed URLs.
-    uri: deleted ? undefined : (isVoice ? (m.audioUrl ? `${BASE}${m.audioUrl}` : undefined) : (isImage ? att?.url : undefined)),
+    kind: deleted ? undefined : (isMissedCall ? 'missed_call' : isVoice ? 'voice' : isImage ? 'image' : isDocument ? 'document' : isVideo ? 'video' : undefined),
+    // audioUrl is a relative path on the main API; photo/document/video come back as signed URLs.
+    uri: deleted ? undefined : (isVoice ? (m.audioUrl ? `${BASE}${m.audioUrl}` : undefined) : ((isImage || isDocument || isVideo) ? att?.url : undefined)),
+    thumbnailUri: deleted ? undefined : (isVideo ? att?.thumbnailUrl : undefined),
+    filename: deleted ? undefined : (isDocument ? (att?.caption || 'Document') : undefined),
+    mimeType: deleted ? undefined : att?.mimeType,
+    sizeBytes: deleted ? undefined : att?.sizeBytes,
     durationSec: deleted ? undefined : (m.durationSeconds ?? undefined),
     replyToId: m.replyToMessageId ?? undefined,
     replyTo: m.replyTo ? {
       id: m.replyTo.id,
       from: m.replyTo.fromDriver ? 'driver' : 'dispatcher',
       text: m.replyTo.text ?? undefined,
-      kind: m.replyTo.type === 'voice' ? 'voice' : (m.replyTo.type && m.replyTo.type !== 'text' ? 'image' : undefined),
+      kind: replyKind(m.replyTo.type),
     } : undefined,
     reactions: Array.isArray(m.reactions)
       ? m.reactions.map((r) => ({ emoji: r.emoji, count: r.count, mine: (r.reactors || []).some((x) => x.role === 'driver') }))
@@ -269,6 +283,73 @@ export async function sendPhotoMessage(driverId, { uri, text = null, replyToMess
       }],
     }),
   });
+}
+
+// Sends a document into the dispatcher chat from the driver's device. Same
+// three-step flow as sendPhotoMessage (sign → PUT bytes straight to R2 →
+// create the message with the storage key) — not the base64-to-/documents
+// flow uploadDocument() uses, which targets the separate load-paperwork feature.
+export async function sendDocumentMessage(driverId, { uri, name, mimeType, replyToMessageId = null } = {}) {
+  if (USE_MOCK) { await wait(200); return { ok: true }; }
+  if (!driverId || !uri) return null;
+
+  const blob = await (await fetch(uri)).blob();
+  const finalMime = mimeType || blob.type || 'application/octet-stream';
+
+  const signed = await apiFetch(`/chat/${driverId}/attachments/sign`, {
+    method: 'POST',
+    body: JSON.stringify({ kind: 'document', mimeType: finalMime, sizeBytes: blob.size }),
+  });
+
+  // Bare fetch — the signed URL carries its own auth, and the Content-Type
+  // must match what was signed (R2 folds it into the signature).
+  const put = await fetch(signed.uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': finalMime },
+    body: blob,
+  });
+  if (!put.ok) throw new Error(`Document upload failed (${put.status})`);
+
+  return apiFetch(`/chat/${driverId}/message`, {
+    method: 'POST',
+    body: JSON.stringify({
+      text: null,
+      senderId: driverId,
+      senderRole: 'driver',
+      replyToMessageId,
+      attachments: [{
+        storageKey: signed.storageKey,
+        kind: 'document',
+        mimeType: finalMime,
+        sizeBytes: blob.size,
+        filename: name || 'document',
+      }],
+    }),
+  });
+}
+
+// Downloads a chat attachment (document/video) for local viewing/sharing.
+// Unlike /documents/{id}/content, attachment URLs from /chat/{driverId}
+// history are already-presigned R2 GET URLs — auth is baked into the query
+// string, so a plain fetch (no Bearer header) is enough. Native: writes to
+// the cache dir and returns a local file:// uri (for Sharing.shareAsync).
+// Web: returns an object URL.
+export async function downloadChatAttachment(url, fileName = 'file') {
+  if (!url) return null;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  const contentType = res.headers.get('Content-Type') || 'application/octet-stream';
+
+  if (Platform.OS === 'web') {
+    const blob = await res.blob();
+    return { uri: URL.createObjectURL(blob), contentType, fileName };
+  }
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const dest = new File(Paths.cache, fileName);
+  if (dest.exists) dest.delete();
+  dest.create();
+  dest.write(bytes);
+  return { uri: dest.uri, contentType, fileName };
 }
 
 // Stores a proof-of-delivery photo against the load itself — the permanent

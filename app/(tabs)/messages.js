@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, Pressable,
-  Platform, Linking, Animated, Image, Modal, Keyboard, Dimensions,
+  Platform, Linking, Animated, Image, Modal, Keyboard, Dimensions, Alert,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import * as Sharing from 'expo-sharing';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import ScreenFade from '../../src/components/ui/ScreenFade';
@@ -16,12 +18,14 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useCall } from '../../src/context/CallContext';
 import {
-  fetchMessages, sendMessage, sendVoiceMessage, sendPhotoMessage, fetchActiveLoad,
+  fetchMessages, sendMessage, sendVoiceMessage, sendPhotoMessage, sendDocumentMessage,
+  downloadChatAttachment, fetchActiveLoad,
   editMessage, deleteMessage, reactToMessage, removeReaction,
 } from '../../src/api/main';
 import { useChatSocket } from '../../src/hooks/useChatSocket';
 import { useVoiceRecorder } from '../../src/hooks/useVoiceRecorder';
 import { playMessageSound } from '../../src/lib/sound';
+import { getValidToken } from '../../src/lib/session';
 import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 
@@ -58,6 +62,7 @@ export default function MessagesScreen() {
   const [confirmDel,  setConfirmDel]  = useState(null);   // message pending delete confirmation
   const [viewerUri,   setViewerUri]   = useState(null);   // photo open in the fullscreen viewer
   const [kbOpen,      setKbOpen]      = useState(false);  // keyboard visibility
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false); // paperclip's Photo/Document sheet
   const scrollRef   = useRef(null);
   const kbPad       = useRef(new Animated.Value(0)).current; // live keyboard height → wrapper padding
   const seenIdsRef  = useRef(new Set());    // dispatcher-message ids already dinged/accounted for
@@ -186,18 +191,21 @@ export default function MessagesScreen() {
   const sendVoice = useCallback(async ({ uri, durationSec }) => {
     if (!uri || !user?.id) return;
     const rid = replyTo?.id || null;
-    // Show the clip immediately, then upload. Once it's persisted we drop the
-    // optimistic copy and let the next poll bring the server's version (which
-    // carries the real id + streamable audio URL), so there's no duplicate.
+    // Show the clip immediately, then upload. On success we drop the optimistic
+    // copy and let the next poll bring the server's version (real id +
+    // streamable audio URL); on failure it stays visible marked failed instead
+    // of silently vanishing.
     const localId = `local-${Date.now()}`;
     setItems((prev) => [...prev, { id: localId, from: 'driver', at: nowStr(), kind: 'voice', uri, durationSec, ...(replyTo ? { replyTo: replyPreviewOf(replyTo) } : {}) }]);
     setReplyTo(null);
     scrollToEnd();
     try {
       await sendVoiceMessage(user.id, { uri, durationSec, replyToMessageId: rid });
-    } catch {}
-    setItems((prev) => prev.filter((m) => m.id !== localId));
-    load();
+      setItems((prev) => prev.filter((m) => m.id !== localId));
+      load();
+    } catch {
+      setItems((prev) => prev.map((m) => (m.id === localId ? { ...m, failed: true } : m)));
+    }
   }, [user?.id, load, scrollToEnd, replyTo]);
 
   // Tap-to-record voice: start() flips the composer into a recording bar,
@@ -242,9 +250,10 @@ export default function MessagesScreen() {
       if (res.canceled) return;
       const uri = res.assets?.[0]?.uri;
       if (!uri) return;
-      // Show the photo immediately, then upload. Once persisted we drop the
-      // optimistic copy and let the next poll bring the server's version
-      // (real id + signed URL) — same reconcile dance as sendVoice.
+      // Show the photo immediately, then upload. On success we drop the
+      // optimistic copy and let the next poll bring the server's version (real
+      // id + signed URL); on failure it stays visible marked failed instead of
+      // silently vanishing — same reconcile dance as sendVoice.
       const rid = replyTo?.id || null;
       const localId = `local-${Date.now()}`;
       setItems((prev) => [...prev, { id: localId, from: 'driver', at: nowStr(), kind: 'image', uri, ...(replyTo ? { replyTo: replyPreviewOf(replyTo) } : {}) }]);
@@ -252,9 +261,37 @@ export default function MessagesScreen() {
       scrollToEnd();
       try {
         await sendPhotoMessage(user.id, { uri, replyToMessageId: rid });
-      } catch {}
-      setItems((prev) => prev.filter((m) => m.id !== localId));
-      load();
+        setItems((prev) => prev.filter((m) => m.id !== localId));
+        load();
+      } catch {
+        setItems((prev) => prev.map((m) => (m.id === localId ? { ...m, failed: true } : m)));
+      }
+    } catch {}
+  }, [user?.id, replyTo, scrollToEnd, load]);
+
+  const pickDocument = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+      if (res.canceled) return;
+      const asset = res.assets?.[0];
+      if (!asset?.uri) return;
+      const rid = replyTo?.id || null;
+      const localId = `local-${Date.now()}`;
+      setItems((prev) => [...prev, {
+        id: localId, from: 'driver', at: nowStr(), kind: 'document',
+        uri: asset.uri, filename: asset.name, sizeBytes: asset.size, mimeType: asset.mimeType,
+        ...(replyTo ? { replyTo: replyPreviewOf(replyTo) } : {}),
+      }]);
+      setReplyTo(null);
+      scrollToEnd();
+      try {
+        await sendDocumentMessage(user.id, { uri: asset.uri, name: asset.name, mimeType: asset.mimeType, replyToMessageId: rid });
+        setItems((prev) => prev.filter((m) => m.id !== localId));
+        load();
+      } catch {
+        setItems((prev) => prev.map((m) => (m.id === localId ? { ...m, failed: true } : m)));
+      }
     } catch {}
   }, [user?.id, replyTo, scrollToEnd, load]);
 
@@ -402,6 +439,8 @@ export default function MessagesScreen() {
                 </Text>
                 <Text style={[styles.contextText, { color: colors.textMuted }]} numberOfLines={1}>
                   {(editing || replyTo).kind === 'voice' ? '🎤 Voice message'
+                    : (editing || replyTo).kind === 'document' ? '📄 Document'
+                    : (editing || replyTo).kind === 'video' ? '🎬 Video'
                     : (editing || replyTo).kind === 'image' ? '📷 Photo'
                     : ((editing || replyTo).text || '')}
                 </Text>
@@ -417,11 +456,11 @@ export default function MessagesScreen() {
           ) : (
             <View style={[styles.composerInner, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
               <Pressable
-                onPress={pickAttachment}
+                onPress={() => setAttachMenuOpen(true)}
                 style={styles.attachBtn}
                 hitSlop={8}
                 accessibilityRole="button"
-                accessibilityLabel="Attach a photo"
+                accessibilityLabel="Attach a photo or document"
               >
                 <Icon name="paperclip" size={18} color={colors.textMuted} />
               </Pressable>
@@ -460,6 +499,16 @@ export default function MessagesScreen() {
         </View>
 
       </Animated.View>
+
+      {/* ── Attach: Photo / Document ── */}
+      <AttachMenuSheet
+        visible={attachMenuOpen}
+        colors={colors}
+        styles={styles}
+        onClose={() => setAttachMenuOpen(false)}
+        onPhoto={pickAttachment}
+        onDocument={pickDocument}
+      />
 
       {/* ── Long-press action sheet ── */}
       <MessageActionSheet
@@ -536,6 +585,7 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onOpe
     tailMine   && styles.tailMine,
     tailTheirs && styles.tailTheirs,
     !prevSame  && (mine ? styles.firstMine : styles.firstTheirs),
+    msg.failed && { opacity: 0.55 },
   ];
 
   const body = <BubbleBody msg={msg} mine={mine} colors={colors} styles={styles} onOpenImage={onOpenImage} />;
@@ -602,6 +652,13 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onOpe
             ))}
           </View>
         ) : null}
+
+        {msg.failed ? (
+          <View style={[styles.failedRow, mine ? { justifyContent: 'flex-end' } : null]}>
+            <Icon name="alert-circle" size={11} color={colors.danger} />
+            <Text style={[styles.failedText, { color: colors.danger }]}>Not sent</Text>
+          </View>
+        ) : null}
       </View>
     </Animated.View>
   );
@@ -660,6 +717,8 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage }) {
 
   const isVoice = msg.kind === 'voice';
   const isImage = msg.kind === 'image';
+  const isDocument = msg.kind === 'document';
+  const isVideo = msg.kind === 'video';
 
   return (
     <>
@@ -672,7 +731,11 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage }) {
             {msg.replyTo.from === 'driver' ? 'You' : 'Dispatcher'}
           </Text>
           <Text style={[styles.replyQuoteText, { color: mine ? 'rgba(255,255,255,0.8)' : colors.textSecondary }]} numberOfLines={1}>
-            {msg.replyTo.kind === 'voice' ? '🎤 Voice message' : msg.replyTo.kind === 'image' ? '📷 Photo' : (msg.replyTo.text || '')}
+            {msg.replyTo.kind === 'voice' ? '🎤 Voice message'
+              : msg.replyTo.kind === 'document' ? '📄 Document'
+              : msg.replyTo.kind === 'video' ? '🎬 Video'
+              : msg.replyTo.kind === 'image' ? '📷 Photo'
+              : (msg.replyTo.text || '')}
           </Text>
         </View>
       ) : null}
@@ -689,6 +752,10 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage }) {
         msg.uri
           ? <VoicePlayable uri={msg.uri} durationSec={msg.durationSec} mine={mine} colors={colors} styles={styles} />
           : <VoiceStatic durationSec={msg.durationSec} mine={mine} colors={colors} styles={styles} />
+      ) : isDocument ? (
+        <DocumentAttachment msg={msg} mine={mine} colors={colors} styles={styles} />
+      ) : isVideo ? (
+        <VideoAttachment msg={msg} mine={mine} colors={colors} styles={styles} />
       ) : (
         <Text style={[styles.bubbleText, { color: ink }]}>{msg.text}</Text>
       )}
@@ -745,6 +812,19 @@ function SheetAction({ icon, label, danger, colors, styles, onPress }) {
       <Icon name={icon} size={18} color={danger ? colors.danger : colors.textSecondary} />
       <Text style={[styles.sheetActionText, { color: danger ? colors.danger : colors.textPrimary }]}>{label}</Text>
     </Pressable>
+  );
+}
+
+function AttachMenuSheet({ visible, colors, styles, onClose, onPhoto, onDocument }) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.sheetOverlay} onPress={onClose}>
+        <Pressable style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border }]} onPress={() => {}}>
+          <SheetAction icon="image" label="Photo" colors={colors} styles={styles} onPress={() => { onClose(); onPhoto(); }} />
+          <SheetAction icon="file-text" label="Document" colors={colors} styles={styles} onPress={() => { onClose(); onDocument(); }} />
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -849,7 +929,21 @@ function VoiceStatic({ durationSec, mine, colors, styles }) {
 }
 
 function VoicePlayable({ uri, durationSec, mine, colors, styles }) {
-  const player = useAudioPlayer({ uri });
+  // GET /chat/messages/{id}/audio requires a JWT — a bare { uri } source sends
+  // an unauthenticated request and 401s. Start with no source and swap in an
+  // authed one once the token resolves; useAudioPlayer re-resolves reactively
+  // when its source argument changes.
+  const [source, setSource] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    if (!uri) { setSource(null); return undefined; }
+    getValidToken().then((token) => {
+      if (alive) setSource(token ? { uri, headers: { Authorization: `Bearer ${token}` } } : { uri });
+    });
+    return () => { alive = false; };
+  }, [uri]);
+
+  const player = useAudioPlayer(source);
   const status = useAudioPlayerStatus(player);
   const ink = mine ? '#FFFFFF' : colors.teal;
   const playing = !!status?.playing;
@@ -880,6 +974,86 @@ function VoicePlayable({ uri, durationSec, mine, colors, styles }) {
       <Text style={[styles.voiceTime, { color: mine ? 'rgba(255,255,255,0.7)' : colors.textMuted }]}>
         0:{String(remain).padStart(2, '0')}
       </Text>
+    </Pressable>
+  );
+}
+
+function fmtBytes(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+// Documents/videos open externally (download → native share sheet) instead of
+// previewing inline — this app has no in-app video player, and
+// Sharing.shareAsync needs a local file rather than the remote R2 URL, so a
+// download step happens either way.
+function useOpenAttachment(msg) {
+  const [opening, setOpening] = useState(false);
+  const open = useCallback(async () => {
+    if (!msg.uri || opening) return;
+    setOpening(true);
+    try {
+      const result = await downloadChatAttachment(msg.uri, msg.filename || 'file');
+      if (Platform.OS === 'web') {
+        window.open(result.uri, '_blank');
+      } else if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(result.uri, msg.mimeType ? { mimeType: msg.mimeType } : undefined);
+      } else {
+        await Linking.openURL(msg.uri);
+      }
+    } catch {
+      Alert.alert('Could not open', 'Please try again.');
+    } finally {
+      setOpening(false);
+    }
+  }, [msg.uri, msg.filename, msg.mimeType, opening]);
+  return { opening, open };
+}
+
+function DocumentAttachment({ msg, mine, colors, styles }) {
+  const { opening, open } = useOpenAttachment(msg);
+  return (
+    <Pressable
+      style={styles.docCard}
+      onPress={open}
+      disabled={opening}
+      accessibilityRole="button"
+      accessibilityLabel={`Open document ${msg.filename || ''}`}
+    >
+      <View style={[styles.docCardIcon, { backgroundColor: mine ? 'rgba(255,255,255,0.18)' : colors.tealFill }]}>
+        <Icon name={opening ? 'loader' : 'file-text'} size={18} color={mine ? '#FFFFFF' : colors.teal} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text numberOfLines={1} style={[styles.docCardName, { color: mine ? '#FFFFFF' : colors.textPrimary }]}>
+          {msg.filename || 'Document'}
+        </Text>
+        {msg.sizeBytes ? (
+          <Text style={[styles.docCardSub, { color: mine ? 'rgba(255,255,255,0.7)' : colors.textMuted }]}>
+            {fmtBytes(msg.sizeBytes)}
+          </Text>
+        ) : null}
+      </View>
+      <Icon name="download" size={14} color={mine ? 'rgba(255,255,255,0.7)' : colors.textMuted} />
+    </Pressable>
+  );
+}
+
+function VideoAttachment({ msg, mine, colors, styles }) {
+  const { opening, open } = useOpenAttachment(msg);
+  return (
+    <Pressable style={styles.videoCard} onPress={open} disabled={opening} accessibilityRole="button" accessibilityLabel="Open video">
+      {msg.thumbnailUri ? (
+        <Image source={{ uri: msg.thumbnailUri }} style={styles.videoThumb} resizeMode="cover" />
+      ) : (
+        <View style={[styles.videoThumb, styles.videoThumbPlaceholder, { backgroundColor: mine ? 'rgba(255,255,255,0.12)' : colors.surface2 }]}>
+          <Icon name="film" size={22} color={mine ? '#FFFFFF' : colors.textMuted} />
+        </View>
+      )}
+      <View style={styles.videoPlayBadge}>
+        <Icon name={opening ? 'loader' : 'play'} size={16} color="#FFFFFF" />
+      </View>
     </Pressable>
   );
 }
@@ -951,6 +1125,20 @@ const makeStyles = (c) => StyleSheet.create({
   metaTime: { fontSize: 10, fontFamily: FONT.medium },
   metaEdited: { fontSize: 10, fontFamily: FONT.medium, fontStyle: 'italic', marginRight: 1 },
   deletedText: { ...type.body, fontStyle: 'italic' },
+
+  /* Document / video attachment cards */
+  docCard: { flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 200, maxWidth: 240, paddingVertical: 2 },
+  docCardIcon: { width: 36, height: 36, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  docCardName: { fontSize: 13, fontFamily: FONT.bold },
+  docCardSub: { fontSize: 11, fontFamily: FONT.medium, marginTop: 1 },
+  videoCard: { width: 200, height: 150, borderRadius: radius.md, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  videoThumb: { width: '100%', height: '100%', position: 'absolute' },
+  videoThumbPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+  videoPlayBadge: { width: 40, height: 40, borderRadius: 999, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center' },
+
+  /* Failed-to-send indicator */
+  failedRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3, marginHorizontal: 4 },
+  failedText: { fontSize: 11, fontFamily: FONT.medium },
 
   missedCallCardRow: { alignItems: 'center', marginVertical: space[2] },
   missedCallCard: {
