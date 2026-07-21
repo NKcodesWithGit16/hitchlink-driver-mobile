@@ -942,7 +942,10 @@ function VoicePlayable({ uri, durationSec, mine, colors, styles }) {
   const [source, setSource] = useState(null);
   const pendingPlayRef = useRef(false);
 
-  const player = useAudioPlayer(source);
+  // Default updateInterval is 500ms, which reads as a stepped/jumpy waveform
+  // on a clip this short — 100ms is expo-audio's own recommended value for a
+  // smoothly animating progress indicator.
+  const player = useAudioPlayer(source, { updateInterval: 100 });
   const status = useAudioPlayerStatus(player);
   const ink = mine ? '#FFFFFF' : colors.teal;
   const playing = !!status?.playing;
