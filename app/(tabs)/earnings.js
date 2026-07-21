@@ -10,6 +10,7 @@ import Skeleton from '../../src/components/ui/Skeleton';
 import LoadDetailSheet from '../../src/components/driver/LoadDetailSheet';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useTheme } from '../../src/theme/ThemeContext';
+import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { fetchEarnings, fetchLoadHistory } from '../../src/api/main';
 import { getStats, computeLoadStats } from '../../src/lib/odometer';
@@ -26,16 +27,16 @@ const fallbackGoal = (d) => Math.round(((d.prevNet || d.net || 0) * 1.15) / 100)
 
 // Compact "Jun 3" for a history row. Handles both a plain 'YYYY-MM-DD' (mock)
 // and a full ISO timestamp (live /history), so it never renders a raw string.
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-function fmtWhen(x) {
+function fmtWhen(x, months) {
   if (!x) return '';
   const d = new Date(x);
-  return isNaN(d.getTime()) ? String(x) : `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+  return isNaN(d.getTime()) ? String(x) : `${months[d.getMonth()]} ${d.getDate()}`;
 }
 
 export default function EarningsScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
+  const t = useT();
   const { userId } = useAuth();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [data, setData]   = useState(null);
@@ -117,7 +118,7 @@ export default function EarningsScreen() {
           <LinearGradient colors={colors.gradients.brand} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
           <View style={{ paddingTop: insets.top }}>
             <View style={styles.summaryInner}>
-              <Text style={styles.summaryLabel}>{range === 'week' ? 'THIS WEEK' : 'THIS MONTH'}</Text>
+              <Text style={styles.summaryLabel}>{range === 'week' ? t('earnings.thisWeek') : t('earnings.thisMonth')}</Text>
               <View style={styles.summaryRight}>
                 <Text style={styles.summaryValue}>{money(d.net)}</Text>
                 <View style={styles.summaryDelta}>
@@ -143,8 +144,8 @@ export default function EarningsScreen() {
             <Sheen />
             <View style={styles.heroTop}>
               <View>
-                <Text style={styles.heroLabel}>{range === 'week' ? 'THIS WEEK' : 'THIS MONTH'}</Text>
-                <Text style={styles.heroSub}>Take-home pay</Text>
+                <Text style={styles.heroLabel}>{range === 'week' ? t('earnings.thisWeek') : t('earnings.thisMonth')}</Text>
+                <Text style={styles.heroSub}>{t('earnings.takeHomePay')}</Text>
               </View>
               <Segmented value={range} onChange={setRange} styles={styles} />
             </View>
@@ -162,13 +163,15 @@ export default function EarningsScreen() {
                     </Text>
                   </View>
                 </View>
-                <Text style={styles.heroCompare}>vs {money(d.prevNet)} last {range}</Text>
-                <GoalBar value={d.net} goal={goal} colors={colors} styles={styles} />
+                <Text style={styles.heroCompare}>
+                  {t(range === 'week' ? 'earnings.vsLastWeek' : 'earnings.vsLastMonth', { amount: money(d.prevNet) })}
+                </Text>
+                <GoalBar value={d.net} goal={goal} colors={colors} styles={styles} t={t} />
               </>
             ) : error ? (
               <View style={{ marginTop: space[3], gap: 4 }}>
                 <Text style={styles.heroValue}>—</Text>
-                <Text style={styles.heroCompare}>Pay data unavailable right now</Text>
+                <Text style={styles.heroCompare}>{t('earnings.payUnavailable')}</Text>
               </View>
             ) : (
               <View style={{ marginTop: space[3], gap: space[3] }}>
@@ -188,8 +191,8 @@ export default function EarningsScreen() {
               <FadeInView delay={60}>
                 <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                   <View style={styles.cardHead}>
-                    <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Daily earnings</Text>
-                    {bestBar ? <Text style={[styles.cardHeadSub, { color: colors.textMuted }]}>Best {bestBar.d} · {money(bestBar.v)}</Text> : null}
+                    <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>{t('earnings.dailyEarnings')}</Text>
+                    {bestBar ? <Text style={[styles.cardHeadSub, { color: colors.textMuted }]}>{t('earnings.bestDayLine', { day: bestBar.d, amount: money(bestBar.v) })}</Text> : null}
                   </View>
                   {/* key by range: remounts with a correctly-sized anim array
                       per period (week has 7 bars, month 4) and re-plays the
@@ -201,42 +204,42 @@ export default function EarningsScreen() {
               {/* Insights strip */}
               <FadeInView delay={110}>
                 <View style={styles.insightRow}>
-                  <InsightChip icon="zap"         label="Best day"   value={bestBar ? money(bestBar.v) : '—'} sub={bestBar?.d} colors={colors} styles={styles} />
-                  <InsightChip icon="package"     label="Avg / load" value={money(avgLoad)}                   colors={colors} styles={styles} />
-                  <InsightChip icon="dollar-sign" label="Per mile"   value={`$${rpm(dpm)}`}                   colors={colors} styles={styles} />
+                  <InsightChip icon="zap"         label={t('earnings.bestDay')}   value={bestBar ? money(bestBar.v) : '—'} sub={bestBar?.d} colors={colors} styles={styles} />
+                  <InsightChip icon="package"     label={t('earnings.avgPerLoad')} value={money(avgLoad)}                   colors={colors} styles={styles} />
+                  <InsightChip icon="dollar-sign" label={t('earnings.perMile')}   value={`$${rpm(dpm)}`}                   colors={colors} styles={styles} />
                 </View>
               </FadeInView>
 
               {/* Stats grid */}
               <FadeInView delay={160}>
                 <View style={styles.grid}>
-                  <StatCard icon="navigation" label="Miles driven"    value={num(d.miles)}    accent={colors.teal} colors={colors} styles={styles} />
-                  <StatCard icon="repeat"     label="Loads completed" value={String(d.loads)} accent={colors.teal} colors={colors} styles={styles} />
+                  <StatCard icon="navigation" label={t('earnings.milesDriven')}    value={num(d.miles)}    accent={colors.teal} colors={colors} styles={styles} />
+                  <StatCard icon="repeat"     label={t('earnings.loadsCompleted')} value={String(d.loads)} accent={colors.teal} colors={colors} styles={styles} />
                 </View>
               </FadeInView>
               <FadeInView delay={200}>
                 <View style={styles.grid}>
-                  <StatCard icon="trending-up" label="Revenue / mile" value={`$${rpm(d.net / (d.miles || 1))}`} accent={colors.go}      colors={colors} styles={styles} />
-                  <StatCard icon="droplet"     label="Fuel used"      value={`${num(d.fuelGal)} gal`} sub={money(d.fuelCost)} accent={colors.caution} colors={colors} styles={styles} />
+                  <StatCard icon="trending-up" label={t('earnings.revenuePerMile')} value={`$${rpm(d.net / (d.miles || 1))}`} accent={colors.go}      colors={colors} styles={styles} />
+                  <StatCard icon="droplet"     label={t('earnings.fuelUsed')}      value={`${num(d.fuelGal)} gal`} sub={money(d.fuelCost)} accent={colors.caution} colors={colors} styles={styles} />
                 </View>
               </FadeInView>
 
               {/* Pay breakdown */}
               <FadeInView delay={240}>
                 <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                  <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Where it went</Text>
+                  <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>{t('earnings.whereItWent')}</Text>
                   <Waterfall netPct={netPct} fuelPct={fuelPct} dedPct={dedPct} colors={colors} styles={styles} />
                   <View style={styles.waterfallLegend}>
-                    <LegendDot color={colors.go}      label={`Net ${Math.round(netPct * 100)}%`}     colors={colors} styles={styles} />
-                    <LegendDot color={colors.caution} label={`Fuel ${Math.round(fuelPct * 100)}%`}   colors={colors} styles={styles} />
-                    <LegendDot color={colors.danger}  label={`Deduct ${Math.round(dedPct * 100)}%`}  colors={colors} styles={styles} />
+                    <LegendDot color={colors.go}      label={t('earnings.legendNet', { pct: Math.round(netPct * 100) })}     colors={colors} styles={styles} />
+                    <LegendDot color={colors.caution} label={t('earnings.legendFuel', { pct: Math.round(fuelPct * 100) })}   colors={colors} styles={styles} />
+                    <LegendDot color={colors.danger}  label={t('earnings.legendDeduct', { pct: Math.round(dedPct * 100) })}  colors={colors} styles={styles} />
                   </View>
                   <View style={[styles.divider, { backgroundColor: colors.border }]} />
-                  <BreakdownRow label="Gross earnings"   value={money(d.gross)}          colors={colors} styles={styles} />
-                  <BreakdownRow label="Fuel (estimated)" value={`− ${money(d.fuelCost)}`}   tone="caution" colors={colors} styles={styles} />
-                  <BreakdownRow label="Deductions & fees" value={`− ${money(d.deductions)}`} tone="danger" colors={colors} styles={styles} />
+                  <BreakdownRow label={t('earnings.grossEarnings')}   value={money(d.gross)}          colors={colors} styles={styles} />
+                  <BreakdownRow label={t('earnings.fuelEstimated')} value={`− ${money(d.fuelCost)}`}   tone="caution" colors={colors} styles={styles} />
+                  <BreakdownRow label={t('earnings.deductionsFees')} value={`− ${money(d.deductions)}`} tone="danger" colors={colors} styles={styles} />
                   <View style={[styles.divider, { backgroundColor: colors.border, marginVertical: space[1] }]} />
-                  <BreakdownRow label="Take-home" value={money(d.net)} strong tone="go" colors={colors} styles={styles} />
+                  <BreakdownRow label={t('earnings.takeHome')} value={money(d.net)} strong tone="go" colors={colors} styles={styles} />
                 </View>
               </FadeInView>
 
@@ -246,11 +249,11 @@ export default function EarningsScreen() {
               <View style={[styles.errorIcon, { backgroundColor: colors.cautionFill }]}>
                 <Icon name="wifi-off" size={26} color={colors.caution} />
               </View>
-              <Text style={[styles.errorTitle, { color: colors.textPrimary }]}>Couldn't load your pay</Text>
-              <Text style={[styles.errorSub, { color: colors.textSecondary }]}>Check your signal — your earnings are safe and will load the moment you reconnect.</Text>
-              <Pressable onPress={onRefresh} style={[styles.retryBtn, { borderColor: colors.teal }]} accessibilityRole="button" accessibilityLabel="Try loading earnings again">
+              <Text style={[styles.errorTitle, { color: colors.textPrimary }]}>{t('earnings.couldntLoadPay')}</Text>
+              <Text style={[styles.errorSub, { color: colors.textSecondary }]}>{t('earnings.couldntLoadPaySub')}</Text>
+              <Pressable onPress={onRefresh} style={[styles.retryBtn, { borderColor: colors.teal }]} accessibilityRole="button" accessibilityLabel={t('earnings.tryLoadingAgainA11y')}>
                 <Icon name="refresh-cw" size={15} color={colors.teal} />
-                <Text style={[styles.retryText, { color: colors.teal }]}>Try again</Text>
+                <Text style={[styles.retryText, { color: colors.teal }]}>{t('load.tryAgain')}</Text>
               </Pressable>
             </View>
           ) : (
@@ -260,9 +263,9 @@ export default function EarningsScreen() {
           {/* ── Load history — every delivered load with its paperwork photos ── */}
           <FadeInView delay={80}>
             <View style={styles.histHead}>
-              <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Load history</Text>
+              <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>{t('earnings.loadHistory')}</Text>
               {history.length > 0 ? (
-                <Text style={[styles.cardHeadSub, { color: colors.textMuted }]}>{history.length} loads</Text>
+                <Text style={[styles.cardHeadSub, { color: colors.textMuted }]}>{t('earnings.loadsCount', { count: history.length })}</Text>
               ) : null}
             </View>
           </FadeInView>
@@ -270,7 +273,7 @@ export default function EarningsScreen() {
             <View style={[styles.histEmpty, { backgroundColor: colors.surface, borderColor: colors.border }]}>
               <Icon name="clock" size={22} color={colors.textMuted} />
               <Text style={[styles.histEmptyText, { color: colors.textSecondary }]}>
-                Your delivered loads show up here with the paperwork photos you captured on the dock.
+                {t('earnings.historyEmpty')}
               </Text>
             </View>
           ) : (
@@ -338,7 +341,7 @@ const styles_sheen = StyleSheet.create({
   wrap: { position: 'absolute', top: -40, bottom: -40, width: 130 },
 });
 
-function GoalBar({ value, goal, colors, styles }) {
+function GoalBar({ value, goal, colors, styles, t }) {
   const reduce = useReduceMotion();
   const pct = Math.max(0, Math.min(1, goal ? value / goal : 0));
   const smashed = value >= goal && goal > 0;
@@ -364,7 +367,7 @@ function GoalBar({ value, goal, colors, styles }) {
       </View>
       <View style={styles.goalMetaRow}>
         <Text style={styles.goalMeta}>
-          {smashed ? '🎉 Goal smashed' : `${money(value)} of ${money(goal)}`}
+          {smashed ? t('earnings.goalSmashed') : t('earnings.goalOf', { value: money(value), goal: money(goal) })}
         </Text>
         <Text style={styles.goalPct}>{Math.round(pct * 100)}%</Text>
       </View>
@@ -405,6 +408,7 @@ function EarningsBodySkeleton({ colors, styles }) {
 }
 
 function Segmented({ value, onChange, styles }) {
+  const t = useT();
   return (
     <View style={styles.segment}>
       {['week', 'month'].map((k) => (
@@ -415,9 +419,9 @@ function Segmented({ value, onChange, styles }) {
           hitSlop={8}
           accessibilityRole="button"
           accessibilityState={{ selected: value === k }}
-          accessibilityLabel={k === 'week' ? 'Show this week' : 'Show this month'}
+          accessibilityLabel={k === 'week' ? t('earnings.showThisWeekA11y') : t('earnings.showThisMonthA11y')}
         >
-          <Text style={[styles.segText, value === k && styles.segTextActive]}>{k === 'week' ? 'Week' : 'Month'}</Text>
+          <Text style={[styles.segText, value === k && styles.segTextActive]}>{k === 'week' ? t('earnings.week') : t('earnings.month')}</Text>
         </Pressable>
       ))}
     </View>
@@ -530,33 +534,34 @@ function BreakdownRow({ label, value, tone, strong, colors, styles }) {
 // One completed load in the history list: route + pay + a tappable strip of its
 // proof-of-delivery photos. Tapping a thumbnail opens the fullscreen lightbox.
 function HistoryCard({ load, colors, styles, onOpen, onOpenPhoto }) {
+  const t = useT();
   const cancelled = load.status === 'Cancelled';
-  const t = toneOf(colors, cancelled ? 'danger' : 'go');
+  const tone = toneOf(colors, cancelled ? 'danger' : 'go');
   const photos = load.photos || [];
   const shown = photos.slice(0, 4);
   const extra = photos.length - shown.length;
   return (
     <View style={[styles.histCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-      <View style={[styles.histStripe, { backgroundColor: t.solid }]} />
+      <View style={[styles.histStripe, { backgroundColor: tone.solid }]} />
       <View style={{ flex: 1, padding: space[4], gap: space[3] }}>
         <Pressable
           onPress={onOpen}
           style={({ pressed }) => [styles.histTop, { opacity: pressed ? 0.7 : 1 }]}
           accessibilityRole="button"
-          accessibilityLabel={`View ${load.origin} to ${load.destination} details`}
+          accessibilityLabel={t('earnings.viewLoadDetailsA11y', { origin: load.origin, destination: load.destination })}
         >
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.histRoute, { color: colors.textPrimary }]} numberOfLines={1}>
               {load.origin} → {load.destination}
             </Text>
             <Text style={[styles.histMeta, { color: colors.textMuted }]} numberOfLines={1}>
-              {fmtWhen(load.completedAt)} · {num(load.miles)} mi{load.broker ? ` · ${load.broker}` : ''}
+              {fmtWhen(load.completedAt, t('common.monthsShort'))} · {num(load.miles)} mi{load.broker ? ` · ${load.broker}` : ''}
             </Text>
           </View>
           <View style={{ alignItems: 'flex-end', gap: 5 }}>
             <Text style={[styles.histRate, { color: colors.textPrimary }]}>{money(load.rate)}</Text>
-            <View style={[styles.histBadge, { backgroundColor: t.fill, borderColor: t.solid + '55' }]}>
-              <Text style={[styles.histBadgeText, { color: t.solid }]}>{cancelled ? 'Cancelled' : 'Delivered'}</Text>
+            <View style={[styles.histBadge, { backgroundColor: tone.fill, borderColor: tone.solid + '55' }]}>
+              <Text style={[styles.histBadgeText, { color: tone.solid }]}>{cancelled ? t('common.cancelled') : t('earnings.delivered')}</Text>
             </View>
           </View>
           <View style={{ justifyContent: 'center', marginLeft: 4 }}>
@@ -572,7 +577,7 @@ function HistoryCard({ load, colors, styles, onOpen, onOpenPhoto }) {
                 onPress={() => onOpenPhoto(i)}
                 style={({ pressed }) => [styles.histThumb, { opacity: pressed ? 0.8 : 1 }]}
                 accessibilityRole="imagebutton"
-                accessibilityLabel={p.caption || 'Load photo'}
+                accessibilityLabel={p.caption || t('earnings.loadPhotoA11y')}
               >
                 <Image source={{ uri: p.thumbnailUrl || p.url }} style={styles.histThumbImg} />
                 {i === shown.length - 1 && extra > 0 ? (
@@ -585,12 +590,12 @@ function HistoryCard({ load, colors, styles, onOpen, onOpenPhoto }) {
           </View>
         ) : cancelled ? (
           <Text style={[styles.histNote, { color: colors.textMuted }]} numberOfLines={2}>
-            {load.cancellationReason || 'Load cancelled.'}
+            {load.cancellationReason || t('earnings.loadCancelled')}
           </Text>
         ) : (
           <View style={[styles.histNoPhotos, { borderColor: colors.border }]}>
             <Icon name="camera-off" size={13} color={colors.textMuted} />
-            <Text style={[styles.histNoPhotosText, { color: colors.textMuted }]}>No paperwork photos</Text>
+            <Text style={[styles.histNoPhotosText, { color: colors.textMuted }]}>{t('earnings.noPaperworkPhotos')}</Text>
           </View>
         )}
       </View>
@@ -601,31 +606,32 @@ function HistoryCard({ load, colors, styles, onOpen, onOpenPhoto }) {
 // Fullscreen photo viewer with prev/next. Tapping the backdrop closes it.
 function Lightbox({ photos, index, onIndex, onClose, styles }) {
   const { width } = useWindowDimensions();
+  const t = useT();
   if (!photos || photos.length === 0) return null;
   const p = photos[index];
   const go = (dir) => onIndex((index + dir + photos.length) % photos.length);
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
       <View style={styles.lbOverlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close photo" />
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel={t('earnings.closePhotoA11y')} />
         <Image
           source={{ uri: p.url || p.thumbnailUrl }}
           style={{ width: width - 32, height: '68%' }}
           resizeMode="contain"
         />
         <View style={styles.lbCaption} pointerEvents="none">
-          <Text style={styles.lbCaptionText}>{p.caption || 'Photo'}</Text>
+          <Text style={styles.lbCaptionText}>{p.caption || t('earnings.photoFallback')}</Text>
           <Text style={styles.lbCount}>{index + 1} / {photos.length}</Text>
         </View>
-        <Pressable onPress={onClose} style={styles.lbClose} hitSlop={10} accessibilityRole="button" accessibilityLabel="Close">
+        <Pressable onPress={onClose} style={styles.lbClose} hitSlop={10} accessibilityRole="button" accessibilityLabel={t('earnings.close')}>
           <Icon name="x" size={22} color="#FFFFFF" />
         </Pressable>
         {photos.length > 1 ? (
           <>
-            <Pressable onPress={() => go(-1)} style={[styles.lbNav, { left: 12 }]} hitSlop={8} accessibilityRole="button" accessibilityLabel="Previous photo">
+            <Pressable onPress={() => go(-1)} style={[styles.lbNav, { left: 12 }]} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('earnings.previousPhotoA11y')}>
               <Icon name="chevron-left" size={26} color="#FFFFFF" />
             </Pressable>
-            <Pressable onPress={() => go(1)} style={[styles.lbNav, { right: 12 }]} hitSlop={8} accessibilityRole="button" accessibilityLabel="Next photo">
+            <Pressable onPress={() => go(1)} style={[styles.lbNav, { right: 12 }]} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('earnings.nextPhotoA11y')}>
               <Icon name="chevron-right" size={26} color="#FFFFFF" />
             </Pressable>
           </>

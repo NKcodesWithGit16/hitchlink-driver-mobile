@@ -13,16 +13,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../ui/Icon';
 import { money, num, rpm, signedNum } from '../../lib/format';
 import { space, radius, type, FONT, toneOf } from '../../theme/tokens';
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+import { useT } from '../../i18n/LanguageContext';
 
 // Tolerant date label: handles both 'YYYY-MM-DD' (mock) and a full ISO
 // timestamp (live /history), never renders a raw string.
-function fmtDate(iso) {
+function fmtDate(iso, months) {
   if (!iso) return '';
   const d = new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso);
   if (isNaN(d.getTime())) return iso;
-  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
 
 const brokerName = (load) => (typeof load?.broker === 'string' ? load.broker : load?.broker?.name || '');
@@ -32,6 +31,7 @@ const signedRpm = (n) => (n == null || isNaN(n) ? '' : `${n >= 0 ? '+' : '−'}$
 
 export default function LoadDetailSheet({ load, stats, colors, onClose, onOpenPhoto }) {
   const insets = useSafeAreaInsets();
+  const t = useT();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   if (!load) return null;
 
@@ -53,7 +53,7 @@ export default function LoadDetailSheet({ load, stats, colors, onClose, onOpenPh
   return (
     <Modal visible transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close load details" />
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel={t('loadDetail.closeA11y')} />
 
         <View style={[styles.sheet, { paddingBottom: insets.bottom + space[5] }]}>
           <View style={styles.grabber} />
@@ -63,13 +63,13 @@ export default function LoadDetailSheet({ load, stats, colors, onClose, onOpenPh
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={styles.route} numberOfLines={2}>{load.origin} → {load.destination}</Text>
               <Text style={styles.meta} numberOfLines={1}>
-                {[fmtDate(load.completedAt), brokerName(load), load.id].filter(Boolean).join(' · ')}
+                {[fmtDate(load.completedAt, t('common.monthsShort')), brokerName(load), load.id].filter(Boolean).join(' · ')}
               </Text>
             </View>
             <View style={[styles.pill, { backgroundColor: badge.fill, borderColor: badge.solid + '55' }]}>
-              <Text style={[styles.pillText, { color: badge.solid }]}>{cancelled ? 'Cancelled' : 'Delivered'}</Text>
+              <Text style={[styles.pillText, { color: badge.solid }]}>{cancelled ? t('common.cancelled') : t('earnings.delivered')}</Text>
             </View>
-            <Pressable onPress={onClose} style={styles.close} hitSlop={10} accessibilityRole="button" accessibilityLabel="Close">
+            <Pressable onPress={onClose} style={styles.close} hitSlop={10} accessibilityRole="button" accessibilityLabel={t('loadDetail.close')}>
               <Icon name="x" size={20} color={colors.textMuted} />
             </Pressable>
           </View>
@@ -79,14 +79,14 @@ export default function LoadDetailSheet({ load, stats, colors, onClose, onOpenPh
             {cancelled ? (
               <View style={[styles.note, { borderColor: colors.dangerFill }]}>
                 <Icon name="x-circle" size={16} color={colors.danger} />
-                <Text style={styles.noteText}>{load.cancellationReason || 'This load was cancelled.'}</Text>
+                <Text style={styles.noteText}>{load.cancellationReason || t('loadDetail.cancelledNote')}</Text>
               </View>
             ) : s.hasActual ? (
               <>
                 {/* ── Planned vs Driven ── */}
                 <View style={styles.panel}>
                   <View style={styles.panelHead}>
-                    <Text style={styles.panelLabel}>Planned vs Driven</Text>
+                    <Text style={styles.panelLabel}>{t('loadDetail.plannedVsDriven')}</Text>
                     {drivenDelta != null ? (
                       <View style={[styles.delta, { backgroundColor: droveMore ? colors.cautionFill : 'rgba(167,180,200,0.12)' }]}>
                         <Text style={[styles.deltaText, { color: droveMore ? colors.caution : colors.textSecondary }]}>
@@ -101,27 +101,27 @@ export default function LoadDetailSheet({ load, stats, colors, onClose, onOpenPh
                     <View style={[styles.marker, { left: pct(s.planned), backgroundColor: colors.textPrimary }]} />
                   </View>
                   <View style={styles.legend}>
-                    <Legend styles={styles} color={colors.teal} label={`Loaded ${num(s.loaded)} mi`} />
-                    <Legend styles={styles} color={colors.caution} label={`Deadhead ${num(s.deadhead)} mi`} />
-                    <Legend styles={styles} dashed label={`Planned ${num(s.planned)} mi`} colors={colors} />
+                    <Legend styles={styles} color={colors.teal} label={t('loadDetail.loadedMi', { n: num(s.loaded) })} />
+                    <Legend styles={styles} color={colors.caution} label={t('loadDetail.deadheadMi', { n: num(s.deadhead) })} />
+                    <Legend styles={styles} dashed label={t('loadDetail.plannedMi', { n: num(s.planned) })} colors={colors} />
                   </View>
                 </View>
 
                 {/* ── Stat grid ── */}
                 <View style={styles.grid}>
-                  <Tile styles={styles} label="Planned" value={num(s.planned)} unit="mi" sub="Broker booked" />
-                  <Tile styles={styles} label="Loaded" value={num(s.loaded)} unit="mi" valueColor={colors.tealBright}
-                    sub={s.loadedDelta != null ? `${signedNum(s.loadedDelta)} vs planned` : 'Under freight'}
+                  <Tile styles={styles} label={t('loadDetail.planned')} value={num(s.planned)} unit="mi" sub={t('loadDetail.brokerBooked')} />
+                  <Tile styles={styles} label={t('loadDetail.loaded')} value={num(s.loaded)} unit="mi" valueColor={colors.tealBright}
+                    sub={s.loadedDelta != null ? t('loadDetail.vsPlanned', { delta: signedNum(s.loadedDelta) }) : t('loadDetail.underFreight')}
                     subColor={s.loadedDelta > 0 ? colors.caution : colors.textSecondary} />
-                  <Tile styles={styles} label="Deadhead" value={num(s.deadhead)} unit="mi" valueColor={colors.caution} sub="Empty to pickup" />
-                  <Tile styles={styles} label="Total driven" value={num(s.driven)} unit="mi" sub="GPS odometer" />
+                  <Tile styles={styles} label={t('loadDetail.deadhead')} value={num(s.deadhead)} unit="mi" valueColor={colors.caution} sub={t('loadDetail.emptyToPickup')} />
+                  <Tile styles={styles} label={t('loadDetail.totalDriven')} value={num(s.driven)} unit="mi" sub={t('loadDetail.gpsOdometer')} />
                 </View>
               </>
             ) : (
               <View style={[styles.note, { borderColor: colors.border }]}>
                 <Icon name="navigation" size={16} color={colors.textMuted} />
                 <Text style={styles.noteText}>
-                  Booked for {num(s.planned)} mi. Actual miles driven will show here once this load reports GPS.
+                  {t('loadDetail.noGpsYet', { planned: num(s.planned) })}
                 </Text>
               </View>
             )}
@@ -131,27 +131,31 @@ export default function LoadDetailSheet({ load, stats, colors, onClose, onOpenPh
               <View style={styles.panel}>
                 <View style={styles.payRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.tileLabel}>Load rate</Text>
+                    <Text style={styles.tileLabel}>{t('loadDetail.loadRate')}</Text>
                     <Text style={[styles.payMain, { color: colors.go }]}>{money(s.rate)}</Text>
                   </View>
                   <View style={styles.rpmPair}>
                     <View style={styles.rpm}>
-                      <Text style={styles.rpmLabel}>Booked $/mi</Text>
+                      <Text style={styles.rpmLabel}>{t('loadDetail.bookedPerMi')}</Text>
                       <Text style={styles.rpmVal}>${rpm(s.bookedRpm)}</Text>
-                      <Text style={styles.rpmSub}>rate ÷ planned</Text>
+                      <Text style={styles.rpmSub}>{t('loadDetail.rateDivPlanned')}</Text>
                     </View>
                     {s.hasActual ? (
                       <View style={[styles.rpm, styles.rpmEff]}>
-                        <Text style={styles.rpmLabel}>Effective $/mi</Text>
+                        <Text style={styles.rpmLabel}>{t('loadDetail.effectivePerMi')}</Text>
                         <Text style={[styles.rpmVal, { color: colors.tealBright }]}>${rpm(s.effectiveRpm)}</Text>
-                        <Text style={styles.rpmSub}>{s.rpmDelta != null ? `${signedRpm(s.rpmDelta)} · ` : ''}÷ driven</Text>
+                        <Text style={styles.rpmSub}>{s.rpmDelta != null ? t('loadDetail.deltaDivDriven', { delta: signedRpm(s.rpmDelta) }) : t('loadDetail.divDriven')}</Text>
                       </View>
                     ) : null}
                   </View>
                 </View>
                 {s.hasActual && s.effectiveRpm != null ? (
                   <Text style={styles.earned}>
-                    You earned <Text style={{ color: colors.tealBright, fontFamily: FONT.extrabold }}>${rpm(s.effectiveRpm)}</Text> for every mile you actually turned — the {num(s.deadhead)} empty miles to pickup pull it below the booked ${rpm(s.bookedRpm)}.
+                    {t('loadDetail.earnedSentence', {
+                      rpm: `$${rpm(s.effectiveRpm)}`,
+                      deadhead: num(s.deadhead),
+                      booked: `$${rpm(s.bookedRpm)}`,
+                    })}
                   </Text>
                 ) : null}
               </View>
@@ -167,7 +171,7 @@ export default function LoadDetailSheet({ load, stats, colors, onClose, onOpenPh
             {/* ── Proof of delivery ── */}
             {photos.length > 0 ? (
               <View>
-                <Text style={styles.secLabel}>Proof of delivery</Text>
+                <Text style={styles.secLabel}>{t('loadDetail.proofOfDelivery')}</Text>
                 <View style={styles.pods}>
                   {photos.slice(0, 4).map((p, i) => (
                     <Pressable
@@ -175,7 +179,7 @@ export default function LoadDetailSheet({ load, stats, colors, onClose, onOpenPh
                       onPress={() => onOpenPhoto?.(i)}
                       style={({ pressed }) => [styles.pod, { opacity: pressed ? 0.8 : 1 }]}
                       accessibilityRole="imagebutton"
-                      accessibilityLabel={p.caption || 'Load photo'}
+                      accessibilityLabel={p.caption || t('earnings.loadPhotoA11y')}
                     >
                       <Image source={{ uri: p.thumbnailUrl || p.url }} style={styles.podImg} />
                     </Pressable>
