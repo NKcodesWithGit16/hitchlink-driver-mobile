@@ -16,6 +16,36 @@ export function rpm(n) {
   return Number(n).toFixed(2);
 }
 
+const KM_PER_MILE = 1.60934;
+
+// Every stored distance (load.miles, the GPS odometer buckets, loadStats
+// output) is true miles — this is the one place that converts for display.
+export function toDistance(miles, unit) {
+  const n = Number(miles);
+  if (!isFinite(n)) return 0;
+  return unit === 'km' ? n * KM_PER_MILE : n;
+}
+
+export function distNum(miles, unit) {
+  if (miles == null || isNaN(miles)) return num(miles);
+  return num(toDistance(miles, unit));
+}
+
+// Rate-per-mile figures ($/mi) convert the opposite direction from a plain
+// distance: a mile is the LONGER unit, so the same dollar spreads over fewer
+// km — divide, don't multiply. rpm() callers always store true $/mile;
+// this is the one place that converts one for display.
+export function toRatePerDistance(ratePerMile, unit) {
+  const n = Number(ratePerMile);
+  if (!isFinite(n)) return 0;
+  return unit === 'km' ? n / KM_PER_MILE : n;
+}
+
+export function distRpm(ratePerMile, unit) {
+  if (ratePerMile == null || isNaN(ratePerMile)) return rpm(ratePerMile);
+  return rpm(toRatePerDistance(ratePerMile, unit));
+}
+
 // Signed whole number for a delta chip, e.g. +11 / −4 / 0. Uses a real minus
 // glyph (−) so it lines up with tabular figures instead of a skinny hyphen.
 export function signedNum(n) {

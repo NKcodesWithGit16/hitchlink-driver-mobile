@@ -11,7 +11,7 @@ import { useMemo } from 'react';
 import { Modal, View, Text, Pressable, ScrollView, StyleSheet, Image } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../ui/Icon';
-import { money, num, rpm, signedNum } from '../../lib/format';
+import { money, num, signedNum, distNum, toDistance, distRpm, toRatePerDistance } from '../../lib/format';
 import { space, radius, type, FONT, toneOf } from '../../theme/tokens';
 import { useT } from '../../i18n/LanguageContext';
 
@@ -26,10 +26,10 @@ function fmtDate(iso, months) {
 
 const brokerName = (load) => (typeof load?.broker === 'string' ? load.broker : load?.broker?.name || '');
 
-// Signed rate-per-mile delta, e.g. "−$0.24" — real minus glyph to match figures.
+// Signed rate delta (caller converts to the display unit first), e.g. "−$0.24" — real minus glyph to match figures.
 const signedRpm = (n) => (n == null || isNaN(n) ? '' : `${n >= 0 ? '+' : '−'}$${Math.abs(n).toFixed(2)}`);
 
-export default function LoadDetailSheet({ load, stats, colors, onClose, onOpenPhoto }) {
+export default function LoadDetailSheet({ load, stats, colors, unit = 'mi', onClose, onOpenPhoto }) {
   const insets = useSafeAreaInsets();
   const t = useT();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -90,7 +90,7 @@ export default function LoadDetailSheet({ load, stats, colors, onClose, onOpenPh
                     {drivenDelta != null ? (
                       <View style={[styles.delta, { backgroundColor: droveMore ? colors.cautionFill : 'rgba(167,180,200,0.12)' }]}>
                         <Text style={[styles.deltaText, { color: droveMore ? colors.caution : colors.textSecondary }]}>
-                          {signedNum(drivenDelta)} mi{drivenPctDelta != null ? ` · ${drivenPctDelta >= 0 ? '+' : ''}${drivenPctDelta}%` : ''}
+                          {signedNum(toDistance(drivenDelta, unit))} {unit}{drivenPctDelta != null ? ` · ${drivenPctDelta >= 0 ? '+' : ''}${drivenPctDelta}%` : ''}
                         </Text>
                       </View>
                     ) : null}
@@ -101,27 +101,27 @@ export default function LoadDetailSheet({ load, stats, colors, onClose, onOpenPh
                     <View style={[styles.marker, { left: pct(s.planned), backgroundColor: colors.textPrimary }]} />
                   </View>
                   <View style={styles.legend}>
-                    <Legend styles={styles} color={colors.teal} label={t('loadDetail.loadedMi', { n: num(s.loaded) })} />
-                    <Legend styles={styles} color={colors.caution} label={t('loadDetail.deadheadMi', { n: num(s.deadhead) })} />
-                    <Legend styles={styles} dashed label={t('loadDetail.plannedMi', { n: num(s.planned) })} colors={colors} />
+                    <Legend styles={styles} color={colors.teal} label={t(unit === 'km' ? 'loadDetail.loadedKm' : 'loadDetail.loadedMi', { n: distNum(s.loaded, unit) })} />
+                    <Legend styles={styles} color={colors.caution} label={t(unit === 'km' ? 'loadDetail.deadheadKm' : 'loadDetail.deadheadMi', { n: distNum(s.deadhead, unit) })} />
+                    <Legend styles={styles} dashed label={t(unit === 'km' ? 'loadDetail.plannedKm' : 'loadDetail.plannedMi', { n: distNum(s.planned, unit) })} colors={colors} />
                   </View>
                 </View>
 
                 {/* ── Stat grid ── */}
                 <View style={styles.grid}>
-                  <Tile styles={styles} label={t('loadDetail.planned')} value={num(s.planned)} unit="mi" sub={t('loadDetail.brokerBooked')} />
-                  <Tile styles={styles} label={t('loadDetail.loaded')} value={num(s.loaded)} unit="mi" valueColor={colors.tealBright}
-                    sub={s.loadedDelta != null ? t('loadDetail.vsPlanned', { delta: signedNum(s.loadedDelta) }) : t('loadDetail.underFreight')}
+                  <Tile styles={styles} label={t('loadDetail.planned')} value={distNum(s.planned, unit)} unit={unit} sub={t('loadDetail.brokerBooked')} />
+                  <Tile styles={styles} label={t('loadDetail.loaded')} value={distNum(s.loaded, unit)} unit={unit} valueColor={colors.tealBright}
+                    sub={s.loadedDelta != null ? t('loadDetail.vsPlanned', { delta: signedNum(toDistance(s.loadedDelta, unit)) }) : t('loadDetail.underFreight')}
                     subColor={s.loadedDelta > 0 ? colors.caution : colors.textSecondary} />
-                  <Tile styles={styles} label={t('loadDetail.deadhead')} value={num(s.deadhead)} unit="mi" valueColor={colors.caution} sub={t('loadDetail.emptyToPickup')} />
-                  <Tile styles={styles} label={t('loadDetail.totalDriven')} value={num(s.driven)} unit="mi" sub={t('loadDetail.gpsOdometer')} />
+                  <Tile styles={styles} label={t('loadDetail.deadhead')} value={distNum(s.deadhead, unit)} unit={unit} valueColor={colors.caution} sub={t('loadDetail.emptyToPickup')} />
+                  <Tile styles={styles} label={t('loadDetail.totalDriven')} value={distNum(s.driven, unit)} unit={unit} sub={t('loadDetail.gpsOdometer')} />
                 </View>
               </>
             ) : (
               <View style={[styles.note, { borderColor: colors.border }]}>
                 <Icon name="navigation" size={16} color={colors.textMuted} />
                 <Text style={styles.noteText}>
-                  {t('loadDetail.noGpsYet', { planned: num(s.planned) })}
+                  {t(unit === 'km' ? 'loadDetail.noGpsYetKm' : 'loadDetail.noGpsYetMi', { planned: distNum(s.planned, unit) })}
                 </Text>
               </View>
             )}
@@ -136,25 +136,25 @@ export default function LoadDetailSheet({ load, stats, colors, onClose, onOpenPh
                   </View>
                   <View style={styles.rpmPair}>
                     <View style={styles.rpm}>
-                      <Text style={styles.rpmLabel}>{t('loadDetail.bookedPerMi')}</Text>
-                      <Text style={styles.rpmVal}>${rpm(s.bookedRpm)}</Text>
+                      <Text style={styles.rpmLabel}>{t(unit === 'km' ? 'loadDetail.bookedPerKm' : 'loadDetail.bookedPerMi')}</Text>
+                      <Text style={styles.rpmVal}>${distRpm(s.bookedRpm, unit)}</Text>
                       <Text style={styles.rpmSub}>{t('loadDetail.rateDivPlanned')}</Text>
                     </View>
                     {s.hasActual ? (
                       <View style={[styles.rpm, styles.rpmEff]}>
-                        <Text style={styles.rpmLabel}>{t('loadDetail.effectivePerMi')}</Text>
-                        <Text style={[styles.rpmVal, { color: colors.tealBright }]}>${rpm(s.effectiveRpm)}</Text>
-                        <Text style={styles.rpmSub}>{s.rpmDelta != null ? t('loadDetail.deltaDivDriven', { delta: signedRpm(s.rpmDelta) }) : t('loadDetail.divDriven')}</Text>
+                        <Text style={styles.rpmLabel}>{t(unit === 'km' ? 'loadDetail.effectivePerKm' : 'loadDetail.effectivePerMi')}</Text>
+                        <Text style={[styles.rpmVal, { color: colors.tealBright }]}>${distRpm(s.effectiveRpm, unit)}</Text>
+                        <Text style={styles.rpmSub}>{s.rpmDelta != null ? t('loadDetail.deltaDivDriven', { delta: signedRpm(toRatePerDistance(s.rpmDelta, unit)) }) : t('loadDetail.divDriven')}</Text>
                       </View>
                     ) : null}
                   </View>
                 </View>
                 {s.hasActual && s.effectiveRpm != null ? (
                   <Text style={styles.earned}>
-                    {t('loadDetail.earnedSentence', {
-                      rpm: `$${rpm(s.effectiveRpm)}`,
-                      deadhead: num(s.deadhead),
-                      booked: `$${rpm(s.bookedRpm)}`,
+                    {t(unit === 'km' ? 'loadDetail.earnedSentenceKm' : 'loadDetail.earnedSentenceMi', {
+                      rpm: `$${distRpm(s.effectiveRpm, unit)}`,
+                      deadhead: distNum(s.deadhead, unit),
+                      booked: `$${distRpm(s.bookedRpm, unit)}`,
                     })}
                   </Text>
                 ) : null}

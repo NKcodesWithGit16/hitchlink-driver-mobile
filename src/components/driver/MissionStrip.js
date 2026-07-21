@@ -4,11 +4,13 @@ import Icon from '../ui/Icon';
 import { useTheme } from '../../theme/ThemeContext';
 import { useT } from '../../i18n/LanguageContext';
 import { space, radius, FONT, shadow } from '../../theme/tokens';
-import { money, num } from '../../lib/format';
+import { money, distNum } from '../../lib/format';
+import { useDistanceUnit } from '../../lib/prefs';
 
 export default function MissionStrip({ load }) {
   const { colors } = useTheme();
   const t = useT();
+  const unit = useDistanceUnit();
   return (
     <LinearGradient
       colors={colors.gradients.brand}
@@ -35,7 +37,7 @@ export default function MissionStrip({ load }) {
       <View style={styles.pills}>
         <Pill icon="dollar-sign" label={money(load.rate)} />
         <View style={styles.pipDivider} />
-        <Pill icon="map" label={`${num(load.miles)} mi`} />
+        <Pill icon="map" label={`${distNum(load.miles, unit)} ${unit}`} />
         {load.deliverBy ? (
           <>
             <View style={styles.pipDivider} />

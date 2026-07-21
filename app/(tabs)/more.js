@@ -11,10 +11,10 @@ import { hosState } from '../../src/components/driver/HOSPill';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useT, useLanguage } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
-import { useConfirmEveryStep, setConfirmEveryStep } from '../../src/lib/prefs';
+import { useConfirmEveryStep, setConfirmEveryStep, useDistanceUnit, setDistanceUnit } from '../../src/lib/prefs';
 import { fetchHos, fetchActiveLoad } from '../../src/api/main';
 import { hos as mockHos, earnings } from '../../src/data/mock';
-import { hm } from '../../src/lib/format';
+import { hm, toDistance } from '../../src/lib/format';
 import { space, type, radius, elevation, toneOf, FONT, shadow, ACCENT_PRESETS, BG_PRESETS_NIGHT } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 
@@ -56,6 +56,8 @@ export default function MoreScreen() {
   ];
 
   const languageLabel = lang === 'ka' ? t('more.languageGeorgian') : t('more.languageEnglish');
+  const distanceUnit = useDistanceUnit();
+  const distanceUnitLabel = distanceUnit === 'km' ? t('more.kilometers') : t('more.miles');
 
   // ACCENT_PRESETS/BG_PRESETS_NIGHT live in theme/tokens.js (design tokens,
   // not text) with English preset.label values — translate at the render
@@ -69,8 +71,8 @@ export default function MoreScreen() {
   };
 
   // Settings grouped into labeled sections the way top-tier apps organize them.
-  // `route` navigates; `key: 'language'` opens the language picker; otherwise a
-  // row falls back to an informational alert.
+  // `route` navigates; `key: 'language'`/`'distanceUnit'` open their pickers;
+  // otherwise a row falls back to an informational alert.
   const SETTING_GROUPS = [
     {
       title: t('more.groupAccount'),
@@ -86,7 +88,7 @@ export default function MoreScreen() {
       rows: [
         { icon: 'bell',        label: t('more.notifications'), tone: 'orange', meta: t('more.on') },
         { icon: 'globe',       label: t('more.language'),      tone: 'green',  meta: languageLabel, key: 'language' },
-        { icon: 'map',         label: t('more.distanceUnits'), tone: 'teal',   meta: t('more.miles') },
+        { icon: 'map',         label: t('more.distanceUnits'), tone: 'teal',   meta: distanceUnitLabel, key: 'distanceUnit' },
         { icon: 'navigation',  label: t('more.navigationApp'), tone: 'blue',   meta: t('more.appleMaps') },
       ],
     },
@@ -120,6 +122,14 @@ export default function MoreScreen() {
       Alert.alert(t('more.language'), undefined, [
         { text: t('more.languageEnglish'), onPress: () => setLang('en') },
         { text: t('more.languageGeorgian'), onPress: () => setLang('ka') },
+        { text: t('common.cancel'), style: 'cancel' },
+      ]);
+      return;
+    }
+    if (row.key === 'distanceUnit') {
+      Alert.alert(t('more.distanceUnits'), undefined, [
+        { text: t('more.miles'), onPress: () => setDistanceUnit('mi') },
+        { text: t('more.kilometers'), onPress: () => setDistanceUnit('km') },
         { text: t('common.cancel'), style: 'cancel' },
       ]);
       return;
@@ -193,7 +203,7 @@ export default function MoreScreen() {
               <View style={styles.heroStatDivider} />
               <HeroStat icon="check-circle" value={`${STANDING.onTimePct}%`}   label={t('more.onTime')}   styles={styles} />
               <View style={styles.heroStatDivider} />
-              <HeroStat icon="navigation" value={`${(earnings.week.miles / 1000).toFixed(1)}k`} label={t('more.miPerWeek')} styles={styles} />
+              <HeroStat icon="navigation" value={`${(toDistance(earnings.week.miles, distanceUnit) / 1000).toFixed(1)}k`} label={distanceUnit === 'km' ? t('more.kmPerWeek') : t('more.miPerWeek')} styles={styles} />
             </View>
           </LinearGradient>
         </FadeInView>

@@ -38,11 +38,11 @@ import { useAuth } from '../../src/context/AuthContext';
 import { useAlert } from '../../src/context/AlertContext';
 import { fetchActiveLoad, updateLoadStatus, undoLoadStatus, sendPhotoMessage, uploadLoadPhoto } from '../../src/api/main';
 import { useLoadStatusSocket } from '../../src/hooks/useLoadStatusSocket';
-import { useConfirmEveryStep } from '../../src/lib/prefs';
+import { useConfirmEveryStep, useDistanceUnit } from '../../src/lib/prefs';
 import { hos, weatherNow } from '../../src/data/mock';
 import { nextAction, statusChip, nextStop, isPrePickup } from '../../src/lib/load';
 import { setActiveLoad, finalizeActiveLoad, computeLoadStats } from '../../src/lib/odometer';
-import { money, num, rpm } from '../../src/lib/format';
+import { money, num, distNum, distRpm } from '../../src/lib/format';
 import { space, type, radius, FONT, shadow, toneOf, tap } from '../../src/theme/tokens';
 import { photos } from '../../src/theme/photos';
 
@@ -56,6 +56,7 @@ export default function LoadScreen() {
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const online = useNetworkStatus();
   const confirmEveryStep = useConfirmEveryStep();
+  const distanceUnit = useDistanceUnit();
   const [pending, setPending] = useState(0);
 
   const [load, setLoad] = useState(null);
@@ -360,6 +361,7 @@ export default function LoadScreen() {
             load={load}
             podUri={podUri}
             stats={deliveredStats ?? computeLoadStats(load, null)}
+            unit={distanceUnit}
           />
         ) : (
           <>
@@ -410,9 +412,9 @@ export default function LoadScreen() {
           <View style={styles.payRow}>
             <PayStat colors={colors} styles={styles} label={t('load.grossPay')} big animateValue={load.rate} format={(n) => money(n)} />
             <View style={styles.payDivider} />
-            <PayStat colors={colors} styles={styles} label={t('load.ratePerMi')} value={`$${rpm(load.rpm)}`} />
+            <PayStat colors={colors} styles={styles} label={t(distanceUnit === 'km' ? 'load.ratePerKm' : 'load.ratePerMi')} value={`$${distRpm(load.rpm, distanceUnit)}`} />
             <View style={styles.payDivider} />
-            <PayStat colors={colors} styles={styles} label={t('load.distance')} value={`${num(load.miles)} mi`} />
+            <PayStat colors={colors} styles={styles} label={t('load.distance')} value={`${distNum(load.miles, distanceUnit)} ${distanceUnit}`} />
           </View>
         </Card>
 
@@ -519,7 +521,7 @@ function DetailRow({ colors, styles, icon, label, value }) {
   );
 }
 
-function DeliveredCard({ colors, styles, load, podUri, stats }) {
+function DeliveredCard({ colors, styles, load, podUri, stats, unit }) {
   const t = useT();
   const reduce = useReduceMotion();
   const scale = useRef(new Animated.Value(reduce ? 1 : 0.9)).current;
@@ -543,24 +545,24 @@ function DeliveredCard({ colors, styles, load, podUri, stats }) {
 
         <View style={styles.deliveredStats}>
           <View style={styles.deliveredStatCell}>
-            <Text style={[styles.deliveredStatVal, { color: ink }]}>{num(s.driven ?? load.miles)}</Text>
-            <Text style={[styles.deliveredStatUnit, { color: ink }]}>{t('load.miDriven')}</Text>
+            <Text style={[styles.deliveredStatVal, { color: ink }]}>{distNum(s.driven ?? load.miles, unit)}</Text>
+            <Text style={[styles.deliveredStatUnit, { color: ink }]}>{t(unit === 'km' ? 'load.kmDriven' : 'load.miDriven')}</Text>
           </View>
           <View style={[styles.deliveredStatCell, styles.deliveredStatDivider]}>
             <Text style={[styles.deliveredStatVal, { color: ink }]}>{money(s.rate ?? load.rate)}</Text>
             <Text style={[styles.deliveredStatUnit, { color: ink }]}>{t('load.paid')}</Text>
           </View>
           <View style={[styles.deliveredStatCell, styles.deliveredStatDivider]}>
-            <Text style={[styles.deliveredStatVal, { color: ink }]}>${rpm(s.effectiveRpm ?? load.rpm)}</Text>
-            <Text style={[styles.deliveredStatUnit, { color: ink }]}>{t('load.perMile')}</Text>
+            <Text style={[styles.deliveredStatVal, { color: ink }]}>${distRpm(s.effectiveRpm ?? load.rpm, unit)}</Text>
+            <Text style={[styles.deliveredStatUnit, { color: ink }]}>{t(unit === 'km' ? 'load.perKm' : 'load.perMile')}</Text>
           </View>
         </View>
 
         {showSplit ? (
           <View style={styles.deliveredSplit}>
-            <Text style={[styles.deliveredSplitText, { color: ink }]}>{t('load.miLoaded', { n: num(s.loaded) })}</Text>
+            <Text style={[styles.deliveredSplitText, { color: ink }]}>{t(unit === 'km' ? 'load.kmLoaded' : 'load.miLoaded', { n: distNum(s.loaded, unit) })}</Text>
             <View style={[styles.deliveredSplitPip, { backgroundColor: ink }]} />
-            <Text style={[styles.deliveredSplitText, { color: ink }]}>{t('load.miDeadhead', { n: num(s.deadhead) })}</Text>
+            <Text style={[styles.deliveredSplitText, { color: ink }]}>{t(unit === 'km' ? 'load.kmDeadhead' : 'load.miDeadhead', { n: distNum(s.deadhead, unit) })}</Text>
           </View>
         ) : null}
 

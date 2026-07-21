@@ -1,4 +1,4 @@
-import { money, num, rpm, fmtDate, daysUntil, expiryStatus, hm } from '../src/lib/format';
+import { money, num, rpm, fmtDate, daysUntil, expiryStatus, hm, toDistance, distNum, toRatePerDistance, distRpm } from '../src/lib/format';
 
 describe('money', () => {
   test('rounds to whole dollars with thousands separators by default', () => {
@@ -47,6 +47,38 @@ describe('dates', () => {
     expect(expiryStatus('2026-06-20')).toMatchObject({ key: 'expiring', labelKey: 'documents.statusExpiringDays', labelParams: { days: 15 }, tone: 'caution' });
     expect(expiryStatus('2027-01-01').key).toBe('valid');
     expect(expiryStatus('garbage').key).toBe('valid'); // unparseable ⇒ don't cry wolf
+  });
+});
+
+describe('toDistance / distNum', () => {
+  test('mi passes miles through unchanged', () => {
+    expect(toDistance(100, 'mi')).toBe(100);
+    expect(distNum(925, 'mi')).toBe('925');
+  });
+  test('km converts using the mile constant', () => {
+    expect(toDistance(100, 'km')).toBeCloseTo(160.934, 3);
+    expect(distNum(925, 'km')).toBe('1,489'); // 925 * 1.60934 = 1488.6395
+  });
+  test('preserves sign for negative deltas', () => {
+    expect(Math.round(toDistance(-42, 'km'))).toBe(-68);
+  });
+  test('null/NaN render as 0, never NaN', () => {
+    expect(distNum(null, 'km')).toBe('0');
+    expect(distNum(undefined, 'mi')).toBe('0');
+  });
+});
+
+describe('toRatePerDistance / distRpm', () => {
+  test('mi passes the rate through unchanged', () => {
+    expect(toRatePerDistance(2.25, 'mi')).toBe(2.25);
+    expect(distRpm(2.25, 'mi')).toBe('2.25');
+  });
+  test('km divides — a mile is longer, so pay per unit is lower', () => {
+    expect(distRpm(2.25, 'km')).toBe('1.40'); // 2.25 / 1.60934 = 1.3981…
+  });
+  test('null/NaN dash out, like rpm()', () => {
+    expect(distRpm(null, 'km')).toBe('—');
+    expect(distRpm(NaN, 'mi')).toBe('—');
   });
 });
 

@@ -14,7 +14,8 @@ import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { fetchEarnings, fetchLoadHistory } from '../../src/api/main';
 import { getStats, computeLoadStats } from '../../src/lib/odometer';
-import { money, num, rpm } from '../../src/lib/format';
+import { money, num, distNum, distRpm } from '../../src/lib/format';
+import { useDistanceUnit } from '../../src/lib/prefs';
 import haptics from '../../src/lib/haptics';
 import { space, type, radius, FONT, shadow, toneOf } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
@@ -39,6 +40,7 @@ export default function EarningsScreen() {
   const t = useT();
   const { userId } = useAuth();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  const unit = useDistanceUnit();
   const [data, setData]   = useState(null);
   const [range, setRange] = useState('week');
   const [error, setError] = useState(false);
@@ -206,20 +208,20 @@ export default function EarningsScreen() {
                 <View style={styles.insightRow}>
                   <InsightChip icon="zap"         label={t('earnings.bestDay')}   value={bestBar ? money(bestBar.v) : '—'} sub={bestBar?.d} colors={colors} styles={styles} />
                   <InsightChip icon="package"     label={t('earnings.avgPerLoad')} value={money(avgLoad)}                   colors={colors} styles={styles} />
-                  <InsightChip icon="dollar-sign" label={t('earnings.perMile')}   value={`$${rpm(dpm)}`}                   colors={colors} styles={styles} />
+                  <InsightChip icon="dollar-sign" label={t(unit === 'km' ? 'earnings.perKm' : 'earnings.perMile')} value={`$${distRpm(dpm, unit)}`} colors={colors} styles={styles} />
                 </View>
               </FadeInView>
 
               {/* Stats grid */}
               <FadeInView delay={160}>
                 <View style={styles.grid}>
-                  <StatCard icon="navigation" label={t('earnings.milesDriven')}    value={num(d.miles)}    accent={colors.teal} colors={colors} styles={styles} />
+                  <StatCard icon="navigation" label={unit === 'km' ? t('earnings.kilometersDriven') : t('earnings.milesDriven')} value={distNum(d.miles, unit)} accent={colors.teal} colors={colors} styles={styles} />
                   <StatCard icon="repeat"     label={t('earnings.loadsCompleted')} value={String(d.loads)} accent={colors.teal} colors={colors} styles={styles} />
                 </View>
               </FadeInView>
               <FadeInView delay={200}>
                 <View style={styles.grid}>
-                  <StatCard icon="trending-up" label={t('earnings.revenuePerMile')} value={`$${rpm(d.net / (d.miles || 1))}`} accent={colors.go}      colors={colors} styles={styles} />
+                  <StatCard icon="trending-up" label={t(unit === 'km' ? 'earnings.revenuePerKm' : 'earnings.revenuePerMile')} value={`$${distRpm(d.net / (d.miles || 1), unit)}`} accent={colors.go} colors={colors} styles={styles} />
                   <StatCard icon="droplet"     label={t('earnings.fuelUsed')}      value={`${num(d.fuelGal)} gal`} sub={money(d.fuelCost)} accent={colors.caution} colors={colors} styles={styles} />
                 </View>
               </FadeInView>
@@ -283,6 +285,7 @@ export default function EarningsScreen() {
                   load={l}
                   colors={colors}
                   styles={styles}
+                  unit={unit}
                   onOpen={() => openDetail(l)}
                   onOpenPhoto={(idx) => { haptics.tap(); setLightbox({ photos: l.photos || [], index: idx }); }}
                 />
@@ -297,6 +300,7 @@ export default function EarningsScreen() {
           load={detail.load}
           stats={detail.stats}
           colors={colors}
+          unit={unit}
           onClose={() => setDetail(null)}
           onOpenPhoto={(idx) => setLightbox({ photos: detail.load.photos || [], index: idx })}
         />
@@ -533,7 +537,7 @@ function BreakdownRow({ label, value, tone, strong, colors, styles }) {
 
 // One completed load in the history list: route + pay + a tappable strip of its
 // proof-of-delivery photos. Tapping a thumbnail opens the fullscreen lightbox.
-function HistoryCard({ load, colors, styles, onOpen, onOpenPhoto }) {
+function HistoryCard({ load, colors, styles, unit, onOpen, onOpenPhoto }) {
   const t = useT();
   const cancelled = load.status === 'Cancelled';
   const tone = toneOf(colors, cancelled ? 'danger' : 'go');
@@ -555,7 +559,7 @@ function HistoryCard({ load, colors, styles, onOpen, onOpenPhoto }) {
               {load.origin} → {load.destination}
             </Text>
             <Text style={[styles.histMeta, { color: colors.textMuted }]} numberOfLines={1}>
-              {fmtWhen(load.completedAt, t('common.monthsShort'))} · {num(load.miles)} mi{load.broker ? ` · ${load.broker}` : ''}
+              {fmtWhen(load.completedAt, t('common.monthsShort'))} · {distNum(load.miles, unit)} {unit}{load.broker ? ` · ${load.broker}` : ''}
             </Text>
           </View>
           <View style={{ alignItems: 'flex-end', gap: 5 }}>

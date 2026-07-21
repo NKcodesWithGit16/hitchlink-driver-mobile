@@ -4,12 +4,15 @@ import Icon from '../ui/Icon';
 import { useTheme } from '../../theme/ThemeContext';
 import { useT } from '../../i18n/LanguageContext';
 import { radius, space, type, shadow, FONT } from '../../theme/tokens';
+import { distNum } from '../../lib/format';
+import { useDistanceUnit } from '../../lib/prefs';
 
 /* The hero glance card: one giant destination, deadline, distance, ETA.
    Readable in under a second from the wheel. */
 export default function NextStopCard({ stop }) {
   const { colors } = useTheme();
   const t = useT();
+  const unit = useDistanceUnit();
   const isPickup = stop.kind === 'PICKUP';
   return (
     <LinearGradient
@@ -31,8 +34,10 @@ export default function NextStopCard({ stop }) {
 
       <View style={[styles.metrics, { backgroundColor: colors.isDay ? 'rgba(8,15,30,0.05)' : 'rgba(0,0,0,0.22)' }]}>
         <View style={styles.metric}>
-          <Text style={[styles.metricVal, { color: colors.textPrimary }, type.num]}>{stop.remainingMiles ?? '—'}</Text>
-          <Text style={[styles.metricUnit, { color: colors.textMuted }]}>{t('load.miAway')}</Text>
+          <Text style={[styles.metricVal, { color: colors.textPrimary }, type.num]}>
+            {stop.remainingMiles != null ? distNum(stop.remainingMiles, unit) : '—'}
+          </Text>
+          <Text style={[styles.metricUnit, { color: colors.textMuted }]}>{t(unit === 'km' ? 'load.kmAway' : 'load.miAway')}</Text>
         </View>
         <View style={[styles.divider, { backgroundColor: colors.border }]} />
         <View style={styles.metric}>
