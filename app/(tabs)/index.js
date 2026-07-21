@@ -33,6 +33,7 @@ import { enqueue, flush, queueCount } from '../../src/lib/offlineQueue';
 import { TAB_BAR_CLEARANCE } from './_layout';
 
 import { useTheme } from '../../src/theme/ThemeContext';
+import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useAlert } from '../../src/context/AlertContext';
 import { fetchActiveLoad, updateLoadStatus, undoLoadStatus, sendPhotoMessage, uploadLoadPhoto } from '../../src/api/main';
@@ -49,6 +50,7 @@ export default function LoadScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
+  const t = useT();
   const { user } = useAuth();
   const { unreadCount, activeAlert, openModal: openAlert } = useAlert();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -179,10 +181,7 @@ export default function LoadScreen() {
         // backend instead of silently diverging, and drop any offered Undo.
         setStatus(prev);
         setUndo(null);
-        Alert.alert(
-          "That didn't go through",
-          "Your load may have already moved on. We've set it back to match dispatch — pull to refresh if it still looks off.",
-        );
+        Alert.alert(t('load.notSentTitle'), t('load.notSentBody'));
       } else {
         // Offline / server blip — queue to replay when the connection returns.
         setPending(await enqueue({ loadId: load.id, status: next }));
@@ -220,21 +219,18 @@ export default function LoadScreen() {
         // counts if either upload fails — tell the driver so they can resend it
         // from Messages instead of silently losing the paperwork.
         Promise.allSettled([
-          uploadLoadPhoto(load?.id, { uri, caption: 'Delivery paperwork' }),
-          sendPhotoMessage(user?.id, { uri, text: `📄 Delivery paperwork — ${load?.id ?? 'load'}` }),
+          uploadLoadPhoto(load?.id, { uri, caption: t('load.paperworkCaption') }),
+          sendPhotoMessage(user?.id, { uri, text: `📄 ${t('load.paperworkCaption')} — ${load?.id ?? 'load'}` }),
         ]).then((results) => {
           if (results.some((r) => r.status === 'rejected')) {
-            Alert.alert(
-              'Photo not sent',
-              "Your delivery was recorded, but the paperwork photo couldn't upload. Please resend it from Messages.",
-            );
+            Alert.alert(t('load.photoNotSentTitle'), t('load.photoNotSentBody'));
           }
         });
       }
     }
     advance(action.next);
     if (action.next !== 'Delivered' && online) {
-      setUndo({ prevStatus, message: 'Update sent to dispatcher' });
+      setUndo({ prevStatus, message: t('load.updateSent') });
     }
   };
 
@@ -269,10 +265,7 @@ export default function LoadScreen() {
       // Too late to take back (window passed, or it already moved on). Restore
       // and point the driver at dispatch, who can still correct it.
       setStatus(current);
-      Alert.alert(
-        "Couldn't undo",
-        "That update was already saved. Ask your dispatcher to correct the status if it's wrong.",
-      );
+      Alert.alert(t('load.undoFailTitle'), t('load.undoFailBody'));
     }
   };
 
@@ -281,7 +274,7 @@ export default function LoadScreen() {
       <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
         <View style={styles.center}>
           <Icon name="loader" size={26} color={colors.textMuted} />
-          <Text style={styles.muted}>Getting your day ready…</Text>
+          <Text style={styles.muted}>{t('load.gettingReady')}</Text>
         </View>
       </ScreenFade>
     );
@@ -295,16 +288,16 @@ export default function LoadScreen() {
           <View style={[styles.errorIcon, { backgroundColor: colors.cautionFill, borderColor: colors.bg }]}>
             <Icon name="wifi-off" size={34} color={colors.caution} />
           </View>
-          <Text style={styles.emptyTitle}>Can't reach HitchLink</Text>
-          <Text style={styles.emptySub}>We couldn't load your trip just now. Check your signal — your last update is safe and nothing was lost.</Text>
+          <Text style={styles.emptyTitle}>{t('load.cantReach')}</Text>
+          <Text style={styles.emptySub}>{t('load.cantReachSub')}</Text>
           <Pressable
             onPress={onRefresh}
             style={[styles.refreshBtn, { borderColor: colors.caution }]}
             accessibilityRole="button"
-            accessibilityLabel="Try loading your trip again"
+            accessibilityLabel={t('load.tryAgainA11y')}
           >
             <Icon name="refresh-cw" size={16} color={colors.caution} />
-            <Text style={[styles.refreshText, { color: colors.caution }]}>Try again</Text>
+            <Text style={[styles.refreshText, { color: colors.caution }]}>{t('load.tryAgain')}</Text>
           </Pressable>
         </View>
       </ScreenFade>
@@ -327,16 +320,16 @@ export default function LoadScreen() {
             <View style={styles.emptyIcon}>
               <Icon name="coffee" size={34} color={colors.go} />
             </View>
-            <Text style={styles.emptyTitle}>You're all caught up</Text>
-            <Text style={styles.emptySub}>No load right now — enjoy the quiet. Your dispatcher will send your next one straight here.</Text>
+            <Text style={styles.emptyTitle}>{t('load.allCaughtUp')}</Text>
+            <Text style={styles.emptySub}>{t('load.allCaughtUpSub')}</Text>
             <Pressable
               onPress={onRefresh}
               style={styles.refreshBtn}
               accessibilityRole="button"
-              accessibilityLabel="Check for new loads"
+              accessibilityLabel={t('load.checkNewA11y')}
             >
               <Icon name="refresh-cw" size={16} color={colors.teal} />
-              <Text style={styles.refreshText}>Check again</Text>
+              <Text style={styles.refreshText}>{t('load.checkAgain')}</Text>
             </Pressable>
           </View>
         </ScrollView>
@@ -383,7 +376,7 @@ export default function LoadScreen() {
                   <>
                     <View style={[styles.journeyDivider, { backgroundColor: colors.border }]} />
                     <PrimaryAction
-                      label={action.label}
+                      label={t(action.labelKey)}
                       icon={action.icon}
                       tone={action.tone}
                       loading={busy}
@@ -415,11 +408,11 @@ export default function LoadScreen() {
         {/* ── PAY ── */}
         <Card style={styles.payCard}>
           <View style={styles.payRow}>
-            <PayStat colors={colors} styles={styles} label="Gross pay" big animateValue={load.rate} format={(n) => money(n)} />
+            <PayStat colors={colors} styles={styles} label={t('load.grossPay')} big animateValue={load.rate} format={(n) => money(n)} />
             <View style={styles.payDivider} />
-            <PayStat colors={colors} styles={styles} label="Rate / mi" value={`$${rpm(load.rpm)}`} />
+            <PayStat colors={colors} styles={styles} label={t('load.ratePerMi')} value={`$${rpm(load.rpm)}`} />
             <View style={styles.payDivider} />
-            <PayStat colors={colors} styles={styles} label="Distance" value={`${num(load.miles)} mi`} />
+            <PayStat colors={colors} styles={styles} label={t('load.distance')} value={`${num(load.miles)} mi`} />
           </View>
         </Card>
 
@@ -429,19 +422,19 @@ export default function LoadScreen() {
           style={styles.expandHead}
           accessibilityRole="button"
           accessibilityState={{ expanded }}
-          accessibilityLabel={`Load details for ${load.id}. ${expanded ? 'Tap to hide' : 'Tap to show'}`}
+          accessibilityLabel={t('load.detailsA11y', { id: load.id, state: t(expanded ? 'load.tapToHide' : 'load.tapToShow') })}
         >
-          <SectionLabel style={{ margin: 0 }}>Load details · {load.id}</SectionLabel>
+          <SectionLabel style={{ margin: 0 }}>{t('load.detailsFor', { id: load.id })}</SectionLabel>
           <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textMuted} />
         </Pressable>
         {expanded ? (
           <Card style={{ gap: space[3] }}>
-            <DetailRow colors={colors} styles={styles} icon="package" label="Commodity" value={load.commodity} />
-            <DetailRow colors={colors} styles={styles} icon="bar-chart-2" label="Weight" value={`${num(load.weight)} lb · ${load.equipment}`} />
-            <DetailRow colors={colors} styles={styles} icon="clock" label="Pickup" value={`${load.pickupDate} · ${load.pickupWindowText}`} />
-            <DetailRow colors={colors} styles={styles} icon="clock" label="Delivery" value={`${load.deliveryDate} · ${load.deliveryWindowText}`} />
-            <DetailRow colors={colors} styles={styles} icon="briefcase" label="Broker" value={`${load.broker?.name} · ${load.broker?.ref}`} />
-            {load.notes ? <DetailRow colors={colors} styles={styles} icon="alert-circle" label="Notes" value={load.notes} /> : null}
+            <DetailRow colors={colors} styles={styles} icon="package" label={t('load.commodity')} value={load.commodity} />
+            <DetailRow colors={colors} styles={styles} icon="bar-chart-2" label={t('load.weight')} value={`${num(load.weight)} lb · ${load.equipment}`} />
+            <DetailRow colors={colors} styles={styles} icon="clock" label={t('load.pickup')} value={`${load.pickupDate} · ${load.pickupWindowText}`} />
+            <DetailRow colors={colors} styles={styles} icon="clock" label={t('load.delivery')} value={`${load.deliveryDate} · ${load.deliveryWindowText}`} />
+            <DetailRow colors={colors} styles={styles} icon="briefcase" label={t('load.broker')} value={`${load.broker?.name} · ${load.broker?.ref}`} />
+            {load.notes ? <DetailRow colors={colors} styles={styles} icon="alert-circle" label={t('load.notes')} value={load.notes} /> : null}
           </Card>
         ) : null}
       </ScrollView>
@@ -468,7 +461,8 @@ export default function LoadScreen() {
 
 /* ───────── Local pieces ───────── */
 function Header({ colors, styles, name, photoUrl, unreadCount = 0, onBell }) {
-  const initials = (name || 'Driver').slice(0, 1).toUpperCase();
+  const t = useT();
+  const initials = (name || t('load.driverFallback')).slice(0, 1).toUpperCase();
   const hasUnread = unreadCount > 0;
   return (
     <View style={styles.header}>
@@ -480,7 +474,7 @@ function Header({ colors, styles, name, photoUrl, unreadCount = 0, onBell }) {
           style={styles.iconBtn}
           hitSlop={8}
           accessibilityRole="button"
-          accessibilityLabel={hasUnread ? `${unreadCount} unread alerts — open` : 'Alerts'}
+          accessibilityLabel={hasUnread ? t('load.unreadAlertsA11y', { count: unreadCount }) : t('load.alertsA11y')}
         >
           <Icon name="bell" size={20} color={hasUnread ? colors.teal : colors.textSecondary} />
           {hasUnread ? (
@@ -526,6 +520,7 @@ function DetailRow({ colors, styles, icon, label, value }) {
 }
 
 function DeliveredCard({ colors, styles, load, podUri, stats }) {
+  const t = useT();
   const reduce = useReduceMotion();
   const scale = useRef(new Animated.Value(reduce ? 1 : 0.9)).current;
   useEffect(() => {
@@ -543,29 +538,29 @@ function DeliveredCard({ colors, styles, load, podUri, stats }) {
         <View style={styles.deliveredIcon}>
           <Icon name="check" size={30} color={colors.go} />
         </View>
-        <Text style={[styles.deliveredTitle, { color: ink }]}>Nice work.</Text>
-        <Text style={[styles.deliveredSub, { color: ink }]}>That's delivered — {load.origin} → {load.destination}</Text>
+        <Text style={[styles.deliveredTitle, { color: ink }]}>{t('load.niceWork')}</Text>
+        <Text style={[styles.deliveredSub, { color: ink }]}>{t('load.deliveredSub', { origin: load.origin, destination: load.destination })}</Text>
 
         <View style={styles.deliveredStats}>
           <View style={styles.deliveredStatCell}>
             <Text style={[styles.deliveredStatVal, { color: ink }]}>{num(s.driven ?? load.miles)}</Text>
-            <Text style={[styles.deliveredStatUnit, { color: ink }]}>Mi driven</Text>
+            <Text style={[styles.deliveredStatUnit, { color: ink }]}>{t('load.miDriven')}</Text>
           </View>
           <View style={[styles.deliveredStatCell, styles.deliveredStatDivider]}>
             <Text style={[styles.deliveredStatVal, { color: ink }]}>{money(s.rate ?? load.rate)}</Text>
-            <Text style={[styles.deliveredStatUnit, { color: ink }]}>Paid</Text>
+            <Text style={[styles.deliveredStatUnit, { color: ink }]}>{t('load.paid')}</Text>
           </View>
           <View style={[styles.deliveredStatCell, styles.deliveredStatDivider]}>
             <Text style={[styles.deliveredStatVal, { color: ink }]}>${rpm(s.effectiveRpm ?? load.rpm)}</Text>
-            <Text style={[styles.deliveredStatUnit, { color: ink }]}>Per mile</Text>
+            <Text style={[styles.deliveredStatUnit, { color: ink }]}>{t('load.perMile')}</Text>
           </View>
         </View>
 
         {showSplit ? (
           <View style={styles.deliveredSplit}>
-            <Text style={[styles.deliveredSplitText, { color: ink }]}>{num(s.loaded)} mi loaded</Text>
+            <Text style={[styles.deliveredSplitText, { color: ink }]}>{t('load.miLoaded', { n: num(s.loaded) })}</Text>
             <View style={[styles.deliveredSplitPip, { backgroundColor: ink }]} />
-            <Text style={[styles.deliveredSplitText, { color: ink }]}>{num(s.deadhead)} mi deadhead</Text>
+            <Text style={[styles.deliveredSplitText, { color: ink }]}>{t('load.miDeadhead', { n: num(s.deadhead) })}</Text>
           </View>
         ) : null}
 
@@ -576,16 +571,18 @@ function DeliveredCard({ colors, styles, load, podUri, stats }) {
 }
 
 function ConfirmActionModal({ visible, action, load, colors, styles, onConfirm, onCancel }) {
+  const t = useT();
   if (!action) return null;
-  const t = toneOf(colors, action.tone);
+  const tone = toneOf(colors, action.tone);
+  const label = t(action.labelKey);
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
       <View style={styles.confirmOverlay}>
         <GlassView radius={radius['2xl']} style={styles.confirmCard}>
-          <View style={[styles.confirmBadge, { backgroundColor: t.fill, borderColor: t.solid }]}>
-            <Icon name={action.icon} size={28} color={t.solid} />
+          <View style={[styles.confirmBadge, { backgroundColor: tone.fill, borderColor: tone.solid }]}>
+            <Icon name={action.icon} size={28} color={tone.solid} />
           </View>
-          <Text style={[styles.confirmTitle, { color: colors.textPrimary }]}>{action.label}</Text>
+          <Text style={[styles.confirmTitle, { color: colors.textPrimary }]}>{label}</Text>
           {load ? (
             <Text style={[styles.confirmSub, { color: colors.textSecondary }]}>
               {load.origin} → {load.destination} · {load.id}
@@ -594,30 +591,30 @@ function ConfirmActionModal({ visible, action, load, colors, styles, onConfirm, 
           {action.pod ? (
             <View style={[styles.confirmNote, { backgroundColor: colors.tealFill, borderColor: colors.teal }]}>
               <Icon name="camera" size={14} color={colors.teal} />
-              <Text style={[styles.confirmNoteText, { color: colors.teal }]}>You'll be asked to photograph the signed paperwork</Text>
+              <Text style={[styles.confirmNoteText, { color: colors.teal }]}>{t('load.podNote')}</Text>
             </View>
           ) : (
             <View style={[styles.confirmNote, { backgroundColor: colors.cautionFill, borderColor: colors.caution }]}>
               <Icon name="alert-triangle" size={14} color={colors.caution} />
-              <Text style={[styles.confirmNoteText, { color: colors.caution }]}>This update will be sent to your dispatcher</Text>
+              <Text style={[styles.confirmNoteText, { color: colors.caution }]}>{t('load.dispatchNote')}</Text>
             </View>
           )}
           <Pressable
             onPress={onConfirm}
-            style={({ pressed }) => [styles.confirmBtn, { backgroundColor: t.solid, opacity: pressed ? 0.88 : 1 }, shadow.glow(t.solid)]}
+            style={({ pressed }) => [styles.confirmBtn, { backgroundColor: tone.solid, opacity: pressed ? 0.88 : 1 }, shadow.glow(tone.solid)]}
             accessibilityRole="button"
-            accessibilityLabel={`Confirm: ${action.label}`}
+            accessibilityLabel={t('load.confirmA11y', { label })}
           >
-            <Icon name="check" size={20} color={t.ink} />
-            <Text style={[styles.confirmBtnText, { color: t.ink }]}>Yes, confirm</Text>
+            <Icon name="check" size={20} color={tone.ink} />
+            <Text style={[styles.confirmBtnText, { color: tone.ink }]}>{t('load.yesConfirm')}</Text>
           </Pressable>
           <Pressable
             onPress={onCancel}
             style={({ pressed }) => [styles.cancelBtn, { borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}
             accessibilityRole="button"
-            accessibilityLabel="Cancel and go back"
+            accessibilityLabel={t('load.cancelBackA11y')}
           >
-            <Text style={[styles.cancelBtnText, { color: colors.textMuted }]}>Cancel — go back</Text>
+            <Text style={[styles.cancelBtnText, { color: colors.textMuted }]}>{t('load.cancelBack')}</Text>
           </Pressable>
         </GlassView>
       </View>

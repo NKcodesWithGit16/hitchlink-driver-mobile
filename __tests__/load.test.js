@@ -65,6 +65,6 @@ describe('load lifecycle state machine', () => {
     expect(statusChip('Assigned').tone).toBe('caution');
     expect(statusChip('EnRouteToDropoff').tone).toBe('teal');
     expect(statusChip('Delivered').tone).toBe('go');
-    expect(statusChip('SomethingUnknown')).toEqual({ label: 'POSTED', tone: 'teal' });
+    expect(statusChip('SomethingUnknown')).toEqual({ labelKey: 'load.chip.posted', tone: 'teal' });
   });
 });

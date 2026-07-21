@@ -49,7 +49,8 @@
         }
       ],
       "expo-sharing",
-      "@config-plugins/react-native-callkeep"
+      "@config-plugins/react-native-callkeep",
+      "expo-localization"
     ],
     "ios": {
       "supportsTablet": true,

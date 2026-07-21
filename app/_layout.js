@@ -11,6 +11,7 @@ import {
   Lexend_700Bold, Lexend_800ExtraBold, Lexend_900Black,
 } from '@expo-google-fonts/lexend';
 import { ThemeProvider, useTheme } from '../src/theme/ThemeContext';
+import { LanguageProvider } from '../src/i18n/LanguageContext';
 import { AuthProvider, useAuth } from '../src/context/AuthContext';
 import { AlertProvider } from '../src/context/AlertContext';
 import { CallProvider } from '../src/context/CallContext';
@@ -130,17 +131,19 @@ export default function RootLayout() {
   return (
     <ErrorBoundary>
       <SafeAreaProvider style={{ flex: 1, minWidth: 0, maxWidth: '100%' }}>
-        <ThemeProvider>
-          {/* AlertProvider sits inside AuthProvider: the notifications inbox is
-              fetched per signed-in user, so it needs useAuth(). */}
-          <AuthProvider>
-            <AlertProvider>
-              <CallProvider>
-                <ThemedShell />
-              </CallProvider>
-            </AlertProvider>
-          </AuthProvider>
-        </ThemeProvider>
+        <LanguageProvider>
+          <ThemeProvider>
+            {/* AlertProvider sits inside AuthProvider: the notifications inbox is
+                fetched per signed-in user, so it needs useAuth(). */}
+            <AuthProvider>
+              <AlertProvider>
+                <CallProvider>
+                  <ThemedShell />
+                </CallProvider>
+              </AlertProvider>
+            </AuthProvider>
+          </ThemeProvider>
+        </LanguageProvider>
       </SafeAreaProvider>
     </ErrorBoundary>
   );

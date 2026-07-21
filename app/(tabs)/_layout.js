@@ -9,16 +9,17 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { FONT, radius, shadow, motion, elevation, glassFor } from '../../src/theme/tokens';
 import haptics from '../../src/lib/haptics';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
+import { useT } from '../../src/i18n/LanguageContext';
 
 // MaterialCommunityIcons outline/filled pairs — outline at rest, filled when
 // active. (Feather is outline-only, which is why the tab bar doesn't use the
 // app-wide ui/Icon wrapper.)
-const TABS = [
-  { name: 'earnings',  title: 'Pay',   iconRest: 'wallet-outline', iconActive: 'wallet' },
-  { name: 'messages',  title: 'Chat',  iconRest: 'chat-outline',   iconActive: 'chat' },
-  { name: 'index',     title: 'Load',  iconRest: 'truck-outline',  iconActive: 'truck', hero: true },
-  { name: 'documents', title: 'Docs',  iconRest: 'folder-outline', iconActive: 'folder' },
-  { name: 'more',      title: 'More',  iconRest: 'cog-outline',    iconActive: 'cog' },
+const TAB_DEFS = [
+  { name: 'earnings',  key: 'pay',   iconRest: 'wallet-outline', iconActive: 'wallet' },
+  { name: 'messages',  key: 'chat',  iconRest: 'chat-outline',   iconActive: 'chat' },
+  { name: 'index',     key: 'load',  iconRest: 'truck-outline',  iconActive: 'truck', hero: true },
+  { name: 'documents', key: 'docs',  iconRest: 'folder-outline', iconActive: 'folder' },
+  { name: 'more',      key: 'more',  iconRest: 'cog-outline',    iconActive: 'cog' },
 ];
 
 // Docked-bar geometry. Screens render underneath the absolute-positioned
@@ -183,6 +184,8 @@ function DockedBackground({ colors }) {
 export default function TabsLayout() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const t = useT();
+  const TABS = TAB_DEFS.map((tab) => ({ ...tab, title: t(`tabs.${tab.key}`) }));
   return (
     <Tabs
       screenListeners={{ tabPress: () => haptics.tap() }}

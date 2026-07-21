@@ -1,16 +1,19 @@
 import { View, Text, StyleSheet } from 'react-native';
 import { useTheme } from '../../theme/ThemeContext';
 import { type, FONT, shadow } from '../../theme/tokens';
-import { STAGES, stageIndex } from '../../lib/load';
+import { stageIndex } from '../../lib/load';
+import { useT } from '../../i18n/LanguageContext';
 
 export default function StageStepper({ status }) {
   const { colors } = useTheme();
+  const t = useT();
   const active = stageIndex(status);
-  const last = STAGES.length - 1;
+  const stages = t('load.stages');
+  const last = stages.length - 1;
 
   return (
     <View style={styles.wrap}>
-      {STAGES.map((label, i) => {
+      {stages.map((label, i) => {
         const done = i < active;
         const here = i === active;
         const lineLeft  = i > 0;
