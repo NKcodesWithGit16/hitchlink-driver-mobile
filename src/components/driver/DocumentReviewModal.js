@@ -11,20 +11,34 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../ui/Icon';
 import haptics from '../../lib/haptics';
 import { uploadDocument, DOC_TYPE_META } from '../../api/main';
+import { useT } from '../../i18n/LanguageContext';
 import { space, radius, FONT, type } from '../../theme/tokens';
 
 const TYPE_OPTIONS = ['License', 'MedicalCard', 'Insurance', 'Registration', 'Inspection', 'Other'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-const extractionErrorMessage = (err) => {
+// Chip labels for the type picker — kept separate from DOC_TYPE_META (which
+// also backstops the Documents list's fallback label/sub for real backend
+// data) so this purely-UI translation doesn't touch that shared data path.
+const TYPE_LABEL_KEYS = {
+  License: 'documents.typeLicense',
+  MedicalCard: 'documents.typeMedicalCard',
+  Insurance: 'documents.typeInsurance',
+  Registration: 'documents.typeRegistration',
+  Inspection: 'documents.typeInspection',
+  Other: 'documents.typeOther',
+};
+
+const extractionErrorMessage = (err, t) => {
   if (!err) return null;
-  if (err.status === 429) return "You've used your AI document scans for this month — enter the details manually below.";
-  if (err.status === 503) return "AI reading isn't available right now — enter the details manually below.";
-  return "Couldn't read that automatically — enter the details manually below.";
+  if (err.status === 429) return t('documents.quotaUsedUp');
+  if (err.status === 503) return t('documents.aiUnavailable');
+  return t('documents.couldntReadAuto');
 };
 
 export default function DocumentReviewModal({ visible, asset, extraction, extractionError, driverId, onSaved, onCancel, colors }) {
   const insets = useSafeAreaInsets();
+  const t = useT();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [docType, setDocType] = useState('Other');
@@ -42,11 +56,11 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
     // Always start with a usable label, even when there's no AI extraction
     // (non-image file, AI unavailable, quota exhausted) — otherwise Save has
     // nothing to submit and the driver has no obvious next step.
-    setLabel(f?.label || DOC_TYPE_META[nextType].label);
+    setLabel(f?.label || t(TYPE_LABEL_KEYS[nextType]));
     setDocumentNumber(f?.documentNumber || '');
     setExpiresAt(f?.expiresAt || '');
     setFormError('');
-  }, [visible, extraction]);
+  }, [visible, extraction, t]);
 
   if (!visible || !asset) return null;
 
@@ -58,13 +72,13 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
     if (saving) return;
     const trimmedLabel = label.trim();
     if (!trimmedLabel) {
-      setFormError('Enter a label for this document.');
+      setFormError(t('documents.enterLabel'));
       haptics.error();
       return;
     }
     const trimmedDate = expiresAt.trim();
     if (trimmedDate && !DATE_RE.test(trimmedDate)) {
-      setFormError('Expiry date must be in YYYY-MM-DD format.');
+      setFormError(t('documents.expiryFormatError'));
       haptics.error();
       return;
     }
@@ -86,7 +100,7 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
       haptics.success();
       onSaved?.();
     } catch {
-      setFormError("Couldn't save — check your connection and try again.");
+      setFormError(t('documents.saveFailedError'));
       haptics.error();
     } finally {
       setSaving(false);
@@ -98,15 +112,15 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
       <View style={[styles.screen, { paddingTop: insets.top }]}>
         {/* Header */}
         <View style={styles.header}>
-          <Pressable onPress={onCancel} hitSlop={8} accessibilityRole="button" accessibilityLabel="Cancel">
-            <Text style={[styles.headerAction, { color: colors.textSecondary }]}>Cancel</Text>
+          <Pressable onPress={onCancel} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('documents.cancel')}>
+            <Text style={[styles.headerAction, { color: colors.textSecondary }]}>{t('documents.cancel')}</Text>
           </Pressable>
-          <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>Review document</Text>
-          <Pressable onPress={save} disabled={saving} hitSlop={8} accessibilityRole="button" accessibilityLabel="Save document">
+          <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>{t('documents.reviewDocument')}</Text>
+          <Pressable onPress={save} disabled={saving} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('documents.saveDocumentA11y')}>
             {saving ? (
               <ActivityIndicator size="small" color={colors.teal} />
             ) : (
-              <Text style={[styles.headerAction, { color: colors.teal, fontFamily: FONT.black }]}>Save</Text>
+              <Text style={[styles.headerAction, { color: colors.teal, fontFamily: FONT.black }]}>{t('documents.save')}</Text>
             )}
           </Pressable>
         </View>
@@ -115,30 +129,31 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
           {extractionError ? (
             <View style={[styles.banner, { backgroundColor: colors.cautionFill, borderColor: colors.caution + '55' }]}>
               <Icon name="alert-triangle" size={15} color={colors.caution} />
-              <Text style={[styles.bannerText, { color: colors.textPrimary }]}>{extractionErrorMessage(extractionError)}</Text>
+              <Text style={[styles.bannerText, { color: colors.textPrimary }]}>{extractionErrorMessage(extractionError, t)}</Text>
             </View>
           ) : extraction ? (
             <View style={[styles.banner, { backgroundColor: colors.tealFill, borderColor: colors.teal + '44' }]}>
               <Icon name="check-circle" size={15} color={colors.teal} />
-              <Text style={[styles.bannerText, { color: colors.textPrimary }]}>Auto-filled from the photo — check it over before saving.</Text>
+              <Text style={[styles.bannerText, { color: colors.textPrimary }]}>{t('documents.autoFilledNote')}</Text>
             </View>
           ) : null}
 
           {/* Type chips */}
-          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Document type</Text>
+          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('documents.documentType')}</Text>
           <View style={styles.chipRow}>
-            {TYPE_OPTIONS.map((t) => {
-              const active = docType === t;
-              const meta = DOC_TYPE_META[t];
+            {TYPE_OPTIONS.map((docTypeKey) => {
+              const active = docType === docTypeKey;
+              const meta = DOC_TYPE_META[docTypeKey];
+              const typeLabel = t(TYPE_LABEL_KEYS[docTypeKey]);
               return (
                 <Pressable
-                  key={t}
+                  key={docTypeKey}
                   onPress={() => {
                     haptics.tap();
                     // Keep the label in sync with the type unless the driver already
                     // typed something custom over the previous default.
-                    setLabel((prev) => (!prev.trim() || prev === DOC_TYPE_META[docType]?.label) ? meta.label : prev);
-                    setDocType(t);
+                    setLabel((prev) => (!prev.trim() || prev === t(TYPE_LABEL_KEYS[docType])) ? typeLabel : prev);
+                    setDocType(docTypeKey);
                   }}
                   style={[
                     styles.chip,
@@ -146,7 +161,7 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
                   ]}
                 >
                   <Icon name={meta.icon} size={13} color={active ? colors.teal : colors.textMuted} />
-                  <Text style={[styles.chipText, { color: active ? colors.teal : colors.textMuted }]}>{meta.label}</Text>
+                  <Text style={[styles.chipText, { color: active ? colors.teal : colors.textMuted }]}>{typeLabel}</Text>
                 </Pressable>
               );
             })}
@@ -155,21 +170,21 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
           {/* Fields */}
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <FieldRow
-              label="Label" value={label} onChangeText={setLabel}
-              placeholder="e.g. Commercial Driver's License" lowConfidence={lowConfidence.has('label')}
-              colors={colors} styles={styles}
+              label={t('documents.fieldLabel')} value={label} onChangeText={setLabel}
+              placeholder={t('documents.fieldLabelPlaceholder')} lowConfidence={lowConfidence.has('label')}
+              colors={colors} styles={styles} hint={t('documents.doubleCheck')}
             />
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             <FieldRow
-              label="Number" value={documentNumber} onChangeText={setDocumentNumber}
-              placeholder="Document number" autoCapitalize="characters" lowConfidence={lowConfidence.has('documentnumber')}
-              colors={colors} styles={styles}
+              label={t('documents.fieldNumber')} value={documentNumber} onChangeText={setDocumentNumber}
+              placeholder={t('documents.fieldNumberPlaceholder')} autoCapitalize="characters" lowConfidence={lowConfidence.has('documentnumber')}
+              colors={colors} styles={styles} hint={t('documents.doubleCheck')}
             />
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             <FieldRow
-              label="Expires" value={expiresAt} onChangeText={setExpiresAt}
+              label={t('documents.fieldExpires')} value={expiresAt} onChangeText={setExpiresAt}
               placeholder="YYYY-MM-DD" keyboardType="numbers-and-punctuation" lowConfidence={lowConfidence.has('expiresat')}
-              colors={colors} styles={styles}
+              colors={colors} styles={styles} hint={t('documents.doubleCheck')}
             />
           </View>
 
@@ -185,12 +200,12 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
   );
 }
 
-function FieldRow({ label, value, onChangeText, placeholder, lowConfidence, colors, styles, ...inputProps }) {
+function FieldRow({ label, value, onChangeText, placeholder, lowConfidence, hint, colors, styles, ...inputProps }) {
   return (
     <View style={styles.fieldRow}>
       <View style={styles.fieldTop}>
         <Text style={[styles.fieldLabel, { color: colors.textMuted }]}>{label}</Text>
-        {lowConfidence ? <Text style={[styles.fieldHint, { color: colors.caution }]}>Double-check this</Text> : null}
+        {lowConfidence ? <Text style={[styles.fieldHint, { color: colors.caution }]}>{hint}</Text> : null}
       </View>
       <TextInput
         value={value}
