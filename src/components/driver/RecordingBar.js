@@ -4,6 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Icon from '../ui/Icon';
 import { useReduceMotion } from '../../lib/useReduceMotion';
 import { useTheme } from '../../theme/ThemeContext';
+import { useT } from '../../i18n/LanguageContext';
 import { space, radius, type, FONT, shadow, motion } from '../../theme/tokens';
 
 const BARS = 20;
@@ -16,6 +17,7 @@ const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
    voice message. Left = exit (discard & back out), right = send. */
 export default function RecordingBar({ elapsed = 0, onCancel, onSend }) {
   const { colors } = useTheme();
+  const t = useT();
   const styles = makeStyles(colors);
   const reduce = useReduceMotion();
 
@@ -68,7 +70,7 @@ export default function RecordingBar({ elapsed = 0, onCancel, onSend }) {
         style={[styles.exitBtn, { backgroundColor: colors.dangerFill }]}
         hitSlop={6}
         accessibilityRole="button"
-        accessibilityLabel="Cancel voice message"
+        accessibilityLabel={t('messages.cancelVoiceA11y')}
       >
         <Icon name="x" size={19} color={colors.danger} />
       </Pressable>
@@ -92,7 +94,7 @@ export default function RecordingBar({ elapsed = 0, onCancel, onSend }) {
         onPress={onSend}
         style={[styles.sendBtn, { backgroundColor: colors.teal }, shadow.glow(colors.teal)]}
         accessibilityRole="button"
-        accessibilityLabel="Send voice message"
+        accessibilityLabel={t('messages.sendVoiceA11y')}
       >
         <Icon name="arrow-up" size={19} color={colors.onAccent} />
       </Pressable>

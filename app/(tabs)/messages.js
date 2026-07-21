@@ -15,6 +15,7 @@ import RecordingBar from '../../src/components/driver/RecordingBar';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useTheme } from '../../src/theme/ThemeContext';
+import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useCall } from '../../src/context/CallContext';
 import {
@@ -29,14 +30,6 @@ import { getValidToken } from '../../src/lib/session';
 import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 
-const QUICK = [
-  { label: 'On my way',     icon: 'navigation' },
-  { label: 'Running late',  icon: 'clock' },
-  { label: 'At the dock',   icon: 'anchor' },
-  { label: 'Loaded',        icon: 'check-circle' },
-  { label: 'Delivered ✅',  icon: 'flag' },
-];
-
 // Quick-tap reactions, plus the windows the backend enforces (mirror them in the
 // UI so we only offer actions that will actually succeed).
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -45,11 +38,30 @@ const DELETE_WINDOW_MIN = 60;
 const ageMin = (ts) => (ts ? (Date.now() - new Date(ts).getTime()) / 60000 : Infinity);
 const replyPreviewOf = (m) => ({ id: m.id, from: m.from, text: m.text, kind: m.kind });
 
+// "kind" describes an attachment message's payload type; used both for the
+// reply-quote preview and the composer's edit/reply context bar.
+function kindLabel(kind, t) {
+  return kind === 'voice' ? t('messages.kindVoice')
+    : kind === 'document' ? t('messages.kindDocument')
+    : kind === 'video' ? t('messages.kindVideo')
+    : kind === 'image' ? t('messages.kindImage')
+    : null;
+}
+
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { colors } = useTheme();
+  const t = useT();
   const { user } = useAuth();
+
+  const QUICK = [
+    { label: t('messages.quickOnMyWay'),    icon: 'navigation' },
+    { label: t('messages.quickRunningLate'), icon: 'clock' },
+    { label: t('messages.quickAtDock'),     icon: 'anchor' },
+    { label: t('messages.quickLoaded'),     icon: 'check-circle' },
+    { label: t('messages.quickDelivered'),  icon: 'flag' },
+  ];
   const { startCall } = useCall();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [items,       setItems]       = useState([]);
@@ -308,11 +320,11 @@ export default function MessagesScreen() {
           </LinearGradient>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.peerName, { color: colors.textPrimary }]} numberOfLines={1}>
-              {dispatcher?.name || 'Dispatcher'}
+              {dispatcher?.name || t('messages.dispatcherFallback')}
             </Text>
             <View style={styles.statusRow}>
               <View style={[styles.statusDot, { backgroundColor: colors.go }]} />
-              <Text style={[styles.statusText, { color: colors.textMuted }]}>Available · Dispatcher</Text>
+              <Text style={[styles.statusText, { color: colors.textMuted }]}>{t('messages.availableDispatcher')}</Text>
             </View>
           </View>
         </View>
@@ -323,8 +335,8 @@ export default function MessagesScreen() {
             delayLongPress={400}
             style={styles.callBtn}
             accessibilityRole="button"
-            accessibilityLabel={`Call ${dispatcher?.name || 'dispatcher'}`}
-            accessibilityHint="Starts an in-app call. Long-press to dial their phone number instead."
+            accessibilityLabel={t('messages.callA11y', { name: dispatcher?.name || t('messages.dispatcherFallback') })}
+            accessibilityHint={t('messages.callHintA11y')}
           >
             <LinearGradient
               colors={colors.gradients.go}
@@ -344,14 +356,14 @@ export default function MessagesScreen() {
           onPress={() => router.push('/(tabs)')}
           style={({ pressed }) => [styles.loadBanner, { backgroundColor: colors.tealFill, borderColor: colors.teal, opacity: pressed ? 0.85 : 1 }]}
           accessibilityRole="button"
-          accessibilityLabel={`Open load ${activeLoad.id}`}
+          accessibilityLabel={t('messages.openLoadA11y', { id: activeLoad.id })}
         >
           <Icon name="truck" size={12} color={colors.teal} />
           <Text style={[styles.loadBannerText, { color: colors.teal }]} numberOfLines={1}>
             {activeLoad.id} · {activeLoad.origin} → {activeLoad.destination}
           </Text>
           <View style={[styles.loadStatusPill, { backgroundColor: colors.teal }]}>
-            <Text style={[styles.loadStatusText, { color: colors.onAccent }]}>En Route</Text>
+            <Text style={[styles.loadStatusText, { color: colors.onAccent }]}>{t('messages.enRoute')}</Text>
           </View>
           <Icon name="chevron-right" size={14} color={colors.teal} />
         </Pressable>
@@ -385,7 +397,7 @@ export default function MessagesScreen() {
           showsVerticalScrollIndicator={false}
           style={styles.chatScroll}
         >
-          <DateSeparator label="Today" colors={colors} styles={styles} />
+          <DateSeparator label={t('common.today')} colors={colors} styles={styles} />
           {items.map((m, i) => (
             <Bubble
               key={m.id}
@@ -416,7 +428,7 @@ export default function MessagesScreen() {
                     backgroundColor: pressed ? colors.tealFill : colors.surface2 },
                 ]}
                 accessibilityRole="button"
-                accessibilityLabel={`Send quick reply: ${label}`}
+                accessibilityLabel={t('messages.quickReplyA11y', { label })}
               >
                 <Icon name={icon} size={12} color={colors.teal} />
                 <Text style={[styles.chipText, { color: colors.textSecondary }]}>{label}</Text>
@@ -435,17 +447,17 @@ export default function MessagesScreen() {
               <View style={[styles.contextStripe, { backgroundColor: colors.teal }]} />
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={[styles.contextTitle, { color: colors.teal }]}>
-                  {editing ? 'Editing message' : `Replying to ${replyTo.from === 'driver' ? 'yourself' : (dispatcher?.name || 'dispatcher')}`}
+                  {editing
+                    ? t('messages.editingMessage')
+                    : replyTo.from === 'driver'
+                      ? t('messages.replyingToYourself')
+                      : t('messages.replyingTo', { name: dispatcher?.name || t('messages.dispatcherFallback') })}
                 </Text>
                 <Text style={[styles.contextText, { color: colors.textMuted }]} numberOfLines={1}>
-                  {(editing || replyTo).kind === 'voice' ? '🎤 Voice message'
-                    : (editing || replyTo).kind === 'document' ? '📄 Document'
-                    : (editing || replyTo).kind === 'video' ? '🎬 Video'
-                    : (editing || replyTo).kind === 'image' ? '📷 Photo'
-                    : ((editing || replyTo).text || '')}
+                  {kindLabel((editing || replyTo).kind, t) || (editing || replyTo).text || ''}
                 </Text>
               </View>
-              <Pressable onPress={cancelCompose} hitSlop={8} style={styles.contextClose} accessibilityRole="button" accessibilityLabel="Cancel">
+              <Pressable onPress={cancelCompose} hitSlop={8} style={styles.contextClose} accessibilityRole="button" accessibilityLabel={t('common.cancel')}>
                 <Icon name="x" size={16} color={colors.textMuted} />
               </Pressable>
             </View>
@@ -460,14 +472,14 @@ export default function MessagesScreen() {
                 style={styles.attachBtn}
                 hitSlop={8}
                 accessibilityRole="button"
-                accessibilityLabel="Attach a photo or document"
+                accessibilityLabel={t('messages.attachA11y')}
               >
                 <Icon name="paperclip" size={18} color={colors.textMuted} />
               </Pressable>
               <TextInput
                 value={text}
                 onChangeText={setText}
-                placeholder={editing ? 'Edit your message…' : 'Message dispatcher…'}
+                placeholder={editing ? t('messages.editPlaceholder') : t('messages.messagePlaceholder')}
                 placeholderTextColor={colors.textMuted}
                 style={[styles.input, { color: colors.textPrimary }]}
                 multiline
@@ -478,7 +490,7 @@ export default function MessagesScreen() {
                 <Pressable
                   onPress={() => send()}
                   style={[styles.sendBtn, { backgroundColor: colors.teal }, shadow.glow(colors.teal)]}
-                  accessibilityLabel={editing ? 'Save edit' : 'Send'}
+                  accessibilityLabel={editing ? t('messages.saveEditA11y') : t('messages.sendA11y')}
                 >
                   <Icon name={editing ? 'check' : 'arrow-up'} size={19} color={colors.onAccent} />
                 </Pressable>
@@ -487,7 +499,7 @@ export default function MessagesScreen() {
                   onPress={voice.start}
                   style={[styles.micBtn]}
                   accessibilityRole="button"
-                  accessibilityLabel="Record a voice message"
+                  accessibilityLabel={t('messages.recordVoiceA11y')}
                 >
                   <LinearGradient colors={colors.gradients.teal} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.micBtnFill}>
                     <Icon name="mic" size={19} color={colors.onAccent} />
@@ -553,6 +565,7 @@ function DateSeparator({ label, colors, styles }) {
 }
 
 function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onOpenImage, onCallBack }) {
+  const t = useT();
   const mine = msg.from === 'driver';
   const prevSame = prev?.from === msg.from;
   const nextSame = next?.from === msg.from;
@@ -631,7 +644,7 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onOpe
           onLongPress={() => onAction?.()}
           delayLongPress={280}
           disabled={msg.deleted}
-          accessibilityLabel="Message — long press for options"
+          accessibilityLabel={t('messages.longPressOptionsA11y')}
         >
           {inner}
         </Pressable>
@@ -656,7 +669,7 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onOpe
         {msg.failed ? (
           <View style={[styles.failedRow, mine ? { justifyContent: 'flex-end' } : null]}>
             <Icon name="alert-circle" size={11} color={colors.danger} />
-            <Text style={[styles.failedText, { color: colors.danger }]}>Not sent</Text>
+            <Text style={[styles.failedText, { color: colors.danger }]}>{t('messages.notSent')}</Text>
           </View>
         ) : null}
       </View>
@@ -670,6 +683,7 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onOpe
 // placed the call and it went unanswered; otherwise the dispatcher called
 // and the driver missed it, so a one-tap "Call back" is worth surfacing.
 function MissedCallCard({ msg, mine, colors, styles, enter, onCallBack }) {
+  const t = useT();
   return (
     <Animated.View style={[
       styles.missedCallCardRow,
@@ -682,10 +696,10 @@ function MissedCallCard({ msg, mine, colors, styles, enter, onCallBack }) {
 
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.missedCallTitle, { color: colors.textPrimary }]} numberOfLines={1}>
-            {mine ? 'Missed call' : 'Missed call from dispatcher'}
+            {mine ? t('messages.missedCall') : t('messages.missedCallFromDispatcher')}
           </Text>
           <Text style={[styles.missedCallSub, { color: colors.textMuted }]} numberOfLines={1}>
-            {mine ? "Dispatcher didn't pick up" : "You didn't pick up"} · {msg.at}
+            {mine ? t('messages.dispatcherNoPickup') : t('messages.youNoPickup')} · {msg.at}
           </Text>
         </View>
 
@@ -694,10 +708,10 @@ function MissedCallCard({ msg, mine, colors, styles, enter, onCallBack }) {
             onPress={onCallBack}
             style={[styles.missedCallBtn, { backgroundColor: colors.teal }]}
             accessibilityRole="button"
-            accessibilityLabel="Call dispatcher back"
+            accessibilityLabel={t('messages.callDispatcherBackA11y')}
           >
             <Icon family="ionicons" name="call" size={13} color={colors.onAccent} />
-            <Text style={[styles.missedCallBtnText, { color: colors.onAccent }]}>Call back</Text>
+            <Text style={[styles.missedCallBtnText, { color: colors.onAccent }]}>{t('messages.callBack')}</Text>
           </Pressable>
         ) : null}
       </View>
@@ -706,12 +720,13 @@ function MissedCallCard({ msg, mine, colors, styles, enter, onCallBack }) {
 }
 
 function BubbleBody({ msg, mine, colors, styles, onOpenImage }) {
+  const t = useT();
   const ink = mine ? '#FFFFFF' : colors.textPrimary;
   const sub = mine ? 'rgba(255,255,255,0.62)' : colors.textMuted;
 
   if (msg.deleted) {
     return (
-      <Text style={[styles.deletedText, { color: colors.textMuted }]}>This message was deleted</Text>
+      <Text style={[styles.deletedText, { color: colors.textMuted }]}>{t('messages.messageDeleted')}</Text>
     );
   }
 
@@ -728,14 +743,10 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage }) {
           backgroundColor: mine ? 'rgba(255,255,255,0.12)' : colors.surface2,
         }]}>
           <Text style={[styles.replyQuoteName, { color: mine ? 'rgba(255,255,255,0.9)' : colors.teal }]} numberOfLines={1}>
-            {msg.replyTo.from === 'driver' ? 'You' : 'Dispatcher'}
+            {msg.replyTo.from === 'driver' ? t('messages.you') : t('messages.dispatcherFallback')}
           </Text>
           <Text style={[styles.replyQuoteText, { color: mine ? 'rgba(255,255,255,0.8)' : colors.textSecondary }]} numberOfLines={1}>
-            {msg.replyTo.kind === 'voice' ? '🎤 Voice message'
-              : msg.replyTo.kind === 'document' ? '📄 Document'
-              : msg.replyTo.kind === 'video' ? '🎬 Video'
-              : msg.replyTo.kind === 'image' ? '📷 Photo'
-              : (msg.replyTo.text || '')}
+            {kindLabel(msg.replyTo.kind, t) || msg.replyTo.text || ''}
           </Text>
         </View>
       ) : null}
@@ -744,7 +755,7 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage }) {
         <Pressable
           onPress={() => msg.uri && onOpenImage?.(msg.uri)}
           accessibilityRole="button"
-          accessibilityLabel="Open photo fullscreen"
+          accessibilityLabel={t('messages.openPhotoA11y')}
         >
           <Image source={{ uri: msg.uri }} style={styles.bubbleImage} resizeMode="cover" />
         </Pressable>
@@ -760,7 +771,7 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage }) {
         <Text style={[styles.bubbleText, { color: ink }]}>{msg.text}</Text>
       )}
       <View style={styles.meta}>
-        {msg.editedAt ? <Text style={[styles.metaEdited, { color: sub }]}>edited</Text> : null}
+        {msg.editedAt ? <Text style={[styles.metaEdited, { color: sub }]}>{t('messages.edited')}</Text> : null}
         <Text style={[styles.metaTime, { color: sub }]}>{msg.at}</Text>
         {mine && <Icon name="check" size={10} color={sub} />}
       </View>
@@ -769,6 +780,7 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage }) {
 }
 
 function MessageActionSheet({ msg, colors, styles, onClose, onReact, onReply, onEdit, onDelete }) {
+  const t = useT();
   const mine = msg?.from === 'driver';
   const isText = msg && !msg.kind;
   const canEdit = mine && isText && ageMin(msg?.ts) < EDIT_WINDOW_MIN;
@@ -792,9 +804,9 @@ function MessageActionSheet({ msg, colors, styles, onClose, onReact, onReply, on
               </Pressable>
             ))}
           </View>
-          <SheetAction icon="corner-up-left" label="Reply" colors={colors} styles={styles} onPress={() => msg && onReply(msg)} />
-          {canEdit ? <SheetAction icon="edit-2" label="Edit" colors={colors} styles={styles} onPress={() => msg && onEdit(msg)} /> : null}
-          {canDelete ? <SheetAction icon="trash-2" label="Delete for everyone" danger colors={colors} styles={styles} onPress={() => msg && onDelete(msg)} /> : null}
+          <SheetAction icon="corner-up-left" label={t('messages.reply')} colors={colors} styles={styles} onPress={() => msg && onReply(msg)} />
+          {canEdit ? <SheetAction icon="edit-2" label={t('common.edit')} colors={colors} styles={styles} onPress={() => msg && onEdit(msg)} /> : null}
+          {canDelete ? <SheetAction icon="trash-2" label={t('messages.deleteForEveryone')} danger colors={colors} styles={styles} onPress={() => msg && onDelete(msg)} /> : null}
         </Pressable>
       </Pressable>
     </Modal>
@@ -816,12 +828,13 @@ function SheetAction({ icon, label, danger, colors, styles, onPress }) {
 }
 
 function AttachMenuSheet({ visible, colors, styles, onClose, onPhoto, onDocument }) {
+  const t = useT();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.sheetOverlay} onPress={onClose}>
         <Pressable style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border }]} onPress={() => {}}>
-          <SheetAction icon="image" label="Photo" colors={colors} styles={styles} onPress={() => { onClose(); onPhoto(); }} />
-          <SheetAction icon="file-text" label="Document" colors={colors} styles={styles} onPress={() => { onClose(); onDocument(); }} />
+          <SheetAction icon="image" label={t('messages.photo')} colors={colors} styles={styles} onPress={() => { onClose(); onPhoto(); }} />
+          <SheetAction icon="file-text" label={t('messages.document')} colors={colors} styles={styles} onPress={() => { onClose(); onDocument(); }} />
         </Pressable>
       </Pressable>
     </Modal>
@@ -829,6 +842,7 @@ function AttachMenuSheet({ visible, colors, styles, onClose, onPhoto, onDocument
 }
 
 function ConfirmDelete({ msg, colors, styles, onCancel, onConfirm }) {
+  const t = useT();
   return (
     <Modal visible={!!msg} transparent animationType="fade" onRequestClose={onCancel}>
       <View style={styles.confirmOverlay}>
@@ -836,15 +850,15 @@ function ConfirmDelete({ msg, colors, styles, onCancel, onConfirm }) {
           <View style={[styles.confirmIcon, { backgroundColor: colors.surface2, borderColor: colors.danger }]}>
             <Icon name="trash-2" size={24} color={colors.danger} />
           </View>
-          <Text style={[styles.confirmTitle, { color: colors.textPrimary }]}>Delete for everyone?</Text>
+          <Text style={[styles.confirmTitle, { color: colors.textPrimary }]}>{t('messages.deleteForEveryoneQ')}</Text>
           <Text style={[styles.confirmSub, { color: colors.textSecondary }]}>
-            This message will be removed for you and the dispatcher. This can't be undone.
+            {t('messages.deleteForEveryoneBody')}
           </Text>
-          <Pressable onPress={onConfirm} style={[styles.confirmDanger, { backgroundColor: colors.danger }]} accessibilityRole="button" accessibilityLabel="Delete for everyone">
-            <Text style={styles.confirmDangerText}>Delete</Text>
+          <Pressable onPress={onConfirm} style={[styles.confirmDanger, { backgroundColor: colors.danger }]} accessibilityRole="button" accessibilityLabel={t('messages.deleteForEveryone')}>
+            <Text style={styles.confirmDangerText}>{t('common.delete')}</Text>
           </Pressable>
-          <Pressable onPress={onCancel} style={[styles.confirmCancel, { borderColor: colors.border }]} accessibilityRole="button" accessibilityLabel="Cancel">
-            <Text style={[styles.confirmCancelText, { color: colors.textMuted }]}>Cancel</Text>
+          <Pressable onPress={onCancel} style={[styles.confirmCancel, { borderColor: colors.border }]} accessibilityRole="button" accessibilityLabel={t('common.cancel')}>
+            <Text style={[styles.confirmCancelText, { color: colors.textMuted }]}>{t('common.cancel')}</Text>
           </Pressable>
         </View>
       </View>
@@ -854,18 +868,19 @@ function ConfirmDelete({ msg, colors, styles, onCancel, onConfirm }) {
 
 function ImageViewer({ uri, colors, styles, onClose }) {
   const insets = useSafeAreaInsets();
+  const t = useT();
   return (
     <Modal visible={!!uri} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.viewerOverlay} onPress={onClose}>
         {uri ? (
-          <Image source={{ uri }} style={styles.viewerImage} resizeMode="contain" accessibilityLabel="Photo" />
+          <Image source={{ uri }} style={styles.viewerImage} resizeMode="contain" accessibilityLabel={t('messages.photo')} />
         ) : null}
         <Pressable
           onPress={onClose}
           style={[styles.viewerClose, { top: insets.top + space[3] }]}
           hitSlop={10}
           accessibilityRole="button"
-          accessibilityLabel="Close photo"
+          accessibilityLabel={t('messages.closePhotoA11y')}
         >
           <Icon name="x" size={24} color="#FFFFFF" />
         </Pressable>
@@ -1008,7 +1023,7 @@ function fmtBytes(bytes) {
 // previewing inline — this app has no in-app video player, and
 // Sharing.shareAsync needs a local file rather than the remote R2 URL, so a
 // download step happens either way.
-function useOpenAttachment(msg) {
+function useOpenAttachment(msg, t) {
   const [opening, setOpening] = useState(false);
   const open = useCallback(async () => {
     if (!msg.uri || opening) return;
@@ -1023,30 +1038,31 @@ function useOpenAttachment(msg) {
         await Linking.openURL(msg.uri);
       }
     } catch {
-      Alert.alert('Could not open', 'Please try again.');
+      Alert.alert(t('messages.couldNotOpen'), t('messages.pleaseTryAgain'));
     } finally {
       setOpening(false);
     }
-  }, [msg.uri, msg.filename, msg.mimeType, opening]);
+  }, [msg.uri, msg.filename, msg.mimeType, opening, t]);
   return { opening, open };
 }
 
 function DocumentAttachment({ msg, mine, colors, styles }) {
-  const { opening, open } = useOpenAttachment(msg);
+  const t = useT();
+  const { opening, open } = useOpenAttachment(msg, t);
   return (
     <Pressable
       style={styles.docCard}
       onPress={open}
       disabled={opening}
       accessibilityRole="button"
-      accessibilityLabel={`Open document ${msg.filename || ''}`}
+      accessibilityLabel={t('messages.openDocumentA11y', { filename: msg.filename || '' })}
     >
       <View style={[styles.docCardIcon, { backgroundColor: mine ? 'rgba(255,255,255,0.18)' : colors.tealFill }]}>
         <Icon name={opening ? 'loader' : 'file-text'} size={18} color={mine ? '#FFFFFF' : colors.teal} />
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text numberOfLines={1} style={[styles.docCardName, { color: mine ? '#FFFFFF' : colors.textPrimary }]}>
-          {msg.filename || 'Document'}
+          {msg.filename || t('messages.documentFallback')}
         </Text>
         {msg.sizeBytes ? (
           <Text style={[styles.docCardSub, { color: mine ? 'rgba(255,255,255,0.7)' : colors.textMuted }]}>
@@ -1060,9 +1076,10 @@ function DocumentAttachment({ msg, mine, colors, styles }) {
 }
 
 function VideoAttachment({ msg, mine, colors, styles }) {
-  const { opening, open } = useOpenAttachment(msg);
+  const t = useT();
+  const { opening, open } = useOpenAttachment(msg, t);
   return (
-    <Pressable style={styles.videoCard} onPress={open} disabled={opening} accessibilityRole="button" accessibilityLabel="Open video">
+    <Pressable style={styles.videoCard} onPress={open} disabled={opening} accessibilityRole="button" accessibilityLabel={t('messages.openVideoA11y')}>
       {msg.thumbnailUri ? (
         <Image source={{ uri: msg.thumbnailUri }} style={styles.videoThumb} resizeMode="cover" />
       ) : (
