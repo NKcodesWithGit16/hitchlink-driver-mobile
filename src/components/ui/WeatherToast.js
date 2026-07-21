@@ -6,6 +6,7 @@ import Icon from './Icon';
 import PrimaryAction from './PrimaryAction';
 import GlassView from './GlassView';
 import { useTheme } from '../../theme/ThemeContext';
+import { useT } from '../../i18n/LanguageContext';
 import { useAlert } from '../../context/AlertContext';
 import { useReduceMotion } from '../../lib/useReduceMotion';
 import { space, type, radius, FONT, shadow, toneOf } from '../../theme/tokens';
@@ -19,6 +20,7 @@ const TOAST_DURATION = 7000;
    takeover; the × just dismisses. */
 export function WeatherToast() {
   const { colors } = useTheme();
+  const t = useT();
   const { activeAlert, toastVisible, dismissToast, openModal } = useAlert();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
@@ -55,7 +57,7 @@ export function WeatherToast() {
 
   const severe = activeAlert.severity === 'severe';
   const tone = toneOf(colors, severe ? 'danger' : 'caution');
-  const eyebrow = severe ? 'Severe weather ahead' : 'Weather ahead';
+  const eyebrow = severe ? t('ui.severeWeatherAhead') : t('ui.weatherAhead');
 
   const translateY = anim.interpolate({
     inputRange: [0, 1], outputRange: [-(160 + insets.top), 0],
@@ -75,7 +77,7 @@ export function WeatherToast() {
       <Pressable
         onPress={openModal}
         accessibilityRole="button"
-        accessibilityLabel={`${eyebrow}. ${activeAlert.title}. About ${activeAlert.etaMinutes} minutes ahead near ${activeAlert.near}. Tap to see safe stops.`}
+        accessibilityLabel={t('ui.weatherToastA11y', { eyebrow, title: activeAlert.title, mins: activeAlert.etaMinutes, near: activeAlert.near })}
       >
         <GlassView radius={radius['2xl']} style={styles.toast}>
           <View style={styles.row}>
@@ -97,11 +99,11 @@ export function WeatherToast() {
               </Text>
               <View style={styles.metaRow}>
                 <Text style={[styles.sub, { color: colors.textSecondary }]} numberOfLines={1}>
-                  ~{activeAlert.etaMinutes} min ahead · Near {activeAlert.near}
+                  {t('ui.minAheadLower', { mins: activeAlert.etaMinutes })} · {t('ui.nearPlace', { place: activeAlert.near })}
                 </Text>
               </View>
               <View style={styles.hintRow}>
-                <Text style={[styles.hint, { color: tone.solid }]}>Tap for safe truck stops</Text>
+                <Text style={[styles.hint, { color: tone.solid }]}>{t('ui.tapSafeStops')}</Text>
                 <Icon name="chevron-right" size={13} color={tone.solid} />
               </View>
             </View>
@@ -111,7 +113,7 @@ export function WeatherToast() {
               hitSlop={12}
               style={[styles.close, { backgroundColor: colors.surface2, borderColor: colors.border }]}
               accessibilityRole="button"
-              accessibilityLabel="Dismiss alert"
+              accessibilityLabel={t('ui.dismissAlertA11y')}
             >
               <Icon name="x" size={15} color={colors.textSecondary} />
             </Pressable>
@@ -130,6 +132,7 @@ export function WeatherToast() {
 /* ── Full-screen alert modal (rendered globally) ── */
 export function WeatherAlertModalGlobal() {
   const { colors } = useTheme();
+  const t = useT();
   const { activeAlert, modalVisible, closeModal } = useAlert();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
@@ -146,19 +149,19 @@ export function WeatherAlertModalGlobal() {
           <View style={[styles.alertBadge, { borderColor: accent }]}>
             <Icon name="alert-triangle" size={40} color={accent} />
           </View>
-          <Text style={[styles.alertEta, { color: accent }]}>~{activeAlert.etaMinutes} MIN AHEAD</Text>
+          <Text style={[styles.alertEta, { color: accent }]}>{t('ui.minAhead', { mins: activeAlert.etaMinutes })}</Text>
           <Text style={[styles.alertHeadline, { color: colors.textPrimary }]}>{activeAlert.title}</Text>
-          <Text style={[styles.alertWhere, { color: colors.textSecondary }]}>Near {activeAlert.near}</Text>
+          <Text style={[styles.alertWhere, { color: colors.textSecondary }]}>{t('ui.nearPlace', { place: activeAlert.near })}</Text>
           <Text style={[styles.alertAdvice, { color: colors.textSecondary }]}>{activeAlert.advice}</Text>
           <View style={{ height: space[6] }} />
           <PrimaryAction
-            label="Find a safe truck stop"
+            label={t('ui.findSafeStop')}
             icon="map-pin"
             tone={severe ? 'danger' : 'caution'}
             onPress={() => Linking.openURL('https://www.google.com/maps/search/truck+stop+near+me').catch(() => {})}
           />
           <Pressable onPress={closeModal} style={styles.alertDismiss}>
-            <Text style={[styles.alertDismissText, { color: colors.textMuted }]}>Got it — keep driving safe</Text>
+            <Text style={[styles.alertDismissText, { color: colors.textMuted }]}>{t('ui.keepDrivingSafe')}</Text>
           </Pressable>
         </View>
       </LinearGradient>

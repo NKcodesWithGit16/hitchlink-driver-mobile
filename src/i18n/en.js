@@ -533,4 +533,23 @@ export const en = {
     hangUpA11y: 'Hang up',
     hangUp: 'Hang up',
   },
+
+  ui: {
+    oneSec: 'One sec…',
+    undoA11y: 'Undo that update',
+    undo: 'Undo',
+    offlinePendingOne: "You're offline — 1 update saved. We'll send it the moment signal returns.",
+    offlinePendingMany: "You're offline — {n} updates saved. We'll send them the moment signal returns.",
+    offlineNoPending: "You're offline. Everything still works — we'll sync when signal returns.",
+    severeWeatherAhead: 'Severe weather ahead',
+    weatherAhead: 'Weather ahead',
+    weatherToastA11y: '{eyebrow}. {title}. About {mins} minutes ahead near {near}. Tap to see safe stops.',
+    tapSafeStops: 'Tap for safe truck stops',
+    dismissAlertA11y: 'Dismiss alert',
+    minAhead: '~{mins} MIN AHEAD',
+    minAheadLower: '~{mins} min ahead',
+    nearPlace: 'Near {place}',
+    findSafeStop: 'Find a safe truck stop',
+    keepDrivingSafe: "Got it — keep driving safe",
+  },
 };

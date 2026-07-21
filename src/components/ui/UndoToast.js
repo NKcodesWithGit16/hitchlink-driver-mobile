@@ -5,6 +5,7 @@ import Icon from './Icon';
 import GlassView from './GlassView';
 import haptics from '../../lib/haptics';
 import { useTheme } from '../../theme/ThemeContext';
+import { useT } from '../../i18n/LanguageContext';
 import { space, type, radius, FONT } from '../../theme/tokens';
 
 /* A safety net after an irreversible-feeling action: confirm the change AND
@@ -13,6 +14,7 @@ import { space, type, radius, FONT } from '../../theme/tokens';
    working surface. */
 export default function UndoToast({ visible, message, onUndo, onHide, duration = 5000 }) {
   const { colors } = useTheme();
+  const t = useT();
   const insets = useSafeAreaInsets();
   // Hidden offset must clear the toast fully past the screen edge even on
   // devices with a large safe-area bottom inset (home-indicator phones) —
@@ -46,10 +48,10 @@ export default function UndoToast({ visible, message, onUndo, onHide, duration =
           hitSlop={12}
           style={styles.undoBtn}
           accessibilityRole="button"
-          accessibilityLabel="Undo that update"
+          accessibilityLabel={t('ui.undoA11y')}
         >
           <Icon name="rotate-ccw" size={15} color={colors.teal} />
-          <Text style={[styles.undoText, { color: colors.teal }]}>Undo</Text>
+          <Text style={[styles.undoText, { color: colors.teal }]}>{t('ui.undo')}</Text>
         </Pressable>
       </GlassView>
     </Animated.View>

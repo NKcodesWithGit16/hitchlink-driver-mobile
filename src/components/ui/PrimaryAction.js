@@ -3,13 +3,15 @@ import { LinearGradient } from 'expo-linear-gradient';
 import haptics from '../../lib/haptics';
 import Icon from './Icon';
 import { useTheme } from '../../theme/ThemeContext';
+import { useT } from '../../i18n/LanguageContext';
 import { radius, type, tap, shadow, toneOf, FONT, motion } from '../../theme/tokens';
 
 /* The most important component in the app: one big, glove-friendly,
    contextual action. Full-width, 64px tall, color carries meaning. */
-export default function PrimaryAction({ label, icon, tone = 'teal', onPress, disabled, loading }) {
+export default function PrimaryAction({ label, icon, tone: toneKey = 'teal', onPress, disabled, loading }) {
   const { colors } = useTheme();
-  const t = toneOf(colors, tone);
+  const t = useT();
+  const tone = toneOf(colors, toneKey);
 
   const handle = () => {
     if (disabled || loading) return;
@@ -23,19 +25,19 @@ export default function PrimaryAction({ label, icon, tone = 'teal', onPress, dis
       disabled={disabled || loading}
       style={({ pressed }) => [
         styles.wrap,
-        shadow.glow(t.solid),
+        shadow.glow(tone.solid),
         { opacity: disabled ? 0.5 : 1, transform: [{ scale: pressed ? motion.press : 1 }] },
       ]}
       accessibilityRole="button"
       accessibilityLabel={label}
     >
-      <LinearGradient colors={t.grad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.grad}>
+      <LinearGradient colors={tone.grad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.grad}>
         {icon ? (
           <View style={styles.iconWrap}>
-            <Icon name={loading ? 'loader' : icon} size={22} color={t.ink} />
+            <Icon name={loading ? 'loader' : icon} size={22} color={tone.ink} />
           </View>
         ) : null}
-        <Text style={[styles.label, { color: t.ink }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{loading ? 'One sec…' : label}</Text>
+        <Text style={[styles.label, { color: tone.ink }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{loading ? t('ui.oneSec') : label}</Text>
       </LinearGradient>
     </Pressable>
   );
