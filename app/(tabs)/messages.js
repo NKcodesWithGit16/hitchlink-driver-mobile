@@ -930,18 +930,17 @@ function VoiceStatic({ durationSec, mine, colors, styles }) {
 
 function VoicePlayable({ uri, durationSec, mine, colors, styles }) {
   // GET /chat/messages/{id}/audio requires a JWT — a bare { uri } source sends
-  // an unauthenticated request and 401s. Start with no source and swap in an
-  // authed one once the token resolves; useAudioPlayer re-resolves reactively
-  // when its source argument changes.
+  // an unauthenticated request and 401s, so playback needs an authed source.
+  //
+  // Resolving that source is deferred to the first tap rather than done on
+  // mount: a chat history can hold dozens of voice bubbles, and every one of
+  // them renders a VoicePlayable. Eagerly loading a native player per bubble
+  // means dozens of concurrent AVPlayer/ExoPlayer instances competing for the
+  // device's audio session the moment the screen renders — which is exactly
+  // the kind of thing that makes play() silently no-op without ever throwing
+  // a catchable JS error. Only the bubble(s) actually tapped get a player.
   const [source, setSource] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    if (!uri) { setSource(null); return undefined; }
-    getValidToken().then((token) => {
-      if (alive) setSource(token ? { uri, headers: { Authorization: `Bearer ${token}` } } : { uri });
-    });
-    return () => { alive = false; };
-  }, [uri]);
+  const pendingPlayRef = useRef(false);
 
   const player = useAudioPlayer(source);
   const status = useAudioPlayerStatus(player);
@@ -952,9 +951,26 @@ function VoicePlayable({ uri, durationSec, mine, colors, styles }) {
   const progress = Math.max(0, Math.min(1, dur ? cur / dur : 0));
   const remain = Math.max(0, Math.round(playing ? dur - cur : dur));
 
-  const toggle = () => {
+  // Once a just-requested source finishes loading, start the playback that
+  // the tap asked for (setSource above only takes effect on the next render,
+  // so play() can't be called in the same tap that requests the source).
+  useEffect(() => {
+    if (source && pendingPlayRef.current && status?.isLoaded) {
+      pendingPlayRef.current = false;
+      try { player.play(); } catch {}
+    }
+  }, [source, status?.isLoaded, player]);
+
+  const toggle = async () => {
     try {
       if (playing) { player.pause(); return; }
+      if (!source) {
+        if (!uri) return;
+        pendingPlayRef.current = true;
+        const token = await getValidToken();
+        setSource(token ? { uri, headers: { Authorization: `Bearer ${token}` } } : { uri });
+        return;
+      }
       if (status?.didJustFinish || (dur && cur >= dur - 0.05)) player.seekTo(0);
       player.play();
     } catch {}
