@@ -11,11 +11,17 @@ const LanguageContext = createContext(null);
 
 // Georgian locale tags look like "ka", "ka-GE" — match on the primary subtag.
 // expo-localization ships a native module, so a dev client built before it
-// was linked (or Expo Go without it) would throw at import time. require()
-// it lazily inside the try so that case degrades to English instead of
-// crashing app boot — the in-app language switcher still works either way.
+// was linked (or Expo Go without it) would throw at import time — and Metro
+// logs that throw itself (as a module-load error) regardless of any try/catch
+// around require(), so catching alone still leaves a scary red log. Probe
+// with expo-modules-core's non-throwing check first and only require()
+// expo-localization when it can actually load, so the failure path never
+// touches its module body at all. Falls back to English either way — the
+// in-app language switcher still works without device-locale detection.
 function systemDefault() {
   try {
+    const { requireOptionalNativeModule } = require('expo-modules-core');
+    if (!requireOptionalNativeModule('ExpoLocalization')) return 'en';
     const Localization = require('expo-localization');
     const tag = Localization.getLocales?.()[0]?.languageCode;
     return tag === 'ka' ? 'ka' : 'en';
