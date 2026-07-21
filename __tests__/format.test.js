@@ -44,7 +44,7 @@ describe('dates', () => {
   test('expiryStatus tiers: expired < 0 ≤ expiring ≤ 30 < valid', () => {
     // These lean on the module's fixed demo "today" (2026-06-05).
     expect(expiryStatus('2026-06-01').key).toBe('expired');
-    expect(expiryStatus('2026-06-20')).toMatchObject({ key: 'expiring', label: '15d left', tone: 'caution' });
+    expect(expiryStatus('2026-06-20')).toMatchObject({ key: 'expiring', labelKey: 'documents.statusExpiringDays', labelParams: { days: 15 }, tone: 'caution' });
     expect(expiryStatus('2027-01-01').key).toBe('valid');
     expect(expiryStatus('garbage').key).toBe('valid'); // unparseable ⇒ don't cry wolf
   });

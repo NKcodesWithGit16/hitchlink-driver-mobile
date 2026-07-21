@@ -2,18 +2,9 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from '../ui/Icon';
 import { useTheme } from '../../theme/ThemeContext';
+import { useT } from '../../i18n/LanguageContext';
 import { radius, space, type, toneOf, FONT, elevation, shadow } from '../../theme/tokens';
 import { relativeMinutes } from '../../lib/format';
-
-// Human category label for the card eyebrow — reads as a designed system, and
-// lets a driver scan by *kind* even before reading the headline.
-const CATEGORY_LABEL = {
-  load: 'Load',
-  hos: 'Safety',
-  document: 'Document',
-  weather: 'Weather',
-  earnings: 'Payment',
-};
 
 /* One row in the Alerts feed.
    Hierarchy is the whole game here:
@@ -25,13 +16,23 @@ const CATEGORY_LABEL = {
    language feels like one system across the app. */
 export default function NotificationCard({ item, onPress, onDismiss }) {
   const { colors } = useTheme();
-  const t = toneOf(colors, item.tone);
+  const t = useT();
+  const tone = toneOf(colors, item.tone);
   const unread = !item.read;
   const critical = item.critical && unread;
-  const cat = (CATEGORY_LABEL[item.category] || 'Alert').toUpperCase();
+  // Human category label for the card eyebrow — reads as a designed system, and
+  // lets a driver scan by *kind* even before reading the headline.
+  const categoryLabel = {
+    load: t('alerts.categoryLoad'),
+    hos: t('alerts.categorySafety'),
+    document: t('alerts.categoryDocument'),
+    weather: t('alerts.categoryWeather'),
+    earnings: t('alerts.categoryPayment'),
+  };
+  const cat = (categoryLabel[item.category] || t('alerts.categoryAlert')).toUpperCase();
 
-  const surface = critical ? t.fill : unread ? colors.surface : colors.surface2;
-  const borderColor = critical ? t.solid + '55' : unread ? colors.border : 'transparent';
+  const surface = critical ? tone.fill : unread ? colors.surface : colors.surface2;
+  const borderColor = critical ? tone.solid + '55' : unread ? colors.border : 'transparent';
 
   return (
     <Pressable
@@ -41,7 +42,7 @@ export default function NotificationCard({ item, onPress, onDismiss }) {
         {
           backgroundColor: surface,
           borderColor,
-          borderLeftColor: unread ? t.solid : borderColor,
+          borderLeftColor: unread ? tone.solid : borderColor,
           borderLeftWidth: unread ? 3 : 1,
           transform: [{ scale: pressed ? 0.985 : 1 }],
         },
@@ -49,29 +50,29 @@ export default function NotificationCard({ item, onPress, onDismiss }) {
         critical && elevation[2],
       ]}
       accessibilityRole="button"
-      accessibilityLabel={`${cat}. ${item.title}. ${item.body}`}
+      accessibilityLabel={t('alerts.cardA11y', { category: cat, title: item.title, body: item.body })}
     >
       {unread ? (
         <LinearGradient
-          colors={t.grad}
+          colors={tone.grad}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
-          style={[styles.tile, shadow.glow(t.solid)]}
+          style={[styles.tile, shadow.glow(tone.solid)]}
         >
           <Icon name={item.icon} size={20} color="#FFFFFF" />
         </LinearGradient>
       ) : (
-        <View style={[styles.tile, { backgroundColor: t.fill }]}>
-          <Icon name={item.icon} size={20} color={t.solid} />
+        <View style={[styles.tile, { backgroundColor: tone.fill }]}>
+          <Icon name={item.icon} size={20} color={tone.solid} />
         </View>
       )}
 
       <View style={styles.body}>
         <View style={styles.metaRow}>
-          <Text style={[styles.cat, { color: unread ? t.solid : colors.textMuted }]}>{cat}</Text>
+          <Text style={[styles.cat, { color: unread ? tone.solid : colors.textMuted }]}>{cat}</Text>
           <View style={[styles.midDot, { backgroundColor: colors.textMuted }]} />
           <Text style={[styles.time, { color: colors.textMuted }]}>
-            {relativeMinutes(item.minutesAgo)}
+            {relativeMinutes(item.minutesAgo, t)}
           </Text>
         </View>
 
@@ -84,11 +85,11 @@ export default function NotificationCard({ item, onPress, onDismiss }) {
 
         {item.action ? (
           <View style={styles.actions}>
-            <View style={[styles.actionPill, { backgroundColor: unread ? t.solid : t.fill, borderColor: t.solid + (unread ? '00' : '40') }]}>
-              <Text style={[styles.actionLabel, { color: unread ? colors.onAccent : t.solid }]}>
+            <View style={[styles.actionPill, { backgroundColor: unread ? tone.solid : tone.fill, borderColor: tone.solid + (unread ? '00' : '40') }]}>
+              <Text style={[styles.actionLabel, { color: unread ? colors.onAccent : tone.solid }]}>
                 {item.action.label}
               </Text>
-              <Icon name="chevron-right" size={14} color={unread ? colors.onAccent : t.solid} />
+              <Icon name="chevron-right" size={14} color={unread ? colors.onAccent : tone.solid} />
             </View>
           </View>
         ) : null}
@@ -100,7 +101,7 @@ export default function NotificationCard({ item, onPress, onDismiss }) {
           hitSlop={12}
           style={[styles.close, { backgroundColor: colors.surface2, borderColor: colors.border }]}
           accessibilityRole="button"
-          accessibilityLabel="Remove this notification"
+          accessibilityLabel={t('alerts.removeA11y')}
         >
           <Icon name="x" size={15} color={colors.textSecondary} />
         </Pressable>

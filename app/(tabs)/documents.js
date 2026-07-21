@@ -14,6 +14,7 @@ import Skeleton from '../../src/components/ui/Skeleton';
 import DocumentReviewModal from '../../src/components/driver/DocumentReviewModal';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useTheme } from '../../src/theme/ThemeContext';
+import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import {
   fetchDocuments, uploadDocument, deleteDocument, fetchDocumentContent,
@@ -23,17 +24,18 @@ import { expiryStatus, fmtDate, daysUntil } from '../../src/lib/format';
 import { space, type, radius, toneOf, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 
-const FILTERS = [
-  { key: 'all',      label: 'All'      },
-  { key: 'valid',    label: 'Valid'    },
-  { key: 'expiring', label: 'Expiring' },
-  { key: 'expired',  label: 'Expired'  },
-];
-
 export default function DocumentsScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
+  const t = useT();
   const { userId } = useAuth();
+
+  const FILTERS = [
+    { key: 'all',      label: t('documents.filterAll')      },
+    { key: 'valid',    label: t('documents.filterValid')    },
+    { key: 'expiring', label: t('documents.filterExpiring') },
+    { key: 'expired',  label: t('documents.filterExpired')  },
+  ];
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [docs, setDocs]     = useState([]);
   const [open, setOpen]     = useState(null);
@@ -116,7 +118,7 @@ export default function DocumentsScreen() {
       setReviewExtractionError(extractionError);
       setReviewVisible(true);
     } catch {
-      Alert.alert('Could not add', 'Please try again.');
+      Alert.alert(t('documents.couldNotAdd'), t('documents.pleaseTryAgain'));
     } finally {
       setAdding(false);
     }
@@ -140,21 +142,21 @@ export default function DocumentsScreen() {
       {/* ── Header ── */}
       <View style={styles.head}>
         <View>
-          <Text style={[styles.title, { color: colors.textPrimary }]}>Documents</Text>
+          <Text style={[styles.title, { color: colors.textPrimary }]}>{t('documents.title')}</Text>
           <Text style={[styles.headSub, { color: colors.textMuted }]}>
-            {docs.length} on file
-            {counts.expiring > 0 ? ` · ${counts.expiring} expiring soon` : ''}
-            {counts.expired  > 0 ? ` · ${counts.expired} expired` : ''}
+            {t('documents.onFile', { count: docs.length })}
+            {counts.expiring > 0 ? ` · ${t('documents.expiringSoonCount', { count: counts.expiring })}` : ''}
+            {counts.expired  > 0 ? ` · ${t('documents.expiredCount', { count: counts.expired })}` : ''}
           </Text>
         </View>
         <Pressable
           onPress={addDoc}
           disabled={adding}
           style={[styles.addBtn, { backgroundColor: colors.teal, opacity: adding ? 0.7 : 1 }, shadow.glow(colors.teal)]}
-          accessibilityLabel="Add document"
+          accessibilityLabel={t('documents.addA11y')}
         >
           <Icon name={adding ? 'loader' : 'plus'} size={18} color={colors.onAccent} />
-          <Text style={[styles.addBtnText, { color: colors.onAccent }]}>{adding ? 'Adding…' : 'Add'}</Text>
+          <Text style={[styles.addBtnText, { color: colors.onAccent }]}>{adding ? t('documents.adding') : t('documents.add')}</Text>
         </Pressable>
       </View>
 
@@ -202,8 +204,8 @@ export default function DocumentsScreen() {
           </View>
           <Text style={[styles.alertText, { color: colors.textPrimary }]} numberOfLines={2}>
             {counts.expiring === 1
-              ? `${docs.find(d => expiryStatus(d.expires).key === 'expiring')?.label} expires soon — renew before your next inspection.`
-              : `${counts.expiring} documents expiring soon — renew before your next inspection.`}
+              ? t('documents.oneExpiresSoon', { label: docs.find(d => expiryStatus(d.expires).key === 'expiring')?.label })
+              : t('documents.manyExpireSoon', { count: counts.expiring })}
           </Text>
         </View>
       )}
@@ -221,16 +223,16 @@ export default function DocumentsScreen() {
             <View style={[styles.errorIcon, { backgroundColor: colors.cautionFill }]}>
               <Icon name="wifi-off" size={26} color={colors.caution} />
             </View>
-            <Text style={[styles.errorTitle, { color: colors.textPrimary }]}>Couldn't load documents</Text>
-            <Text style={[styles.errorSub, { color: colors.textSecondary }]}>Check your signal and try again — files you've already saved stay available offline.</Text>
+            <Text style={[styles.errorTitle, { color: colors.textPrimary }]}>{t('documents.couldntLoad')}</Text>
+            <Text style={[styles.errorSub, { color: colors.textSecondary }]}>{t('documents.couldntLoadSub')}</Text>
             <Pressable
               onPress={onRefresh}
               style={[styles.retryBtn, { borderColor: colors.teal }]}
               accessibilityRole="button"
-              accessibilityLabel="Try loading documents again"
+              accessibilityLabel={t('documents.tryAgainA11y')}
             >
               <Icon name="refresh-cw" size={15} color={colors.teal} />
-              <Text style={[styles.retryText, { color: colors.teal }]}>Try again</Text>
+              <Text style={[styles.retryText, { color: colors.teal }]}>{t('load.tryAgain')}</Text>
             </Pressable>
           </View>
         ) : (
@@ -243,11 +245,13 @@ export default function DocumentsScreen() {
             {visible.length === 0 && (
               <View style={styles.empty}>
                 <Icon name="folder" size={40} color={colors.textMuted} />
-                <Text style={[styles.emptyText, { color: colors.textMuted }]}>No {filter} documents</Text>
+                <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+                  {t('documents.noFilteredDocs', { filter: FILTERS.find(f => f.key === filter)?.label.toLowerCase() })}
+                </Text>
               </View>
             )}
             <Text style={[styles.hint, { color: colors.textMuted }]}>
-              Documents are cached offline — accessible at weigh stations with no signal.
+              {t('documents.offlineHint')}
             </Text>
           </>
         )}
@@ -281,9 +285,10 @@ export default function DocumentsScreen() {
 
 function DocCard({ doc, onPress, colors, styles }) {
   const reduce  = useReduceMotion();
+  const t       = useT();
   const status  = expiryStatus(doc.expires);
   const days    = daysUntil(doc.expires);
-  const t       = toneOf(colors, status.tone);
+  const tone    = toneOf(colors, status.tone);
   const barFill = Math.max(0, Math.min(1, (days ?? 0) / 365));
   const barAnim = useRef(new Animated.Value(0)).current;
 
@@ -299,11 +304,13 @@ function DocCard({ doc, onPress, colors, styles }) {
 
   const daysLabel =
     days == null  ? '' :
-    days <= 0     ? 'Expired' :
-    days === 1    ? '1 day left' :
-    days < 30     ? `${days} days left` :
-    days < 365    ? `${Math.round(days / 30)} mo left` :
-                    `${Math.round(days / 365 * 10) / 10} yr left`;
+    days <= 0     ? t('documents.daysLeftExpired') :
+    days === 1    ? t('documents.daysLeftOne') :
+    days < 30     ? t('documents.daysLeftN', { n: days }) :
+    days < 365    ? t('documents.moLeft', { n: Math.round(days / 30) }) :
+                    t('documents.yrLeft', { n: Math.round(days / 365 * 10) / 10 });
+
+  const statusLabel = t(status.labelKey, status.labelParams);
 
   return (
     <Pressable
@@ -313,16 +320,16 @@ function DocCard({ doc, onPress, colors, styles }) {
         { backgroundColor: colors.surface, borderColor: colors.border, opacity: pressed ? 0.88 : 1 },
       ]}
       accessibilityRole="button"
-      accessibilityLabel={`${doc.label}, ${status.label}`}
+      accessibilityLabel={t('documents.docCardA11y', { label: doc.label, status: statusLabel })}
     >
       {/* Status stripe */}
-      <View style={[styles.stripe, { backgroundColor: t.solid }]} />
+      <View style={[styles.stripe, { backgroundColor: tone.solid }]} />
 
       <View style={styles.docBody}>
         {/* Top row: icon + label + badge */}
         <View style={styles.docTop}>
-          <View style={[styles.docIcon, { backgroundColor: t.fill }]}>
-            <Icon name={doc.icon || 'file-text'} size={20} color={t.solid} />
+          <View style={[styles.docIcon, { backgroundColor: tone.fill }]}>
+            <Icon name={doc.icon || 'file-text'} size={20} color={tone.solid} />
           </View>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.docLabel, { color: colors.textPrimary }]} numberOfLines={1}>
@@ -332,9 +339,9 @@ function DocCard({ doc, onPress, colors, styles }) {
               {doc.sub}
             </Text>
           </View>
-          <View style={[styles.statusPill, { backgroundColor: t.fill, borderColor: t.solid + '55' }]}>
-            <View style={[styles.statusDot, { backgroundColor: t.solid }]} />
-            <Text style={[styles.statusText, { color: t.solid }]}>{status.label}</Text>
+          <View style={[styles.statusPill, { backgroundColor: tone.fill, borderColor: tone.solid + '55' }]}>
+            <View style={[styles.statusDot, { backgroundColor: tone.solid }]} />
+            <Text style={[styles.statusText, { color: tone.solid }]}>{statusLabel}</Text>
           </View>
         </View>
 
@@ -352,7 +359,7 @@ function DocCard({ doc, onPress, colors, styles }) {
                 styles.barFill,
                 {
                   width: barAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),
-                  backgroundColor: t.solid,
+                  backgroundColor: tone.solid,
                 },
               ]}
             />
@@ -361,10 +368,10 @@ function DocCard({ doc, onPress, colors, styles }) {
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
               <Icon name="calendar" size={11} color={colors.textMuted} />
               <Text style={[styles.expiryDate, { color: colors.textMuted }]}>
-                Expires {fmtDate(doc.expires)}
+                {t('documents.expiresOn', { date: fmtDate(doc.expires, t('common.monthsShort')) })}
               </Text>
             </View>
-            <Text style={[styles.daysLeft, { color: t.solid }]}>{daysLabel}</Text>
+            <Text style={[styles.daysLeft, { color: tone.solid }]}>{daysLabel}</Text>
           </View>
         </View>
       </View>
@@ -402,10 +409,11 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
   const [viewing, setViewing]       = useState(false);
   const [deleting, setDeleting]     = useState(false);
   const [previewUri, setPreviewUri] = useState(null);
+  const t = useT();
   if (!doc) return null;
   const status = expiryStatus(doc.expires);
   const days   = daysUntil(doc.expires);
-  const t      = toneOf(colors, status.tone);
+  const tone   = toneOf(colors, status.tone);
   const hasFile = !!(doc.hasContent || doc.url);
 
   const viewFile = async () => {
@@ -418,7 +426,7 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
       }
       const result = await fetchDocumentContent(doc.id, doc.fileName || doc.label);
       if (!result) {
-        Alert.alert('Not available', "This document's file can't be previewed here.");
+        Alert.alert(t('documents.notAvailableTitle'), t('documents.notAvailableBody'));
         return;
       }
       if (Platform.OS === 'web') {
@@ -431,17 +439,17 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
         await Sharing.shareAsync(result.uri, { mimeType: result.contentType });
       }
     } catch {
-      Alert.alert('Could not open', 'Please try again.');
+      Alert.alert(t('documents.couldNotOpen'), t('documents.pleaseTryAgain'));
     } finally {
       setViewing(false);
     }
   };
 
   const doDelete = () => {
-    Alert.alert('Delete document?', "This can't be undone.", [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(t('documents.deleteDocQ'), t('documents.deleteDocBody'), [
+      { text: t('common.cancel'), style: 'cancel' },
       {
-        text: 'Delete',
+        text: t('common.delete'),
         style: 'destructive',
         onPress: async () => {
           setDeleting(true);
@@ -450,7 +458,7 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
             await onUploaded?.();
             onClose();
           } catch {
-            Alert.alert('Could not delete', 'Please try again.');
+            Alert.alert(t('documents.couldNotDelete'), t('documents.pleaseTryAgain'));
           } finally {
             setDeleting(false);
           }
@@ -477,10 +485,10 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
         expiresAt: doc.expires,
       });
       await onUploaded?.();
-      Alert.alert('Uploaded', 'Renewal scan saved.');
+      Alert.alert(t('documents.uploaded'), t('documents.renewalSaved'));
       onClose();
     } catch {
-      Alert.alert('Could not upload', 'Please try again.');
+      Alert.alert(t('documents.couldNotUpload'), t('documents.pleaseTryAgain'));
     } finally {
       setUploading(false);
     }
@@ -488,9 +496,9 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
 
   const daysLabel =
     days == null ? '' :
-    days <= 0    ? 'This document has expired' :
-    days === 1   ? '1 day remaining' :
-                   `${days} days remaining`;
+    days <= 0    ? t('documents.expiredNote') :
+    days === 1   ? t('documents.remainingOne') :
+                   t('documents.remainingN', { n: days });
 
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
@@ -498,17 +506,17 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
 
         {/* Gradient header */}
         <LinearGradient
-          colors={t.grad}
+          colors={tone.grad}
           start={{ x: 0.1, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={[styles.viewerHeader, { paddingTop: insets.top + space[3] }]}
         >
-          <Pressable onPress={onClose} style={styles.backBtn} accessibilityLabel="Close">
+          <Pressable onPress={onClose} style={styles.backBtn} accessibilityLabel={t('documents.closeA11y')}>
             <Icon name="arrow-left" size={22} color="rgba(255,255,255,0.9)" />
           </Pressable>
           <View style={styles.viewerIconWrap}>
             <View style={styles.viewerIconCircle}>
-              <Icon name={doc.icon || 'file-text'} size={40} color={t.solid} />
+              <Icon name={doc.icon || 'file-text'} size={40} color={tone.solid} />
             </View>
           </View>
           <Text style={styles.viewerDocName}>{doc.label}</Text>
@@ -519,20 +527,20 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
         <ScrollView contentContainerStyle={{ padding: space[4], gap: space[3], paddingBottom: 40 }}>
           <View style={[styles.detailCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
 
-            <DetailRow icon="hash"     label="Document number" value={doc.number}          colors={colors} styles={styles} mono />
+            <DetailRow icon="hash"     label={t('documents.documentNumber')} value={doc.number}          colors={colors} styles={styles} mono />
             <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />
-            <DetailRow icon="calendar" label="Expiry date"     value={fmtDate(doc.expires)} colors={colors} styles={styles} />
+            <DetailRow icon="calendar" label={t('documents.expiryDate')}     value={fmtDate(doc.expires, t('common.monthsShort'))} colors={colors} styles={styles} />
             <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />
 
             {/* Status row */}
             <View style={styles.detailRow}>
               <View style={styles.detailLeft}>
                 <Icon name="shield" size={15} color={colors.textMuted} />
-                <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Status</Text>
+                <Text style={[styles.detailLabel, { color: colors.textMuted }]}>{t('documents.status')}</Text>
               </View>
-              <View style={[styles.statusPill, { backgroundColor: t.fill, borderColor: t.solid + '55' }]}>
-                <View style={[styles.statusDot, { backgroundColor: t.solid }]} />
-                <Text style={[styles.statusText, { color: t.solid }]}>{status.label}</Text>
+              <View style={[styles.statusPill, { backgroundColor: tone.fill, borderColor: tone.solid + '55' }]}>
+                <View style={[styles.statusDot, { backgroundColor: tone.solid }]} />
+                <Text style={[styles.statusText, { color: tone.solid }]}>{t(status.labelKey, status.labelParams)}</Text>
               </View>
             </View>
 
@@ -546,11 +554,11 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
                       style={[
                         styles.barFill,
                         { width: `${Math.max(0, Math.min(100, (days / 365) * 100))}%`,
-                          backgroundColor: t.solid, borderRadius: 999 },
+                          backgroundColor: tone.solid, borderRadius: 999 },
                       ]}
                     />
                   </View>
-                  <Text style={[styles.countdownText, { color: t.solid }]}>{daysLabel}</Text>
+                  <Text style={[styles.countdownText, { color: tone.solid }]}>{daysLabel}</Text>
                 </View>
               </>
             )}
@@ -562,13 +570,13 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
             disabled={uploading}
             style={({ pressed }) => [
               styles.actionBtn,
-              { backgroundColor: t.solid, opacity: pressed || uploading ? 0.85 : 1 },
-              shadow.glow(t.solid),
+              { backgroundColor: tone.solid, opacity: pressed || uploading ? 0.85 : 1 },
+              shadow.glow(tone.solid),
             ]}
           >
             <Icon name={uploading ? 'loader' : 'upload'} size={18} color={colors.onAccent} />
             <Text style={[styles.actionBtnText, { color: colors.onAccent }]}>
-              {uploading ? 'Uploading…' : 'Upload renewal'}
+              {uploading ? t('documents.uploading') : t('documents.uploadRenewal')}
             </Text>
           </Pressable>
 
@@ -582,7 +590,7 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
           >
             <Icon name={viewing ? 'loader' : 'eye'} size={18} color={colors.textSecondary} />
             <Text style={[styles.actionBtnText, { color: colors.textSecondary }]}>
-              {viewing ? 'Opening…' : hasFile ? 'View document' : 'No file attached'}
+              {viewing ? t('documents.opening') : hasFile ? t('documents.viewDocument') : t('documents.noFileAttached')}
             </Text>
           </Pressable>
 
@@ -596,7 +604,7 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
           >
             <Icon name={deleting ? 'loader' : 'trash-2'} size={18} color={colors.danger} />
             <Text style={[styles.actionBtnText, { color: colors.danger }]}>
-              {deleting ? 'Deleting…' : 'Delete document'}
+              {deleting ? t('documents.deleting') : t('documents.deleteDocument')}
             </Text>
           </Pressable>
         </ScrollView>
@@ -610,7 +618,7 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
               onPress={() => setPreviewUri(null)}
               style={[styles.previewClose, { top: insets.top + space[3] }]}
               accessibilityRole="button"
-              accessibilityLabel="Close preview"
+              accessibilityLabel={t('documents.closePreviewA11y')}
             >
               <Icon name="x" size={22} color="#FFFFFF" />
             </Pressable>
