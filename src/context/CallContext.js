@@ -26,6 +26,7 @@ import { useAuth } from './AuthContext';
 import { useCallSocket } from '../hooks/useCallSocket';
 import { startCall as apiStartCall, getCall, acceptCall as apiAcceptCall, declineCall as apiDeclineCall, endCall as apiEndCall } from '../api/calls';
 import { startRinging, stopRinging } from '../lib/sound';
+import { useT } from '../i18n/LanguageContext';
 
 let Daily = null;
 try {
@@ -70,6 +71,7 @@ const initialState = {
 };
 
 export function CallProvider({ children }) {
+  const t = useT();
   const { user, signedIn } = useAuth();
   const [state, setState] = useState(initialState);
   const callObjectRef = useRef(null);
@@ -141,7 +143,7 @@ export function CallProvider({ children }) {
   const joinDailyRoom = useCallback(async (roomUrl, token) => {
     if (!Daily) {
       console.error('[Call] Daily native module unavailable — is this build using a dev client with @daily-co/react-native-daily-js linked?');
-      setState((s) => ({ ...initialState, status: 'ended', error: 'Calling is unavailable on this build.' }));
+      setState((s) => ({ ...initialState, status: 'ended', error: t('call.callingUnavailable') }));
       return;
     }
     const co = Daily.createCallObject({ audioSource: true, videoSource: false });
@@ -170,7 +172,7 @@ export function CallProvider({ children }) {
         joinDailyRoom(res.roomUrl, res.token).catch((err) => {
           console.error(`[Call] Join failed for ${res.callId} (early-accepted path):`, err);
           teardownCallObject();
-          setState({ ...initialState, status: 'ended', error: 'Could not connect the call.' });
+          setState({ ...initialState, status: 'ended', error: t('call.couldNotConnect') });
           setTimeout(() => setState((cur) => (cur.status === 'ended' ? initialState : cur)), 2500);
           apiEndCall(res.callId).catch(() => {});
         });
@@ -179,7 +181,7 @@ export function CallProvider({ children }) {
       if (pending && pending.callId === res.callId) {
         // Declined (or ended) before we learned our own callId.
         console.info(`[Call] ${res.callId} was already ${pending.type} before we learned our own callId.`);
-        setState({ ...initialState, status: 'ended', error: pending.type === 'declined' ? 'Call declined.' : 'Call ended.' });
+        setState({ ...initialState, status: 'ended', error: pending.type === 'declined' ? t('call.callDeclined') : t('call.callEndedError') });
         setTimeout(() => setState((cur) => (cur.status === 'ended' ? initialState : cur)), 2500);
         return;
       }
@@ -188,7 +190,7 @@ export function CallProvider({ children }) {
         : s));
     } catch (err) {
       console.error('[Call] startCall failed:', err);
-      setState({ ...initialState, status: 'ended', error: 'Could not start the call.' });
+      setState({ ...initialState, status: 'ended', error: t('call.couldNotStart') });
       setTimeout(() => setState((s) => (s.status === 'ended' ? initialState : s)), 2500);
     }
   }, [user?.id, user?.dispatcher, joinDailyRoom, teardownCallObject]);
@@ -270,7 +272,7 @@ export function CallProvider({ children }) {
       console.error('[Call] acceptCall failed:', err);
       endCallKitSession(callId);
       teardownCallObject();
-      setState({ ...initialState, status: 'ended', error: 'Could not connect the call.' });
+      setState({ ...initialState, status: 'ended', error: t('call.couldNotConnect') });
       setTimeout(() => setState((s) => (s.status === 'ended' ? initialState : s)), 2500);
       // apiAcceptCall above may already have flipped the call to Accepted
       // server-side before the join itself failed — /decline only works while
@@ -327,7 +329,7 @@ export function CallProvider({ children }) {
     joinDailyRoom(s.roomUrl, s.token).catch((err) => {
       console.error(`[Call] Join failed for ${callId} after the dispatcher accepted:`, err);
       teardownCallObject();
-      setState({ ...initialState, status: 'ended', error: 'Could not connect the call.' });
+      setState({ ...initialState, status: 'ended', error: t('call.couldNotConnect') });
       setTimeout(() => setState((cur) => (cur.status === 'ended' ? initialState : cur)), 2500);
       if (callId) apiEndCall(callId).catch(() => {});
     });
@@ -525,7 +527,7 @@ export function CallProvider({ children }) {
       endCallKitSession(callId);
       teardownCallObject();
       if (status === 'ringing-out') {
-        setState({ ...initialState, status: 'ended', error: 'No answer.' });
+        setState({ ...initialState, status: 'ended', error: t('call.noAnswer') });
         setTimeout(() => setState((cur) => (cur.status === 'ended' ? initialState : cur)), 2500);
       } else {
         setState(initialState);

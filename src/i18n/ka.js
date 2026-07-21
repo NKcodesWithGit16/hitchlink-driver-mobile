@@ -259,6 +259,8 @@ export const ka = {
     openDocumentA11y: 'დოკუმენტის გახსნა {filename}',
     documentFallback: 'დოკუმენტი',
     openVideoA11y: 'ვიდეოს გახსნა',
+    micNeededTitle: 'საჭიროა მიკროფონი',
+    micNeededBody: 'დაუშვით მიკროფონის წვდომა ხმოვანი შეტყობინების გასაგზავნად.',
     cancelVoiceA11y: 'ხმოვანი შეტყობინების გაუქმება',
     sendVoiceA11y: 'ხმოვანი შეტყობინების გაგზავნა',
   },
@@ -535,6 +537,12 @@ export const ka = {
     mute: 'დადუმება',
     hangUpA11y: 'დარეკვის დასრულება',
     hangUp: 'დასრულება',
+    callingUnavailable: 'ზარები ამ ვერსიაზე მიუწვდომელია.',
+    couldNotConnect: 'ზარის დაკავშირება ვერ მოხერხდა.',
+    callDeclined: 'ზარი უარყოფილია.',
+    callEndedError: 'ზარი დასრულდა.',
+    couldNotStart: 'ზარის დაწყება ვერ მოხერხდა.',
+    noAnswer: 'პასუხი არ არის.',
   },
 
   ui: {

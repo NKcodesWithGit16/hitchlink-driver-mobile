@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import haptics from '../lib/haptics';
+import { useT } from '../i18n/LanguageContext';
 
 // Longest clip we'll capture before auto-stopping — keeps a forgotten recording
 // from running forever (and the upload from ballooning).
@@ -15,6 +16,7 @@ const MAX_SECONDS = 300;
    · recording — is a capture in progress
    · elapsed   — seconds recorded so far (live, updates each second)        */
 export function useVoiceRecorder({ onSend } = {}) {
+  const t = useT();
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -35,7 +37,7 @@ export function useVoiceRecorder({ onSend } = {}) {
     if (activeRef.current) return;
     try {
       const perm = await AudioModule.requestRecordingPermissionsAsync();
-      if (!perm.granted) { Alert.alert('Microphone needed', 'Allow the mic to send a voice message.'); return; }
+      if (!perm.granted) { Alert.alert(t('messages.micNeededTitle'), t('messages.micNeededBody')); return; }
       // iOS needs the session in recording mode to capture the mic.
       await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true }).catch(() => {});
       await recorder.prepareToRecordAsync();
@@ -55,7 +57,7 @@ export function useVoiceRecorder({ onSend } = {}) {
       setRecording(false);
       restorePlayback();
     }
-  }, [recorder, restorePlayback]);
+  }, [recorder, restorePlayback, t]);
 
   // Common teardown for both stop() and cancel(): halt the recorder, clear
   // UI state, and hand the audio session back to playback. Returns the clip.

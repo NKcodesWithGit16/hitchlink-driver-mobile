@@ -256,6 +256,8 @@ export const en = {
     openDocumentA11y: 'Open document {filename}',
     documentFallback: 'Document',
     openVideoA11y: 'Open video',
+    micNeededTitle: 'Microphone needed',
+    micNeededBody: 'Allow the mic to send a voice message.',
     cancelVoiceA11y: 'Cancel voice message',
     sendVoiceA11y: 'Send voice message',
   },
@@ -532,6 +534,12 @@ export const en = {
     mute: 'Mute',
     hangUpA11y: 'Hang up',
     hangUp: 'Hang up',
+    callingUnavailable: 'Calling is unavailable on this build.',
+    couldNotConnect: 'Could not connect the call.',
+    callDeclined: 'Call declined.',
+    callEndedError: 'Call ended.',
+    couldNotStart: 'Could not start the call.',
+    noAnswer: 'No answer.',
   },
 
   ui: {
