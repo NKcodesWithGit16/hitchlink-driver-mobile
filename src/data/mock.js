@@ -21,7 +21,7 @@ export const activeLoad = {
   originAddress: '2200 S Western Ave, Chicago, IL 60608',
   destination: 'Atlanta, GA',
   destState: 'GA',
-  destAddress: '4500 Fulton Industrial Blvd, Atlanta, GA 30336',
+  destinationAddress: '4500 Fulton Industrial Blvd, Atlanta, GA 30336',
   miles: 720,
   rate: 1820,
   rpm: 2.53,

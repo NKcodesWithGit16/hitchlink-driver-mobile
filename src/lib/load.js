@@ -99,7 +99,7 @@ export function nextStop(load, status) {
   return {
     kind: 'DELIVERY',
     city: load.destination,
-    address: load.destAddress,
+    address: load.destinationAddress,
     date: load.deliveryDate,
     by: load.deliverBy,
     remainingMiles: load.deliveryRemainingMiles,

@@ -402,7 +402,9 @@ export default function LoadScreen() {
         )}
 
         <ActionGrid
-          address={isPrePickup(status) ? load.originAddress : load.destAddress}
+          address={isPrePickup(status) ? load.originAddress : load.destinationAddress}
+          lat={isPrePickup(status) ? load.pickupLat : load.dropoffLat}
+          lng={isPrePickup(status) ? load.pickupLng : load.dropoffLng}
           phone={load.broker?.phone}
           onChat={() => router.push('/(tabs)/messages')}
         />

@@ -42,7 +42,7 @@ describe('load lifecycle state machine', () => {
     const load = {
       origin: 'Atlanta, GA', originAddress: '100 Dock St', pickupDate: '2026-06-05',
       pickupWindowText: 'by 09:00', remainingMiles: 42, etaText: '38 min',
-      destination: 'Nashville, TN', destAddress: '9 Freight Way', deliveryDate: '2026-06-06',
+      destination: 'Nashville, TN', destinationAddress: '9 Freight Way', deliveryDate: '2026-06-06',
       deliverBy: 'by 17:00', deliveryRemainingMiles: 250, deliveryEtaText: '4 hr',
     };
     expect(nextStop(load, 'EnRouteToPickup')).toMatchObject({ kind: 'PICKUP', city: 'Atlanta, GA', remainingMiles: 42 });
