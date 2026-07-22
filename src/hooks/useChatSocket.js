@@ -1,17 +1,19 @@
 // Real-time chat: joins the backend's SignalR chat hub so dispatcher messages
 // appear instantly instead of waiting for the next poll. The hub broadcasts
 // "ReceiveMessage" to the driver_{driverId} room on every send (text, photo,
-// voice), from both the dispatcher web app and the REST endpoints.
+// voice), from both the dispatcher web app and the REST endpoints. It also
+// broadcasts "TypingChanged" whenever either side calls NotifyTyping.
 //
-// Deliberately thin: on any incoming event we just nudge the screen's existing
-// `load()` reconciliation instead of merging payloads client-side — one code
-// path for message shapes, and edits/deletes/reactions stay consistent.
+// Deliberately thin: on any incoming message event we just nudge the screen's
+// existing `load()` reconciliation instead of merging payloads client-side —
+// one code path for message shapes, and edits/deletes/reactions stay
+// consistent.
 //
 // Loaded defensively like the other optional modules: in mock mode, on builds
 // without @microsoft/signalr, or with no API URL configured, it no-ops and the
 // chat screen's polling keeps working exactly as before.
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { MAIN_BASE, USE_MOCK } from '../api/config';
 import { getValidToken } from '../lib/session';
 
@@ -26,13 +28,21 @@ try {
  * @param {string} driverId  joins this driver's chat room while mounted
  * @param {() => void} onMessage  called on every incoming message (and on
  *   reconnect, to catch anything missed while the socket was down)
- * @returns {boolean} true while the socket is connected — callers can relax
- *   their polling cadence when it is.
+ * @param {(isTyping: boolean) => void} [onDispatcherTyping]  called whenever
+ *   the dispatcher's typing state changes (the hub echoes both sides' own
+ *   NotifyTyping calls back to the room — this only fires for fromDriver:false)
+ * @returns {{ connected: boolean, sendTyping: (isTyping: boolean) => void }}
+ *   connected — true while the socket is up, callers can relax polling cadence.
+ *   sendTyping — tell the dispatcher the driver is (or isn't) typing; no-ops
+ *   silently if the socket isn't connected.
  */
-export function useChatSocket(driverId, onMessage) {
+export function useChatSocket(driverId, onMessage, onDispatcherTyping) {
   const [connected, setConnected] = useState(false);
   const cbRef = useRef(onMessage);
   cbRef.current = onMessage;
+  const typingCbRef = useRef(onDispatcherTyping);
+  typingCbRef.current = onDispatcherTyping;
+  const connRef = useRef(null);
 
   useEffect(() => {
     if (!driverId || USE_MOCK || !signalR || !MAIN_BASE) return undefined;
@@ -48,10 +58,14 @@ export function useChatSocket(driverId, onMessage) {
       })
       .withAutomaticReconnect()
       .build();
+    connRef.current = conn;
 
     const nudge = () => { if (!cancelled) cbRef.current?.(); };
 
     conn.on('ReceiveMessage', nudge);
+    conn.on('TypingChanged', ({ fromDriver, isTyping }) => {
+      if (!cancelled && !fromDriver) typingCbRef.current?.(!!isTyping);
+    });
     conn.onreconnecting(() => { if (!cancelled) setConnected(false); });
     conn.onclose(() => { if (!cancelled) setConnected(false); });
     conn.onreconnected(() => {
@@ -74,9 +88,14 @@ export function useChatSocket(driverId, onMessage) {
     return () => {
       cancelled = true;
       setConnected(false);
+      connRef.current = null;
       conn.stop().catch(() => {});
     };
   }, [driverId]);
 
-  return connected;
+  const sendTyping = useCallback((isTyping) => {
+    connRef.current?.invoke('NotifyTyping', String(driverId), true, isTyping).catch(() => {});
+  }, [driverId]);
+
+  return { connected, sendTyping };
 }

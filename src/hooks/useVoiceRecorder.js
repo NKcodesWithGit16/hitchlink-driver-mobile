@@ -3,10 +3,16 @@ import { Alert } from 'react-native';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import haptics from '../lib/haptics';
 import { useT } from '../i18n/LanguageContext';
+import { normalizeMetering, resamplePeaks, peaksToString } from '../lib/waveform';
 
 // Longest clip we'll capture before auto-stopping — keeps a forgotten recording
 // from running forever (and the upload from ballooning).
 const MAX_SECONDS = 300;
+// How often we sample the mic level while recording, and how many points we
+// compact that down to before upload — a real (if coarse) waveform instead of
+// a generic decorative one, without sending thousands of samples for a long clip.
+const METER_SAMPLE_MS = 120;
+const WAVEFORM_POINTS = 40;
 
 /* Tap-to-record voice capture, lifted out of the composer so the whole input
    row can switch into a recording bar. Tap start() to begin, then either
@@ -17,15 +23,18 @@ const MAX_SECONDS = 300;
    · elapsed   — seconds recorded so far (live, updates each second)        */
 export function useVoiceRecorder({ onSend } = {}) {
   const t = useT();
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const startRef  = useRef(0);
   const activeRef = useRef(false);
   const timerRef  = useRef(null);
+  const meterTimerRef = useRef(null);
+  const peaksRef  = useRef([]);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (meterTimerRef.current) { clearInterval(meterTimerRef.current); meterTimerRef.current = null; }
   }, []);
 
   // Restore the session to loud playback so recorded clips are audible again.
@@ -46,12 +55,21 @@ export function useVoiceRecorder({ onSend } = {}) {
       startRef.current = Date.now();
       setElapsed(0);
       setRecording(true);
+      peaksRef.current = [];
       haptics.impact();
       timerRef.current = setInterval(() => {
         const secs = Math.floor((Date.now() - startRef.current) / 1000);
         setElapsed(secs);
         if (secs >= MAX_SECONDS) stopRef.current();   // auto-stop + send
       }, 1000);
+      // Sample the live mic level so the sent clip carries its own real
+      // waveform instead of a generic decorative one.
+      meterTimerRef.current = setInterval(() => {
+        try {
+          const level = recorder.getStatus()?.metering;
+          peaksRef.current.push(normalizeMetering(level));
+        } catch {}
+      }, METER_SAMPLE_MS);
     } catch {
       activeRef.current = false;
       setRecording(false);
@@ -71,7 +89,9 @@ export function useVoiceRecorder({ onSend } = {}) {
     let uri = null;
     try { await recorder.stop(); uri = recorder.uri || null; } catch {}
     restorePlayback();
-    return { uri, durationSec: secs };
+    const waveformPeaks = peaksRef.current.length ? peaksToString(resamplePeaks(peaksRef.current, WAVEFORM_POINTS)) : null;
+    peaksRef.current = [];
+    return { uri, durationSec: secs, waveformPeaks };
   }, [recorder, clearTimer, restorePlayback]);
 
   const stop = useCallback(async () => {

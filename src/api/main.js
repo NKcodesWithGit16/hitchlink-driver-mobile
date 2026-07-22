@@ -35,6 +35,10 @@ function normalizeMessage(m) {
     at: fmtTime(m.time),
     ts: m.time,                         // raw timestamp for edit/delete-window checks
     deleted,
+    // Read receipt: has the OTHER side's cursor passed this message yet.
+    // Only meaningful for messages this driver sent — drives the
+    // single-check (sent) vs. double-check (read) indicator.
+    read: !!m.read,
     editedAt: m.editedAt ?? undefined,
     text: deleted ? undefined : (m.text ?? undefined),
     kind: deleted ? undefined : (isMissedCall ? 'missed_call' : isVoice ? 'voice' : isImage ? 'image' : isDocument ? 'document' : isVideo ? 'video' : undefined),
@@ -45,6 +49,7 @@ function normalizeMessage(m) {
     mimeType: deleted ? undefined : att?.mimeType,
     sizeBytes: deleted ? undefined : att?.sizeBytes,
     durationSec: deleted ? undefined : (m.durationSeconds ?? undefined),
+    waveformPeaks: deleted ? undefined : (m.waveformPeaks ?? undefined),
     replyToId: m.replyToMessageId ?? undefined,
     replyTo: m.replyTo ? {
       id: m.replyTo.id,
@@ -203,6 +208,19 @@ export async function removeReaction(messageId, actorId) {
   if (USE_MOCK) { await wait(80); return { ok: true }; }
   return apiFetch(`/chat/messages/${messageId}/reactions`, {
     method: 'DELETE',
+    body: JSON.stringify({ actorRole: 'driver', actorId }),
+  });
+}
+
+// Advances the driver's read cursor to the latest message currently visible
+// to them — the dispatcher's next fetchMessages() then sees `read: true` on
+// any of their own sent messages up to that point (WhatsApp-style double
+// check). Called whenever the driver has the chat open and fetched history.
+export async function markChatRead(driverId, actorId) {
+  if (USE_MOCK) return { ok: true };
+  if (!driverId) return null;
+  return apiFetch(`/chat/${driverId}/read`, {
+    method: 'POST',
     body: JSON.stringify({ actorRole: 'driver', actorId }),
   });
 }
