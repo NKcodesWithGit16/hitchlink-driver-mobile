@@ -215,6 +215,17 @@ export default function MessagesScreen() {
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated }));
   }, []);
 
+  // Auto-scroll only when a message is actually ADDED — not on every content
+  // size change. The ScrollView used to jump to the bottom on ANY layout
+  // change (onContentSizeChange), which fired every time a bubble's reveal-
+  // on-tap timestamp appeared/disappeared or a voice/document bubble's tap
+  // toggled its reveal state, yanking the view to the bottom mid-tap.
+  const prevItemCountRef = useRef(0);
+  useEffect(() => {
+    if (items.length > prevItemCountRef.current) scrollToEnd(prevItemCountRef.current > 0);
+    prevItemCountRef.current = items.length;
+  }, [items.length, scrollToEnd]);
+
   const append = useCallback((msg) => {
     setItems((prev) => [...prev, { id: `local-${Date.now()}`, from: 'driver', at: nowStr(), ...msg }]);
     scrollToEnd();
@@ -464,7 +475,6 @@ export default function MessagesScreen() {
         <ScrollView
           ref={scrollRef}
           contentContainerStyle={styles.chatContent}
-          onContentSizeChange={() => scrollToEnd(false)}
           showsVerticalScrollIndicator={false}
           style={styles.chatScroll}
         >
