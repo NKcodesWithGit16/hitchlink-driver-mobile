@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, Pressable,
-  Platform, Linking, Animated, Image, Modal, Keyboard, Dimensions, Alert, LayoutAnimation, UIManager,
+  Platform, Linking, Animated, Image, Modal, Keyboard, Dimensions, Alert,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -42,12 +42,11 @@ const EDIT_WINDOW_MIN = 15;
 const DELETE_WINDOW_MIN = 60;
 const ageMin = (ts) => (ts ? (Date.now() - new Date(ts).getTime()) / 60000 : Infinity);
 const replyPreviewOf = (m) => ({ id: m.id, from: m.from, text: m.text, kind: m.kind });
-
-// Old-architecture Android needs this opt-in for LayoutAnimation (used below
-// to smoothly expand/collapse the reveal-on-tap timestamp); no-op elsewhere.
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+// Fixed height for the reveal-on-tap timestamp row — a single line of small
+// text is always this tall, so an Animated height 0→this gives a precise,
+// guaranteed top-down expand (see Bubble's revealAnim) instead of leaving it
+// to LayoutAnimation, which doesn't let us control which edge stays put.
+const REVEALED_ROW_HEIGHT = 22;
 
 // "kind" describes an attachment message's payload type; used both for the
 // reply-quote preview and the composer's edit/reply context bar.
@@ -296,10 +295,9 @@ export default function MessagesScreen() {
   const cancelCompose = useCallback(() => { stopTypingSignal(); setEditing(null); setReplyTo(null); setText(''); }, [stopTypingSignal]);
 
   // Messenger-style: tapping a message reveals its timestamp; tapping it
-  // again (or tapping a different message) closes it. LayoutAnimation makes
-  // the row grow/shrink smoothly instead of popping.
+  // again (or tapping a different message) closes it. Each Bubble animates
+  // its own expand/collapse locally (see revealAnim) driven by this state.
   const toggleReveal = useCallback((id) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setRevealedId((prev) => (prev === id ? null : id));
   }, []);
 
@@ -700,6 +698,16 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onDou
     Animated.timing(enter, { toValue: 1, duration: 240, useNativeDriver: true }).start();
   }, []);
 
+  // Messenger-style reveal-on-tap timestamp: an Animated height/opacity this
+  // bubble owns and drives itself off the `revealed` prop — top-anchored, so
+  // it always expands downward from directly under the bubble, never from
+  // the bottom of the screen. Height can't use the native driver, but it's a
+  // single small row so the JS-thread cost is negligible.
+  const revealAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(revealAnim, { toValue: revealed ? 1 : 0, duration: 180, useNativeDriver: false }).start();
+  }, [revealed, revealAnim]);
+
   // Missed calls are a system-style event, not a directional chat bubble —
   // render as a centered card (like a date separator) instead of the usual
   // left/right gradient bubble, so it reads distinctly at a glance.
@@ -864,15 +872,21 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onDou
         </View>
       </Animated.View>
 
-      {/* Messenger-style: hidden by default, appears centered below the
-          bubble it belongs to when tapped (see handlePress above). */}
-      {revealed ? (
-        <View style={styles.revealedTimeRow}>
-          <Text style={styles.revealedTimeText}>
-            {msg.editedAt ? `${t('messages.edited')} · ` : ''}{msg.at}
-          </Text>
-        </View>
-      ) : null}
+      {/* Messenger-style: collapsed to nothing by default, expands downward
+          from directly under the bubble it belongs to when tapped (see
+          handlePress above) — always mounted so both opening AND a different
+          message's row closing animate, instead of just popping away. */}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.revealedTimeRow,
+          { height: revealAnim.interpolate({ inputRange: [0, 1], outputRange: [0, REVEALED_ROW_HEIGHT] }), opacity: revealAnim },
+        ]}
+      >
+        <Text style={styles.revealedTimeText}>
+          {msg.editedAt ? `${t('messages.edited')} · ` : ''}{msg.at}
+        </Text>
+      </Animated.View>
     </>
   );
 }
@@ -1469,9 +1483,9 @@ const makeStyles = (c) => StyleSheet.create({
   bubbleImage: { width: 200, height: 150, borderRadius: radius.md, marginBottom: 2 },
   deletedText: { ...type.body, fontStyle: 'italic' },
 
-  // Messenger-style: hidden by default, appears centered below the tapped
-  // bubble (see Bubble's `revealed` prop / handlePress).
-  revealedTimeRow: { alignItems: 'center', marginTop: 4, marginBottom: 2 },
+  // Messenger-style: collapsed to 0 height by default, animates open downward
+  // from directly under the tapped bubble (see Bubble's revealAnim).
+  revealedTimeRow: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   revealedTimeText: { fontSize: 12, fontFamily: FONT.medium, color: c.textMuted, ...type.num },
 
   // Messenger-style "seen" indicator — dispatcher's tiny avatar under the
