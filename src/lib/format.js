@@ -65,11 +65,22 @@ export function fmtDate(iso, months = DEFAULT_MONTHS) {
   return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
 
-// Days from "today" until an ISO date (negative = past).
-export function daysUntil(iso, today = new Date('2026-06-05T00:00:00')) {
+// Days from "today" until an ISO date (negative = past). `today` defaults to
+// the real current date — it is injectable ONLY so tests can pin it. It used
+// to default to a fixed demo date (2026-06-05), which silently leaked into
+// live mode: expiryStatus() below feeds the Documents screen's valid /
+// expiring / expired classification, so a real CDL or medical card that had
+// already lapsed still rendered as "Valid". Compare against midnight local so
+// a document expiring today reads as 0 days left, not a fractional negative.
+export function daysUntil(iso, today = startOfToday()) {
   const d = new Date(iso + 'T00:00:00');
   if (isNaN(d)) return null;
   return Math.round((d - today) / 86400000);
+}
+
+function startOfToday() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
 // Document validity state derived from its expiry date. Returns a labelKey
