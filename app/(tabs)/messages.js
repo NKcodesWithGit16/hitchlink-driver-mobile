@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TextInput, Pressable,
+  View, Text, StyleSheet, ScrollView, FlatList, TextInput, Pressable,
   Platform, Linking, Animated, Image, Modal, Keyboard, Dimensions, Alert,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -27,6 +27,7 @@ import {
 import { useChatSocket } from '../../src/hooks/useChatSocket';
 import { useVoiceRecorder } from '../../src/hooks/useVoiceRecorder';
 import { playMessageSound } from '../../src/lib/sound';
+import { buildChatRows, dayLabel } from '../../src/lib/chatRows';
 import { getValidToken } from '../../src/lib/session';
 import { parsePeaksString, resamplePeaks } from '../../src/lib/waveform';
 import haptics from '../../src/lib/haptics';
@@ -396,6 +397,19 @@ export default function MessagesScreen() {
     } catch {}
   }, [user?.id, replyTo, scrollToEnd, load]);
 
+  // Messages + real per-day separators, flattened into the single keyed array
+  // the virtualized list below consumes. Grouping neighbours (prevFrom/
+  // nextFrom) are resolved here rather than by index-peeking during render,
+  // because a FlatList row can't see its siblings.
+  const rows = useMemo(
+    () => buildChatRows(items, (key, date) => dayLabel(key, date, {
+      today: t('common.today'),
+      yesterday: t('common.yesterday'),
+      months: t('common.monthsShort'),
+    })),
+    [items, t],
+  );
+
   // Messenger-style "seen" indicator goes on exactly one message — the most
   // recent driver-sent message the dispatcher's read cursor has passed —
   // not on every read message, to avoid a column of avatars.
@@ -406,6 +420,34 @@ export default function MessagesScreen() {
     }
     return null;
   }, [items]);
+
+  const renderRow = useCallback(({ item: row }) => {
+    if (row.type === 'sep') {
+      return <DateSeparator label={row.label} colors={colors} styles={styles} />;
+    }
+    const m = row.msg;
+    // Optimistic bubbles have no server id yet, so none of the actions that
+    // address a message by id (react, edit, delete, long-press menu) can apply
+    // to them until the send is reconciled.
+    const isLocal = String(m.id).startsWith('local-');
+    return (
+      <Bubble
+        msg={m}
+        prevFrom={row.prevFrom}
+        nextFrom={row.nextFrom}
+        colors={colors}
+        styles={styles}
+        onAction={(anchor, mine) => !m.deleted && !isLocal && setFocus({ msg: m, anchor, mine })}
+        onReactQuick={(emoji) => !isLocal && react(m, emoji)}
+        onDoubleTap={() => !m.deleted && !isLocal && react(m, HEART_EMOJI)}
+        onOpenImage={setViewerUri}
+        onCallBack={startCall}
+        revealed={revealedId === m.id}
+        onToggleReveal={() => toggleReveal(m.id)}
+        showSeen={m.id === lastReadMineId}
+      />
+    );
+  }, [colors, styles, react, startCall, revealedId, toggleReveal, lastReadMineId]);
 
   return (
     <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
@@ -489,34 +531,30 @@ export default function MessagesScreen() {
           style={styles.threadGlow}
         />
 
-        {/* ── Chat area ── */}
-        <ScrollView
+        {/* ── Chat area ──
+            Virtualized: a long thread used to mount every bubble at once (each
+            with its own Animated values and, for voice notes, its own player),
+            which is what made opening a busy conversation stutter. Kept
+            NON-inverted so the existing ordering, grouping and scroll-to-end
+            behaviour carry over unchanged. */}
+        <FlatList
           ref={scrollRef}
+          data={rows}
+          keyExtractor={(row) => row.key}
+          renderItem={renderRow}
           contentContainerStyle={styles.chatContent}
           showsVerticalScrollIndicator={false}
           style={styles.chatScroll}
-        >
-          <DateSeparator label={t('common.today')} colors={colors} styles={styles} />
-          {items.map((m, i) => (
-            <Bubble
-              key={m.id}
-              msg={m}
-              prev={items[i - 1]}
-              next={items[i + 1]}
-              colors={colors}
-              styles={styles}
-              onAction={(anchor, mine) => !m.deleted && !String(m.id).startsWith('local-') && setFocus({ msg: m, anchor, mine })}
-              onReactQuick={(emoji) => !String(m.id).startsWith('local-') && react(m, emoji)}
-              onDoubleTap={() => !m.deleted && !String(m.id).startsWith('local-') && react(m, HEART_EMOJI)}
-              onOpenImage={setViewerUri}
-              onCallBack={startCall}
-              revealed={revealedId === m.id}
-              onToggleReveal={() => toggleReveal(m.id)}
-              showSeen={m.id === lastReadMineId}
-            />
-          ))}
-          {typing ? <TypingIndicator colors={colors} styles={styles} /> : null}
-        </ScrollView>
+          ListFooterComponent={typing ? <TypingIndicator colors={colors} styles={styles} /> : null}
+          // The thread opens at the bottom; rendering a screenful up front
+          // keeps that first paint from showing a gap above the newest message.
+          initialNumToRender={20}
+          maxToRenderPerBatch={12}
+          windowSize={11}
+          removeClippedSubviews={Platform.OS === 'android'}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="none"
+        />
 
         {/* ── Quick replies ── */}
         <View style={[styles.quickWrap, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
@@ -701,11 +739,14 @@ function BubbleVisual({ msg, mine, colors, styles, onOpenImage, onBubbleDoubleTa
   return <View style={bubbleStyle}>{body}</View>;
 }
 
-function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onDoubleTap, onOpenImage, onCallBack, revealed, onToggleReveal, showSeen }) {
+// prevFrom/nextFrom are the senders of the neighbouring messages WITHIN the
+// same day, resolved upstream by buildChatRows — a virtualized row can't reach
+// its siblings, and grouping must not span a date separator.
+function Bubble({ msg, prevFrom, nextFrom, colors, styles, onAction, onReactQuick, onDoubleTap, onOpenImage, onCallBack, revealed, onToggleReveal, showSeen }) {
   const t = useT();
   const mine = msg.from === 'driver';
-  const prevSame = prev?.from === msg.from;
-  const nextSame = next?.from === msg.from;
+  const prevSame = prevFrom === msg.from;
+  const nextSame = nextFrom === msg.from;
   const showAvatar = !mine && !nextSame;
   const hasReactions = msg.reactions?.length > 0;
 
