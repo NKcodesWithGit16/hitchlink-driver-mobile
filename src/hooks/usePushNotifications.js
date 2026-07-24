@@ -24,10 +24,17 @@ try {
 
 // Show pushes even while the app is foregrounded — a "New Load Assigned"
 // banner is useful mid-drive regardless of which screen is open.
+// shouldShowBanner/shouldShowList replaced the old shouldShowAlert in
+// expo-notifications 54+. The deprecated key is NOT mapped onto the new ones —
+// NotificationsHandler just logs a warning and forwards the object as-is, so a
+// handler that only sets shouldShowAlert leaves both new flags undefined and
+// the banner never renders. Both are required for the "New Load Assigned"
+// heads-up to actually appear while the driver has the app open.
 if (Notifications?.setNotificationHandler) {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
-      shouldShowAlert: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
       shouldPlaySound: true,
       shouldSetBadge: true,
     }),
