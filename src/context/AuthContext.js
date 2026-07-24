@@ -9,6 +9,7 @@ import { fetchDriver } from '../api/main';
 import { registerForPushNotifications, unregisterPushNotifications } from '../hooks/usePushNotifications';
 import { stopBackgroundTracking } from '../lib/backgroundLocation';
 import { onSessionExpired, refreshNow } from '../lib/session';
+import { identify } from '../lib/observability';
 import { useT } from '../i18n/LanguageContext';
 
 const AuthContext = createContext(null);
@@ -101,6 +102,11 @@ export function AuthProvider({ children }) {
     setUserEmail('');
     setDriverProfile(null);
   };
+
+  // Tag crash reports with the driver id (and only the id) so a field crash
+  // can be traced back to the shift and load it happened on. Cleared on sign
+  // out so a shared cab phone never attributes one driver's crash to another.
+  useEffect(() => { identify(userId); }, [userId]);
 
   // Terminal session expiry: the Identity service rejected our refresh token
   // (revoked, or the driver was away longer than its lifetime). Sign out and

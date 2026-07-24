@@ -1,5 +1,5 @@
 import { useEffect, Component } from 'react';
-import { View, useWindowDimensions, Text } from 'react-native';
+import { View, useWindowDimensions, Text, Pressable } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -20,22 +20,50 @@ import { WeatherToast, WeatherAlertModalGlobal } from '../src/components/ui/Weat
 import { useLocationSharing } from '../src/hooks/useLocationSharing';
 import { usePushNotificationRouting } from '../src/hooks/usePushNotifications';
 import { useVoipPushTokenSync } from '../src/hooks/useVoipPushToken';
+import { initObservability, reportError } from '../src/lib/observability';
 // Side-effect import: registers the background location task with TaskManager
 // at app entry, so it exists when the OS relaunches the app headlessly to
 // deliver location updates.
 import '../src/lib/backgroundLocation';
 
+// Start crash reporting before anything else can throw. No-ops entirely when
+// EXPO_PUBLIC_SENTRY_DSN isn't configured — see src/lib/observability.js.
+initObservability();
+
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
+// Deliberately hardcoded colors and English copy: this boundary wraps the
+// ThemeProvider and LanguageProvider, so neither useTheme() nor t() is
+// reachable from here — a themed/translated fallback would itself throw at
+// exactly the moment we're trying to recover.
 class ErrorBoundary extends Component {
   state = { error: null };
+
   static getDerivedStateFromError(e) { return { error: e }; }
+
+  componentDidCatch(error, info) {
+    // Without this the crash died on the device with the driver as the only
+    // witness. componentStack is what makes an obfuscated release trace usable.
+    reportError(error, { componentStack: info?.componentStack, boundary: 'root' });
+  }
+
   render() {
     if (this.state.error) {
       return (
         <View style={{ flex: 1, backgroundColor: '#0A0E14', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <Text style={{ color: '#FF4D4F', fontSize: 16, fontWeight: 'bold', marginBottom: 12 }}>Startup Error</Text>
-          <Text style={{ color: '#F2F6FB', fontSize: 13, textAlign: 'center' }}>{String(this.state.error)}</Text>
+          <Text style={{ color: '#FF4D4F', fontSize: 16, fontWeight: 'bold', marginBottom: 12 }}>Something went wrong</Text>
+          <Text style={{ color: '#F2F6FB', fontSize: 13, textAlign: 'center', marginBottom: 24 }}>{String(this.state.error)}</Text>
+          {/* A retry beats a dead end: most startup failures here are transient
+              (a failed native call, a bad cached response), and remounting the
+              tree is the difference between a driver working and reinstalling. */}
+          <Pressable
+            onPress={() => this.setState({ error: null })}
+            style={{ paddingHorizontal: 28, paddingVertical: 14, borderRadius: 999, borderWidth: 1.5, borderColor: '#1FB6CE' }}
+            accessibilityRole="button"
+            accessibilityLabel="Try again"
+          >
+            <Text style={{ color: '#1FB6CE', fontSize: 15, fontWeight: 'bold' }}>Try again</Text>
+          </Pressable>
         </View>
       );
     }

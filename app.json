@@ -57,7 +57,8 @@
       ],
       "expo-sharing",
       "@config-plugins/react-native-callkeep",
-      "expo-localization"
+      "expo-localization",
+      "@sentry/react-native"
     ],
     "ios": {
       "supportsTablet": true,
