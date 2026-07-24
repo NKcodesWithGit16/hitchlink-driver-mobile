@@ -597,4 +597,14 @@ export const ka = {
     findSafeStop: 'იპოვეთ უსაფრთხო გაჩერება',
     keepDrivingSafe: 'გასაგებია — იმგზავრეთ უსაფრთხოდ',
   },
+
+  // მოწყობილობაზე დაგეგმილი შეხსენებები — მუშაობს ინტერნეტის გარეშეც.
+  // იხ. src/lib/localNotifications.js
+  reminders: {
+    hosBreakTitle: 'შესვენება მოახლოვდა',
+    hosBreakBody: 'თქვენი 30-წუთიანი შესვენება დაახლოებით 20 წუთში დგება. დაიწყეთ გასაჩერებელი ადგილის ძებნა.',
+    docExpiryTitle: '{label} მალე იწურება',
+    docExpiryBodyDays: 'თქვენი {label} {days} დღეში იწურება. განაახლეთ ვადის გასვლამდე.',
+    docExpiryBodyTomorrow: 'თქვენი {label} ხვალ იწურება. ვადაგასულით მგზავრობა დარღვევაა.',
+  },
 };

@@ -8,6 +8,7 @@ import { readUserFromToken } from '../utils/jwtUtils';
 import { fetchDriver } from '../api/main';
 import { registerForPushNotifications, unregisterPushNotifications } from '../hooks/usePushNotifications';
 import { stopBackgroundTracking } from '../lib/backgroundLocation';
+import { cancelAllLocalReminders } from '../lib/localNotifications';
 import { onSessionExpired, refreshNow } from '../lib/session';
 import { identify } from '../lib/observability';
 import { useT } from '../i18n/LanguageContext';
@@ -93,6 +94,10 @@ export function AuthProvider({ children }) {
     // signed-out phone doesn't keep receiving the old driver's messages.
     await stopBackgroundTracking();
     await unregisterPushNotifications(userId);
+    // Locally-scheduled reminders live on the device, not the server, so
+    // deactivating the push token doesn't stop them — a signed-out phone would
+    // otherwise keep announcing the previous driver's break and CDL expiry.
+    await cancelAllLocalReminders();
     await clearToken();
     await clearRefreshToken();
     await AsyncStorage.multiRemove([NAME_KEY, EMAIL_KEY]);

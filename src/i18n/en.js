@@ -594,4 +594,14 @@ export const en = {
     findSafeStop: 'Find a safe truck stop',
     keepDrivingSafe: "Got it — keep driving safe",
   },
+
+  // On-device reminders scheduled from data the app already holds — these fire
+  // with no signal and no backend. See src/lib/localNotifications.js.
+  reminders: {
+    hosBreakTitle: 'Break coming up',
+    hosBreakBody: 'Your 30-minute break is due in about 20 minutes. Start looking for somewhere to park.',
+    docExpiryTitle: '{label} expires soon',
+    docExpiryBodyDays: 'Your {label} expires in {days} days. Renew it before it lapses.',
+    docExpiryBodyTomorrow: 'Your {label} expires tomorrow. Driving on an expired one is a violation.',
+  },
 };

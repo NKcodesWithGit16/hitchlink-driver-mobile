@@ -110,6 +110,11 @@ export function usePushNotificationRouting(signedIn) {
     const route = (data) => {
       if (data?.type === 'chat') router.push('/(tabs)/messages');
       else if (data?.type === 'call' && data?.callId) router.push(`/call/${data.callId}`);
+      // 'document' and 'hos' come from the locally-scheduled reminders in
+      // src/lib/localNotifications.js — tapping one should land on the screen
+      // that lets the driver actually act on it.
+      else if (data?.type === 'document') router.push('/(tabs)/documents');
+      else if (data?.type === 'hos') router.push('/(tabs)/more');
       else if (data?.type === 'LoadAssigned' || data?.type === 'LoadCancelled') router.push('/(tabs)');
     };
 

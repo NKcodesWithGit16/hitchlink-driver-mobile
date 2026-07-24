@@ -21,6 +21,7 @@ import {
   extractDocumentFields, readDocumentBase64,
 } from '../../src/api/main';
 import { expiryStatus, fmtDate, daysUntil } from '../../src/lib/format';
+import { scheduleDocumentExpiryReminders } from '../../src/lib/localNotifications';
 import { space, type, radius, toneOf, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 
@@ -74,6 +75,21 @@ export default function DocumentsScreen() {
     await loadData();
     setRefreshing(false);
   }, [loadData]);
+
+  // Expiry only ever surfaced on this screen, which a driver has no reason to
+  // open until something has already lapsed. Schedule on-device reminders at
+  // 30/7/1 days out so the phone raises it instead. Re-run on every refetch:
+  // the helper clears its previous schedule first, so renewing or deleting a
+  // document stops its reminders.
+  useEffect(() => {
+    if (!docs.length) return;
+    scheduleDocumentExpiryReminders(docs, (doc, days) => ({
+      title: t('reminders.docExpiryTitle', { label: doc.label }),
+      body: days === 1
+        ? t('reminders.docExpiryBodyTomorrow', { label: doc.label })
+        : t('reminders.docExpiryBodyDays', { label: doc.label, days }),
+    })).catch(() => {});
+  }, [docs, t]);
 
   const counts = useMemo(() => {
     const c = { valid: 0, expiring: 0, expired: 0 };
