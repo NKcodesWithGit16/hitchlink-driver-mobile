@@ -7,21 +7,18 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../../src/components/ui/Icon';
 import CountUp from '../../src/components/ui/CountUp';
 import FadeInView from '../../src/components/ui/FadeInView';
+import Skeleton from '../../src/components/ui/Skeleton';
 import { hosState } from '../../src/components/driver/HOSPill';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useT, useLanguage } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useConfirmEveryStep, setConfirmEveryStep, useDistanceUnit, setDistanceUnit } from '../../src/lib/prefs';
-import { fetchHos, fetchActiveLoad } from '../../src/api/main';
+import { fetchHos, fetchActiveLoad, fetchLoadHistory } from '../../src/api/main';
 import { hos as mockHos, earnings } from '../../src/data/mock';
-import { hm, toDistance } from '../../src/lib/format';
+import { hm, toDistance, money, distNum } from '../../src/lib/format';
+import { computeStanding } from '../../src/lib/standing';
 import { space, type, radius, elevation, toneOf, FONT, shadow, ACCENT_PRESETS, BG_PRESETS_NIGHT } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
-
-// Demo "standing" metrics — the reputation numbers a real app would pull from
-// the dispatch backend. Kept here (not in the shared fixtures) because they're
-// presentation-only for this screen.
-const STANDING = { score: 96, tierKey: 'more.eliteTier', percentile: 5, rating: 4.9, onTimePct: 98, streak: 12, acceptPct: 94 };
 
 export default function MoreScreen() {
   const insets = useSafeAreaInsets();
@@ -104,13 +101,20 @@ export default function MoreScreen() {
   ];
   const [hos,        setHos]        = useState(mockHos);
   const [activeLoad, setActiveLoad] = useState(null);
+  const [history,    setHistory]    = useState(null); // null = still loading
   const confirmEveryStep = useConfirmEveryStep();
 
   useEffect(() => {
     if (!userId) return;
     fetchHos(userId).then(d => { if (d) setHos(d); }).catch(() => {});
     fetchActiveLoad(userId).then(setActiveLoad).catch(() => {});
+    // Drives the record card below — every figure there is derived from this,
+    // so a failed fetch leaves it in its loading state rather than showing
+    // invented numbers.
+    fetchLoadHistory(userId).then(setHistory).catch(() => {});
   }, [userId]);
+
+  const standing = useMemo(() => computeStanding(history), [history]);
 
   const greeting = useMemo(() => {
     const h = new Date().getHours();
@@ -197,21 +201,22 @@ export default function MoreScreen() {
               </View>
             </View>
 
-            {/* Glass stats strip */}
+            {/* Glass stats strip — every figure here is real: two derived from
+                the driver's completed-load history, one from their earnings. */}
             <View style={styles.heroStats}>
-              <HeroStat icon="star"       value={STANDING.rating.toFixed(1)} label={t('more.rating')}    styles={styles} />
+              <HeroStat icon="package"    value={String(standing.delivered)} label={t('earnings.loadsCompleted')} styles={styles} />
               <View style={styles.heroStatDivider} />
-              <HeroStat icon="check-circle" value={`${STANDING.onTimePct}%`}   label={t('more.onTime')}   styles={styles} />
+              <HeroStat icon="zap"        value={String(standing.streak)}    label={t('more.loadStreak')}         styles={styles} />
               <View style={styles.heroStatDivider} />
               <HeroStat icon="navigation" value={`${(toDistance(earnings.week.miles, distanceUnit) / 1000).toFixed(1)}k`} label={distanceUnit === 'km' ? t('more.kmPerWeek') : t('more.miPerWeek')} styles={styles} />
             </View>
           </LinearGradient>
         </FadeInView>
 
-        {/* ── Driver standing ── */}
+        {/* ── Driver record (real history) ── */}
         <FadeInView delay={60} style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('more.yourStanding')}</Text>
-          <StandingCard colors={colors} styles={styles} t={t} />
+          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('more.yourRecord')}</Text>
+          <StandingCard standing={standing} loading={history === null} unit={distanceUnit} colors={colors} styles={styles} t={t} />
         </FadeInView>
 
         {/* ── HOS ── */}
@@ -448,50 +453,81 @@ function HeroStat({ icon, value, label, styles }) {
   );
 }
 
-/* ─────────── Standing Card ─────────── */
+/* ─────────── Record Card ─────────── */
 
-function StandingCard({ colors, styles, t }) {
-  const pct = Math.max(0, Math.min(1, STANDING.score / 100));
+// Every number here comes from the driver's real completed-load history (see
+// lib/standing.js). This deliberately shows fewer figures than the invented
+// version it replaced: on-time %, a star rating and an acceptance rate are all
+// absent because the history endpoint carries no delivery deadline, no ratings
+// and no declines — so there is no honest way to compute them client-side.
+function StandingCard({ standing, loading, unit, colors, styles, t }) {
+  if (loading) {
+    return (
+      <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, elevation[2]]}>
+        <View style={styles.recordSkeletonRow}>
+          <Skeleton width={76} height={76} radius={radius.lg} />
+          <View style={{ flex: 1, gap: 8 }}>
+            <Skeleton width="60%" height={18} />
+            <Skeleton width="85%" height={12} />
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+  // A driver with no delivered loads yet gets an honest empty state rather
+  // than a wall of confident zeros.
+  if (!standing.hasData) {
+    return (
+      <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, elevation[1]]}>
+        <View style={styles.recordEmpty}>
+          <View style={[styles.recordEmptyIcon, { backgroundColor: colors.tealFill }]}>
+            <Icon name="package" size={22} color={colors.teal} />
+          </View>
+          <Text style={[styles.tierName, { color: colors.textPrimary }]}>{t('more.recordEmptyTitle')}</Text>
+          <Text style={[styles.tierSub, { color: colors.textMuted, textAlign: 'center' }]}>
+            {t('more.recordEmptySub')}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, elevation[2]]}>
       <View style={styles.standingTop}>
-        {/* Score medallion */}
+        {/* Delivered-loads medallion — a count, not a manufactured score. */}
         <LinearGradient
           colors={colors.gradients.go}
           start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
           style={[styles.scoreBadge, shadow.glow(colors.go)]}
         >
-          <CountUp value={STANDING.score} duration={1200} style={styles.scoreValue} />
-          <Text style={styles.scoreMax}>/100</Text>
+          <CountUp value={standing.delivered} duration={1200} style={styles.scoreValue} />
+          <Text style={styles.scoreMax}>{t('more.deliveredShort')}</Text>
         </LinearGradient>
 
         <View style={{ flex: 1, gap: 6 }}>
-          <View style={styles.tierRow}>
-            <Text style={[styles.tierName, { color: colors.textPrimary }]}>{t('more.tierDriver', { tier: t(STANDING.tierKey) })}</Text>
-            <View style={[styles.tierBadge, { backgroundColor: colors.goFill, borderColor: colors.go + '55' }]}>
-              <Icon name="award" size={11} color={colors.go} />
-              <Text style={[styles.tierBadgeText, { color: colors.go }]}>{t('more.topPercentile', { pct: STANDING.percentile })}</Text>
-            </View>
-          </View>
-          <Text style={[styles.tierSub, { color: colors.textMuted }]}>
-            {t('more.standingSub')}
+          <Text style={[styles.tierName, { color: colors.textPrimary }]}>
+            {t('more.recordHeadline', { miles: distNum(standing.miles, unit), unit })}
           </Text>
-          <View style={[styles.scoreTrack, { backgroundColor: colors.surfaceHi }]}>
-            <LinearGradient
-              colors={colors.gradients.go}
-              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-              style={[styles.scoreFill, { width: `${pct * 100}%` }]}
-            />
-          </View>
+          <Text style={[styles.tierSub, { color: colors.textMuted }]}>
+            {t('more.recordSub', { earned: money(standing.earned) })}
+          </Text>
         </View>
       </View>
 
       <View style={styles.standingGrid}>
-        <StandingStat icon="check-circle" value={`${STANDING.onTimePct}%`} label={t('more.onTime')}    colors={colors} styles={styles} />
+        <StandingStat icon="check-circle" value={String(standing.delivered)} label={t('earnings.loadsCompleted')} colors={colors} styles={styles} />
         <View style={[styles.standingVDivider, { backgroundColor: colors.border }]} />
-        <StandingStat icon="zap"          value={`${STANDING.streak}`}     label={t('more.loadStreak')} colors={colors} styles={styles} />
+        <StandingStat icon="zap"          value={String(standing.streak)}    label={t('more.loadStreak')}        colors={colors} styles={styles} />
         <View style={[styles.standingVDivider, { backgroundColor: colors.border }]} />
-        <StandingStat icon="thumbs-up"    value={`${STANDING.acceptPct}%`} label={t('more.acceptance')}  colors={colors} styles={styles} />
+        <StandingStat
+          icon="navigation"
+          value={distNum(standing.miles, unit)}
+          label={unit === 'km' ? t('earnings.kilometersDriven') : t('earnings.milesDriven')}
+          colors={colors}
+          styles={styles}
+        />
       </View>
     </View>
   );
@@ -654,8 +690,14 @@ const makeStyles = (c) => StyleSheet.create({
   /* Generic card */
   card: { borderRadius: radius.xl, borderWidth: 1, padding: space[4], gap: space[4] },
 
-  /* Standing */
+  /* Record */
   standingTop: { flexDirection: 'row', alignItems: 'center', gap: space[4] },
+  recordSkeletonRow: { flexDirection: 'row', alignItems: 'center', gap: space[4] },
+  recordEmpty: { alignItems: 'center', gap: space[2], paddingVertical: space[2] },
+  recordEmptyIcon: {
+    width: 52, height: 52, borderRadius: 999,
+    alignItems: 'center', justifyContent: 'center', marginBottom: space[1],
+  },
   scoreBadge: {
     width: 76, height: 76, borderRadius: radius.lg,
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
