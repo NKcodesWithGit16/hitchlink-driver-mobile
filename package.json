@@ -10,7 +10,9 @@
     "web:direct": "expo start --web",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:ci": "jest --ci --reporters=default --maxWorkers=2"
+    "test:ci": "jest --ci --reporters=default --maxWorkers=2",
+    "check:prod-backend": "node scripts/check-prod-backend.js",
+    "eas-build-pre-install": "node scripts/check-prod-backend.js"
   },
   "dependencies": {
     "@config-plugins/react-native-callkeep": "^13.0.0",
