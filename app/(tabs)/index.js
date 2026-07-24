@@ -15,6 +15,7 @@ import WeatherStrip from '../../src/components/driver/WeatherStrip';
 import ActionGrid from '../../src/components/driver/ActionGrid';
 import StageStepper from '../../src/components/driver/StageStepper';
 import MissionStrip from '../../src/components/driver/MissionStrip';
+import LoadOfferCard from '../../src/components/driver/LoadOfferCard';
 import PrimaryAction from '../../src/components/ui/PrimaryAction';
 import SectionLabel from '../../src/components/ui/SectionLabel';
 import Card from '../../src/components/ui/Card';
@@ -36,7 +37,7 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useAlert } from '../../src/context/AlertContext';
-import { fetchActiveLoad, updateLoadStatus, undoLoadStatus, sendPhotoMessage, uploadLoadPhoto } from '../../src/api/main';
+import { fetchActiveLoad, updateLoadStatus, undoLoadStatus, sendPhotoMessage, uploadLoadPhoto, acceptLoad, declineLoad } from '../../src/api/main';
 import { useLoadStatusSocket } from '../../src/hooks/useLoadStatusSocket';
 import { useConfirmEveryStep, useDistanceUnit } from '../../src/lib/prefs';
 import { hos, weatherNow } from '../../src/data/mock';
@@ -253,6 +254,50 @@ export default function LoadScreen() {
     runAction(action);
   };
 
+  // ── Load offer: accept / decline ──────────────────────────────────────
+  // Only meaningful while the load is Assigned and unaccepted; the backend
+  // rejects both calls in any other state, so the UI mirrors that gate rather
+  // than offering a button that will 400.
+  const needsAcceptance = status === 'Assigned' && !load?.acceptedAt;
+
+  const handleAccept = async () => {
+    if (!load?.id || busy) return;
+    haptics.success();
+    setBusy(true);
+    try {
+      await acceptLoad(load.id, user?.id);
+      // Re-read rather than patching locally: accept stamps AcceptedAt server
+      // side, and that field is what dismisses this card.
+      await loadData();
+    } catch (e) {
+      haptics.error();
+      // A 4xx means the offer is no longer live (reassigned, cancelled, or
+      // already accepted elsewhere) — resync so the screen tells the truth.
+      if (e?.status >= 400 && e?.status < 500) await loadData();
+      Alert.alert(t('load.acceptFailTitle'), t('load.acceptFailBody'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDecline = async (reason) => {
+    if (!load?.id || busy) return;
+    setBusy(true);
+    try {
+      await declineLoad(load.id, user?.id, reason);
+      haptics.success();
+      // The load leaves this driver entirely — refetch drops us to the "no
+      // active load" state instead of leaving a stale card on screen.
+      await loadData();
+    } catch (e) {
+      haptics.error();
+      if (e?.status >= 400 && e?.status < 500) await loadData();
+      Alert.alert(t('load.declineFailTitle'), t('load.declineFailBody'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleUndo = async () => {
     if (!undo) return;
     haptics.tap();
@@ -370,11 +415,26 @@ export default function LoadScreen() {
               <MissionStrip load={load} />
             </FadeInView>
 
+            {/* ── OFFER: accept before anything else ──
+                An unaccepted assignment replaces the usual contextual action —
+                the driver shouldn't be able to mark "arrived at pickup" on a
+                load they never agreed to run. ── */}
+            {needsAcceptance ? (
+              <FadeInView delay={40}>
+                <LoadOfferCard
+                  load={load}
+                  busy={busy}
+                  onAccept={handleAccept}
+                  onDecline={handleDecline}
+                />
+              </FadeInView>
+            ) : null}
+
             {/* ── JOURNEY + ACTION: progress → what to do right now ── */}
             <FadeInView delay={50}>
               <Card style={styles.journeyCard} elevated>
                 <StageStepper status={status} />
-                {action ? (
+                {action && !needsAcceptance ? (
                   <>
                     <View style={[styles.journeyDivider, { backgroundColor: colors.border }]} />
                     <PrimaryAction
