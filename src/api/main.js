@@ -161,10 +161,15 @@ export async function declineLoad(loadId, driverId, reason) {
   return apiFetch(`/loads/${loadId}/decline`, { method: 'POST', body: JSON.stringify({ driverId, reason: reason ?? null }) });
 }
 
-export async function fetchMessages(driverId) {
+// `limit` is sent explicitly rather than relying on the server's default (100).
+// GET /chat/{driverId} takes the NEWEST `limit` rows and has no cursor/`before`
+// parameter, so this is a window on the tail of the thread, not a page: there
+// is currently no way to reach anything older than the newest `limit` messages.
+// Loading further back needs a cursor added to ChatController.GetHistory.
+export async function fetchMessages(driverId, { limit = 100 } = {}) {
   if (USE_MOCK) { await wait(); return mock.messages; }
   if (!driverId) return [];
-  const params = new URLSearchParams({ as_: 'driver', actorId: String(driverId) });
+  const params = new URLSearchParams({ as_: 'driver', actorId: String(driverId), limit: String(limit) });
   const data = await apiFetch(`/chat/${driverId}?${params}`, { allow404: true });
   return Array.isArray(data) ? data.map(normalizeMessage) : [];
 }

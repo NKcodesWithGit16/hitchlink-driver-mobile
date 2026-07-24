@@ -139,6 +139,16 @@ export default function MessagesScreen() {
   // dispatcher info comes from the driver profile loaded in AuthContext
   const dispatcher = user?.dispatcher;
 
+  // Cheap fingerprint of a server payload — everything that would actually
+  // change what's on screen. The poll runs every 5s while the socket is down
+  // and returns up to 100 unchanged messages the overwhelming majority of the
+  // time; comparing this lets an unchanged poll skip setItems entirely instead
+  // of re-rendering the whole thread on a timer.
+  const signatureOf = (list) => list
+    .map((m) => `${m.id}|${m.editedAt ?? ''}|${m.read ? 1 : 0}|${m.deleted ? 1 : 0}|${(m.reactions || []).map((r) => `${r.emoji}${r.count}${r.mine ? 'm' : ''}`).join(',')}`)
+    .join(';');
+  const lastSigRef = useRef(null);
+
   // Pull chat history and reconcile with any optimistic messages we appended
   // locally but the server hasn't echoed back yet (so they don't flicker away).
   const load = useCallback(async () => {
@@ -154,6 +164,7 @@ export default function MessagesScreen() {
       }
       server.forEach((m) => seenIdsRef.current.add(m.id));
       firstLoadRef.current = false;
+
       setItems((prev) => {
         const serverDriverTexts = new Set(
           server.filter((m) => m.from === 'driver' && m.text).map((m) => m.text)
@@ -161,6 +172,15 @@ export default function MessagesScreen() {
         const stillPending = prev.filter(
           (m) => String(m.id).startsWith('local-') && !(m.text && serverDriverTexts.has(m.text))
         );
+        // Nothing changed server-side and no optimistic bubble needs
+        // reconciling — return the identical array so React bails out of the
+        // re-render instead of rebuilding every bubble on a 5s timer.
+        const sig = signatureOf(server);
+        if (sig === lastSigRef.current && stillPending.length === 0
+            && prev.length === server.length) {
+          return prev;
+        }
+        lastSigRef.current = sig;
         return [...server, ...stillPending];
       });
       // The driver has this screen open and just fetched history — advance
