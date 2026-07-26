@@ -3,7 +3,7 @@
     "name": "HitchLink Driver",
     "slug": "hitchlink-driver",
     "scheme": "hitchlinkdriver",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -14,7 +14,7 @@
       "fallbackToCacheTimeout": 0
     },
     "runtimeVersion": {
-      "policy": "fingerprint"
+      "policy": "appVersion"
     },
     "plugins": [
       "expo-router",
