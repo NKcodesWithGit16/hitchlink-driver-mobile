@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Modal, View, Text, Pressable, StyleSheet } from 'react-native';
+import { Modal, View, Text, Pressable, StyleSheet, Image } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../ui/Icon';
@@ -35,8 +35,13 @@ export default function CallOverlay() {
   const t = useT();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  const { status, peerName, error, muted, startedAt, acceptCall, declineCall, hangUp, toggleMute } = useCall();
+  const { status, peerName, peerPhotoUrl, error, muted, startedAt, acceptCall, declineCall, hangUp, toggleMute } = useCall();
   const duration = useElapsed(status === 'active' ? startedAt : null);
+
+  // Presigned URLs expire; a failed load falls back to initials rather than an
+  // empty circle. Reset per URL so the next call re-tries a freshly signed one.
+  const [photoFailed, setPhotoFailed] = useState(false);
+  useEffect(() => { setPhotoFailed(false); }, [peerPhotoUrl]);
 
   // 'ended' briefly shows why the call didn't connect (CallContext auto-reverts
   // to idle a couple seconds later) — without this it silently vanished, which
@@ -56,7 +61,14 @@ export default function CallOverlay() {
           <View style={[styles.avatar, ringingIn && styles.avatarPulse, ended && { borderColor: colors.danger }]}>
             {ended
               ? <Icon family="material-community" name="phone-hangup" size={34} color={colors.danger} />
-              : <Text style={styles.avatarText}>{initials(peerName)}</Text>}
+              : peerPhotoUrl && !photoFailed
+                ? <Image
+                    source={{ uri: peerPhotoUrl }}
+                    style={styles.avatarPhoto}
+                    onError={() => setPhotoFailed(true)}
+                    accessibilityIgnoresInvertColors
+                  />
+                : <Text style={styles.avatarText}>{initials(peerName)}</Text>}
           </View>
           <Text style={styles.peerName}>{peerName || t('messages.dispatcherFallback')}</Text>
           <Text style={[styles.statusLine, ended && { color: colors.danger }]}>
@@ -118,8 +130,12 @@ const makeStyles = (c) => StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: c.surface2, borderWidth: 1.5, borderColor: c.border,
     marginBottom: space[4],
+    // Clips the photo to the circle while the border and the ringing-in pulse
+    // ring stay on this container.
+    overflow: 'hidden',
   },
   avatarPulse: { borderColor: c.go, borderWidth: 2 },
+  avatarPhoto: { width: '100%', height: '100%' },
   avatarText: { fontSize: 36, fontFamily: FONT.black, color: c.textPrimary },
   peerName: { ...type.h2, color: c.textPrimary, textAlign: 'center' },
   statusLine: { ...type.body, color: c.textMuted },

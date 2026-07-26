@@ -63,6 +63,11 @@ const initialState = {
   status: 'idle', // idle | ringing-out | ringing-in | active | ended
   callId: null,
   peerName: null,
+  // Presigned photo of whoever is on the other end. Incoming calls get it from
+  // the server payload (`callerPhotoUrl`); outgoing ones fall back to the
+  // dispatcher card on the driver profile, since that's always who we're
+  // calling. Null just means the ring screen shows initials.
+  peerPhotoUrl: null,
   roomUrl: null,
   token: null,
   muted: false,
@@ -77,6 +82,12 @@ export function CallProvider({ children }) {
   const callObjectRef = useRef(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+  // The CallKit effect below registers its RNCallKeep listeners once (deps are
+  // just [joinDailyRoom, reset]) so a re-render never churns them mid-call.
+  // That means it closes over the first render's `user`, when driverProfile is
+  // still loading — read the dispatcher through this mirror instead.
+  const dispatcherRef = useRef(null);
+  dispatcherRef.current = user?.dispatcher || null;
   const acceptInFlightRef = useRef(false);
 
   // The set of serverCallIds CallKit has already reported (via a VoIP push) —
@@ -156,7 +167,12 @@ export function CallProvider({ children }) {
   const startCall = useCallback(async () => {
     if (!user?.id || stateRef.current.status !== 'idle') return;
     pendingResolutionRef.current = null;
-    setState({ ...initialState, status: 'ringing-out', peerName: user?.dispatcher?.name || 'Dispatcher' });
+    setState({
+      ...initialState,
+      status: 'ringing-out',
+      peerName: user?.dispatcher?.name || 'Dispatcher',
+      peerPhotoUrl: user?.dispatcher?.photoUrl || null,
+    });
     try {
       const res = await apiStartCall(user.id);
       const pending = pendingResolutionRef.current;
@@ -201,6 +217,7 @@ export function CallProvider({ children }) {
       status: 'ringing-in',
       callId: p.callId,
       peerName: p.callerName || 'Dispatcher',
+      peerPhotoUrl: p.callerPhotoUrl || null,
       roomUrl: p.roomUrl,
       token: p.token,
     });
@@ -246,6 +263,7 @@ export function CallProvider({ children }) {
         status: 'ringing-in',
         callId: res.callId,
         peerName: user?.dispatcher?.name || 'Dispatcher',
+        peerPhotoUrl: user?.dispatcher?.photoUrl || null,
         roomUrl: res.roomUrl,
         token: res.token,
       });
@@ -436,6 +454,11 @@ export function CallProvider({ children }) {
         status: 'ringing-in',
         callId: meta.serverCallId,
         peerName: meta.callerName,
+        // The VoIP push payload is kept minimal and carries no photo, so fall
+        // back to the dispatcher card — a CallKit incoming call is always from
+        // them anyway. Via the ref, not `user`, to dodge this effect's stale
+        // closure (see dispatcherRef).
+        peerPhotoUrl: meta.callerPhotoUrl || dispatcherRef.current?.photoUrl || null,
         roomUrl: meta.roomUrl,
         token: meta.token,
       });

@@ -12,6 +12,7 @@ import { useRouter } from 'expo-router';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../../src/components/ui/Icon';
+import PeerAvatar from '../../src/components/ui/PeerAvatar';
 import RecordingBar from '../../src/components/driver/RecordingBar';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
@@ -445,9 +446,10 @@ export default function MessagesScreen() {
         revealed={revealedId === m.id}
         onToggleReveal={() => toggleReveal(m.id)}
         showSeen={m.id === lastReadMineId}
+        dispatcher={dispatcher}
       />
     );
-  }, [colors, styles, react, startCall, revealedId, toggleReveal, lastReadMineId]);
+  }, [colors, styles, react, startCall, revealedId, toggleReveal, lastReadMineId, dispatcher]);
 
   return (
     <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
@@ -455,11 +457,7 @@ export default function MessagesScreen() {
       {/* ── Header ── */}
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
         <View style={styles.peerInfo}>
-          <LinearGradient colors={colors.gradients.teal} style={styles.avatar}>
-            <Text style={styles.avatarInitials}>
-              {(dispatcher?.name || 'D').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
-            </Text>
-          </LinearGradient>
+          <PeerAvatar photoUrl={dispatcher?.photoUrl} name={dispatcher?.name} size={48} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.peerName, { color: colors.textPrimary }]} numberOfLines={1}>
               {dispatcher?.name || t('messages.dispatcherFallback')}
@@ -545,7 +543,7 @@ export default function MessagesScreen() {
           contentContainerStyle={styles.chatContent}
           showsVerticalScrollIndicator={false}
           style={styles.chatScroll}
-          ListFooterComponent={typing ? <TypingIndicator colors={colors} styles={styles} /> : null}
+          ListFooterComponent={typing ? <TypingIndicator colors={colors} styles={styles} dispatcher={dispatcher} /> : null}
           // The thread opens at the bottom; rendering a screenful up front
           // keeps that first paint from showing a gap above the newest message.
           initialNumToRender={20}
@@ -742,7 +740,7 @@ function BubbleVisual({ msg, mine, colors, styles, onOpenImage, onBubbleDoubleTa
 // prevFrom/nextFrom are the senders of the neighbouring messages WITHIN the
 // same day, resolved upstream by buildChatRows — a virtualized row can't reach
 // its siblings, and grouping must not span a date separator.
-function Bubble({ msg, prevFrom, nextFrom, colors, styles, onAction, onReactQuick, onDoubleTap, onOpenImage, onCallBack, revealed, onToggleReveal, showSeen }) {
+function Bubble({ msg, prevFrom, nextFrom, colors, styles, onAction, onReactQuick, onDoubleTap, onOpenImage, onCallBack, revealed, onToggleReveal, showSeen, dispatcher }) {
   const t = useT();
   const mine = msg.from === 'driver';
   const prevSame = prevFrom === msg.from;
@@ -856,9 +854,7 @@ function Bubble({ msg, prevFrom, nextFrom, colors, styles, onAction, onReactQuic
         {/* Dispatcher avatar — shown only on last bubble in group */}
         {!mine ? (
           showAvatar ? (
-            <LinearGradient colors={colors.gradients.teal} style={styles.dispAvatar}>
-              <Text style={styles.dispAvatarText}>D</Text>
-            </LinearGradient>
+            <PeerAvatar photoUrl={dispatcher?.photoUrl} name={dispatcher?.name} size={34} />
           ) : (
             <View style={{ width: 34 }} />
           )
@@ -925,9 +921,7 @@ function Bubble({ msg, prevFrom, nextFrom, colors, styles, onAction, onReactQuic
               instead of WhatsApp-style checkmarks on every sent message. */}
           {showSeen ? (
             <View style={styles.seenRow}>
-              <LinearGradient colors={colors.gradients.teal} style={styles.seenAvatar}>
-                <Text style={styles.seenAvatarText}>D</Text>
-              </LinearGradient>
+              <PeerAvatar photoUrl={dispatcher?.photoUrl} name={dispatcher?.name} size={16} />
             </View>
           ) : null}
         </View>
@@ -1236,7 +1230,7 @@ function ImageViewer({ uri, colors, styles, onClose }) {
   );
 }
 
-function TypingIndicator({ colors, styles }) {
+function TypingIndicator({ colors, styles, dispatcher }) {
   const dots = [useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current];
 
   useEffect(() => {
@@ -1256,9 +1250,7 @@ function TypingIndicator({ colors, styles }) {
 
   return (
     <View style={[styles.bubbleRow, styles.rowTheirs, { marginTop: 10 }]}>
-      <LinearGradient colors={colors.gradients.teal} style={styles.dispAvatar}>
-        <Text style={styles.dispAvatarText}>D</Text>
-      </LinearGradient>
+      <PeerAvatar photoUrl={dispatcher?.photoUrl} name={dispatcher?.name} size={34} />
       <View style={[styles.typingBubble, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         {dots.map((d, i) => (
           <Animated.View
@@ -1494,8 +1486,6 @@ const makeStyles = (c) => StyleSheet.create({
     backgroundColor: c.surface, zIndex: 10, borderBottomWidth: 1,
   },
   peerInfo: { flexDirection: 'row', alignItems: 'center', gap: space[3], flex: 1, minWidth: 0 },
-  avatar: { width: 48, height: 48, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  avatarInitials: { fontSize: 16, fontFamily: FONT.black, color: c.onAccent },
   peerName: { ...type.bodyStrong, fontSize: 16 },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 },
   statusDot: { width: 7, height: 7, borderRadius: 999 },
@@ -1530,9 +1520,6 @@ const makeStyles = (c) => StyleSheet.create({
   rowMine: { justifyContent: 'flex-end' },
   rowTheirs: { justifyContent: 'flex-start' },
 
-  dispAvatar: { width: 34, height: 34, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  dispAvatarText: { fontSize: 12, fontFamily: FONT.black, color: c.onAccent },
-
   // Messenger-style: one uniform pill radius for every bubble — grouping
   // reads from spacing + avatar placement only, never a cut tail corner.
   bubble: { borderRadius: radius.xl, paddingHorizontal: space[4], paddingVertical: space[3], gap: 4, borderWidth: 0 },
@@ -1552,8 +1539,6 @@ const makeStyles = (c) => StyleSheet.create({
   // Messenger-style "seen" indicator — dispatcher's tiny avatar under the
   // last driver-sent message they've read, instead of per-message checkmarks.
   seenRow: { marginTop: 3, alignItems: 'flex-end' },
-  seenAvatar: { width: 16, height: 16, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
-  seenAvatarText: { fontSize: 8, fontFamily: FONT.black, color: c.onAccent },
 
   /* Document / video attachment cards */
   docCard: { flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 200, maxWidth: 240, paddingVertical: 2 },
