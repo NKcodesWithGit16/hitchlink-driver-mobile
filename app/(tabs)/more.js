@@ -13,8 +13,8 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useT, useLanguage } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useConfirmEveryStep, setConfirmEveryStep, useDistanceUnit, setDistanceUnit } from '../../src/lib/prefs';
-import { fetchHos, fetchActiveLoad, fetchLoadHistory } from '../../src/api/main';
-import { hos as mockHos, earnings } from '../../src/data/mock';
+import { fetchHos, fetchActiveLoad, fetchEarnings, fetchLoadHistory } from '../../src/api/main';
+import { hos as mockHos, earnings as mockEarnings } from '../../src/data/mock';
 import { hm, toDistance, money, distNum } from '../../src/lib/format';
 import { computeStanding } from '../../src/lib/standing';
 import { space, type, radius, elevation, toneOf, FONT, shadow, ACCENT_PRESETS, BG_PRESETS_NIGHT } from '../../src/theme/tokens';
@@ -100,6 +100,7 @@ export default function MoreScreen() {
     },
   ];
   const [hos,        setHos]        = useState(mockHos);
+  const [earnings,   setEarnings]   = useState(mockEarnings);
   const [activeLoad, setActiveLoad] = useState(null);
   const [history,    setHistory]    = useState(null); // null = still loading
   const confirmEveryStep = useConfirmEveryStep();
@@ -107,8 +108,9 @@ export default function MoreScreen() {
   useEffect(() => {
     if (!userId) return;
     fetchHos(userId).then(d => { if (d) setHos(d); }).catch(() => {});
+    fetchEarnings(userId).then(d => { if (d) setEarnings(d); }).catch(() => {});
     fetchActiveLoad(userId).then(setActiveLoad).catch(() => {});
-    // Drives the record card below — every figure there is derived from this,
+    // Drives the standing card below — every figure there is derived from this,
     // so a failed fetch leaves it in its loading state rather than showing
     // invented numbers.
     fetchLoadHistory(userId).then(setHistory).catch(() => {});
@@ -692,29 +694,20 @@ const makeStyles = (c) => StyleSheet.create({
 
   /* Record */
   standingTop: { flexDirection: 'row', alignItems: 'center', gap: space[4] },
-  recordSkeletonRow: { flexDirection: 'row', alignItems: 'center', gap: space[4] },
-  recordEmpty: { alignItems: 'center', gap: space[2], paddingVertical: space[2] },
-  recordEmptyIcon: {
-    width: 52, height: 52, borderRadius: 999,
-    alignItems: 'center', justifyContent: 'center', marginBottom: space[1],
-  },
   scoreBadge: {
     width: 76, height: 76, borderRadius: radius.lg,
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
   scoreValue: { fontSize: 30, fontFamily: FONT.black, color: '#06121A', letterSpacing: -1, ...type.num },
   scoreMax: { fontSize: 10, fontFamily: FONT.bold, color: 'rgba(6,18,26,0.6)', marginTop: -2 },
-  tierRow: { flexDirection: 'row', alignItems: 'center', gap: space[2], flexWrap: 'wrap' },
   tierName: { fontSize: 18, fontFamily: FONT.black, letterSpacing: -0.3 },
-  tierBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 8, paddingVertical: 3,
-    borderRadius: radius.pill, borderWidth: 1,
+  tierSub: { fontSize: 12, fontFamily: FONT.medium, lineHeight: 18 },
+  recordSkeletonRow: { flexDirection: 'row', alignItems: 'center', gap: space[4] },
+  recordEmpty: { alignItems: 'center', gap: space[2], paddingVertical: space[2] },
+  recordEmptyIcon: {
+    width: 52, height: 52, borderRadius: 999,
+    alignItems: 'center', justifyContent: 'center', marginBottom: space[1],
   },
-  tierBadgeText: { fontSize: 11, fontFamily: FONT.bold },
-  tierSub: { fontSize: 12, fontFamily: FONT.medium },
-  scoreTrack: { height: 8, borderRadius: 999, overflow: 'hidden', marginTop: 2 },
-  scoreFill: { height: '100%', borderRadius: 999 },
   standingGrid: { flexDirection: 'row', alignItems: 'center' },
   standingStat: { flex: 1, alignItems: 'center', gap: 4 },
   standingStatValue: { fontSize: 20, fontFamily: FONT.black, letterSpacing: -0.3, ...type.num },

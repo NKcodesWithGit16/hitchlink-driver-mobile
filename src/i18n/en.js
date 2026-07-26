@@ -127,6 +127,7 @@ export const en = {
     nearEtaAhead: 'Near {place} · ~{mins} min ahead',
     conditionAhead: '{condition} · {temp}°F ahead',
     weatherClearAhead: 'Weather looks clear ahead',
+    weatherAlertA11y: 'Weather alert ahead — tap for details',
     navigate: 'Navigate',
     call: 'Call',
     action: {

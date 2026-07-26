@@ -130,6 +130,7 @@ export const ka = {
     nearEtaAhead: '{place}-სთან ახლოს · ~{mins} წთ დარჩა',
     conditionAhead: '{condition} · {temp}°F წინ',
     weatherClearAhead: 'წინ ამინდი კარგია',
+    weatherAlertA11y: 'ამინდის გაფრთხილება წინ — გახსნა დეტალებისთვის',
     navigate: 'ნავიგაცია',
     call: 'დარეკვა',
     action: {

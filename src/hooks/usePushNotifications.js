@@ -98,7 +98,8 @@ export async function unregisterPushNotifications(driverId) {
  * Mount once (root layout). Handles notification taps — including the tap
  * that cold-started the app — and clears the badge when the app opens.
  * Data shapes come from the backend: { type: "LoadAssigned"|"LoadCancelled",
- * loadId }, { type: "chat", driverId }, and { type: "call", callId }.
+ * loadId }, { type: "chat", driverId }, { type: "call", callId }, and
+ * { type: "weather", loadId } (see HeartbeatCommandHandler.CheckRouteWeatherAsync).
  */
 export function usePushNotificationRouting(signedIn) {
   const router = useRouter();
@@ -115,7 +116,7 @@ export function usePushNotificationRouting(signedIn) {
       // that lets the driver actually act on it.
       else if (data?.type === 'document') router.push('/(tabs)/documents');
       else if (data?.type === 'hos') router.push('/(tabs)/more');
-      else if (data?.type === 'LoadAssigned' || data?.type === 'LoadCancelled') router.push('/(tabs)');
+      else if (data?.type === 'LoadAssigned' || data?.type === 'LoadCancelled' || data?.type === 'weather') router.push('/(tabs)');
     };
 
     // Tap while the app is running (foreground or backgrounded).

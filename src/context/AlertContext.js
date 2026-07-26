@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { weatherAlert } from '../data/mock';
 import { USE_MOCK } from '../api/config';
 import { useAuth } from './AuthContext';
+import { useWeather } from './WeatherContext';
 import {
   fetchNotifications, markNotificationRead, dismissNotification,
 } from '../api/main';
@@ -18,6 +19,7 @@ const AlertContext = createContext(null);
 //     and dismiss state, reached from the home bell.
 export function AlertProvider({ children }) {
   const { userId, signedIn } = useAuth();
+  const { weatherAlert: liveWeatherAlert } = useWeather();
 
   // ── Weather takeover (demo-only) ──
   const [activeAlert, setActiveAlert] = useState(null);
@@ -63,6 +65,25 @@ export function AlertProvider({ children }) {
     return () => clearTimeout(t);
   }, []);
 
+  // Live: surface a real weather alert the moment a heartbeat response
+  // carries one. Keeps activeAlert's displayed data fresh on every recheck
+  // (etaMinutes counts down as the truck gets closer), but only pops the
+  // toast when it's actually a new/changed alert — the server itself may
+  // re-report the same still-active alert every ~15 min, and re-popping the
+  // takeover that often for an unchanged warning would be more annoying than
+  // useful. Clearing back to null (alert resolved) resets the tracker, so a
+  // later alert — even one with the same title/area — pops again as new.
+  const lastLiveAlertKeyRef = useRef(null);
+  useEffect(() => {
+    if (USE_MOCK) return;
+    if (!liveWeatherAlert) { lastLiveAlertKeyRef.current = null; return; }
+    const key = `${liveWeatherAlert.title}|${liveWeatherAlert.near}`;
+    const isNew = key !== lastLiveAlertKeyRef.current;
+    lastLiveAlertKeyRef.current = key;
+    setActiveAlert(liveWeatherAlert);
+    if (isNew) setToastVisible(true);
+  }, [liveWeatherAlert]);
+
   // Read state is idempotent on the backend, so commit it immediately (optimistic).
   const markRead = useCallback((id) => {
     setItems((xs) => xs.map((n) => (n.id === id ? { ...n, read: true } : n)));
@@ -104,12 +125,15 @@ export function AlertProvider({ children }) {
 
   const dismissToast = useCallback(() => setToastVisible(false), []);
 
-  // Opening the takeover also marks the weather row read (mock-only id).
+  // Opening the takeover also marks the weather row read — 'n-weather' is a
+  // synthetic id that only exists in the mock inbox fixture. A live alert
+  // isn't (yet) mirrored into the notifications inbox by a client-known id,
+  // so there's nothing to mark read there.
   const openModal = useCallback(() => {
-    setActiveAlert((a) => a || weatherAlert);
+    setActiveAlert((a) => a || (USE_MOCK ? weatherAlert : null));
     setToastVisible(false);
     setModalVisible(true);
-    markRead('n-weather');
+    if (USE_MOCK) markRead('n-weather');
   }, [markRead]);
 
   const closeModal = useCallback(() => setModalVisible(false), []);

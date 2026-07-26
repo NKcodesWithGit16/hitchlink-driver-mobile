@@ -37,12 +37,15 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useAlert } from '../../src/context/AlertContext';
-import { fetchActiveLoad, updateLoadStatus, undoLoadStatus, sendPhotoMessage, uploadLoadPhoto, acceptLoad, declineLoad } from '../../src/api/main';
+import { useWeather } from '../../src/context/WeatherContext';
+import { fetchActiveLoad, fetchHos, updateLoadStatus, undoLoadStatus, sendPhotoMessage, uploadLoadPhoto, acceptLoad, declineLoad } from '../../src/api/main';
 import { useLoadStatusSocket } from '../../src/hooks/useLoadStatusSocket';
 import { useConfirmEveryStep, useDistanceUnit } from '../../src/lib/prefs';
-import { hos, weatherNow } from '../../src/data/mock';
+import { USE_MOCK } from '../../src/api/config';
+import { hos as mockHos, weatherNow as mockWeatherNow } from '../../src/data/mock';
 import { nextAction, statusChip, nextStop, isPrePickup } from '../../src/lib/load';
 import { setActiveLoad, finalizeActiveLoad, computeLoadStats } from '../../src/lib/odometer';
+import { scheduleHosBreakReminder } from '../../src/lib/localNotifications';
 import { money, num, distNum, distRpm } from '../../src/lib/format';
 import { space, type, radius, FONT, shadow, toneOf, tap } from '../../src/theme/tokens';
 import { photos } from '../../src/theme/photos';
@@ -54,6 +57,7 @@ export default function LoadScreen() {
   const t = useT();
   const { user } = useAuth();
   const { unreadCount, activeAlert, openModal: openAlert } = useAlert();
+  const { weatherNow: liveWeatherNow } = useWeather();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const online = useNetworkStatus();
   const confirmEveryStep = useConfirmEveryStep();
@@ -71,6 +75,28 @@ export default function LoadScreen() {
   const [error, setError] = useState(false);
   const [undo, setUndo] = useState(null); // { prevStatus, message }
   const [deliveredStats, setDeliveredStats] = useState(null); // frozen actual miles/rpm
+  const [hos, setHos] = useState(mockHos);
+
+  // Real HOS clocks for the status-bar pill — was previously always the mock
+  // fixture here even in live mode (the More tab already fetched this
+  // correctly; this screen just never did). Falls back to the mock/last-known
+  // value on a failed fetch rather than showing nothing.
+  useEffect(() => {
+    if (!user?.id) return;
+    fetchHos(user.id).then((d) => { if (d) setHos(d); }).catch(() => {});
+  }, [user?.id]);
+
+  // Turn the break clock into an actual reminder. Until now breakInMinutes was
+  // rendered on the More tab and nowhere else, so a driver only found out a
+  // break was due if they happened to open that screen. Re-scheduled on every
+  // HOS change; the helper cancels the previous one so these never stack.
+  useEffect(() => {
+    if (!user?.id || hos?.breakInMinutes == null) return;
+    scheduleHosBreakReminder(hos, {
+      title: t('reminders.hosBreakTitle'),
+      body: t('reminders.hosBreakBody'),
+    }).catch(() => {});
+  }, [user?.id, hos?.breakInMinutes, t]);
 
   // Point the actual-miles odometer at the running load so it accrues GPS
   // distance to the right bucket (deadhead vs loaded) as the status advances.
@@ -391,7 +417,14 @@ export default function LoadScreen() {
   return (
     <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
       <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
-      <StatusBar chip={chip} driveMinutesLeft={hos.driveMinutesLeft} online={online} onHosPress={() => router.push('/(tabs)/more')} />
+      <StatusBar
+        chip={chip}
+        driveMinutesLeft={hos.driveMinutesLeft}
+        online={online}
+        onHosPress={() => router.push('/(tabs)/more')}
+        weatherAlert={activeAlert}
+        onWeatherAlertPress={openAlert}
+      />
       {!online ? <OfflineBanner pending={pending} /> : null}
 
       <ScrollView
@@ -415,12 +448,21 @@ export default function LoadScreen() {
               <MissionStrip load={load} />
             </FadeInView>
 
+            {/* ── WEATHER AHEAD: calm when clear, loud when dangerous.
+                Placed right up top, before the action card, so it doesn't
+                need a scroll to notice — the header badge above also flags
+                an active alert persistently, but this is where the full
+                detail (conditions / near / eta) lives. ── */}
+            <FadeInView delay={50}>
+              <WeatherStrip now={USE_MOCK ? mockWeatherNow : liveWeatherNow} alert={activeAlert} onPress={openAlert} />
+            </FadeInView>
+
             {/* ── OFFER: accept before anything else ──
                 An unaccepted assignment replaces the usual contextual action —
                 the driver shouldn't be able to mark "arrived at pickup" on a
                 load they never agreed to run. ── */}
             {needsAcceptance ? (
-              <FadeInView delay={40}>
+              <FadeInView delay={100}>
                 <LoadOfferCard
                   load={load}
                   busy={busy}
@@ -431,7 +473,7 @@ export default function LoadScreen() {
             ) : null}
 
             {/* ── JOURNEY + ACTION: progress → what to do right now ── */}
-            <FadeInView delay={50}>
+            <FadeInView delay={needsAcceptance ? 150 : 100}>
               <Card style={styles.journeyCard} elevated>
                 <StageStepper status={status} />
                 {action && !needsAcceptance ? (
@@ -450,13 +492,8 @@ export default function LoadScreen() {
             </FadeInView>
 
             {/* ── CURRENT STOP ── */}
-            <FadeInView delay={100}>
-              <NextStopCard stop={stop} />
-            </FadeInView>
-
-            {/* ── WEATHER AHEAD: calm when clear, loud when dangerous ── */}
             <FadeInView delay={150}>
-              <WeatherStrip now={weatherNow} alert={activeAlert} onPress={openAlert} />
+              <NextStopCard stop={stop} />
             </FadeInView>
           </>
         )}

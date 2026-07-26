@@ -13,6 +13,7 @@ import {
 import { ThemeProvider, useTheme } from '../src/theme/ThemeContext';
 import { LanguageProvider } from '../src/i18n/LanguageContext';
 import { AuthProvider, useAuth } from '../src/context/AuthContext';
+import { WeatherProvider } from '../src/context/WeatherContext';
 import { AlertProvider } from '../src/context/AlertContext';
 import { CallProvider } from '../src/context/CallContext';
 import CallOverlay from '../src/components/call/CallOverlay';
@@ -164,11 +165,13 @@ export default function RootLayout() {
             {/* AlertProvider sits inside AuthProvider: the notifications inbox is
                 fetched per signed-in user, so it needs useAuth(). */}
             <AuthProvider>
-              <AlertProvider>
-                <CallProvider>
-                  <ThemedShell />
-                </CallProvider>
-              </AlertProvider>
+              <WeatherProvider>
+                <AlertProvider>
+                  <CallProvider>
+                    <ThemedShell />
+                  </CallProvider>
+                </AlertProvider>
+              </WeatherProvider>
             </AuthProvider>
           </ThemeProvider>
         </LanguageProvider>
