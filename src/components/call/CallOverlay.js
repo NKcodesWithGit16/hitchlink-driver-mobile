@@ -51,6 +51,10 @@ export default function CallOverlay() {
 
   const ringingIn = status === 'ringing-in';
   const ringingOut = status === 'ringing-out';
+  // Answered, media not up yet. Shows the peer and "Connecting…" with only a
+  // hang-up — never Accept/Decline, which is what briefly appeared over a
+  // CallKit-answered call before this state existed.
+  const connecting = status === 'connecting';
   const active = status === 'active';
   const ended = status === 'ended';
 
@@ -74,6 +78,7 @@ export default function CallOverlay() {
           <Text style={[styles.statusLine, ended && { color: colors.danger }]}>
             {ringingIn && t('call.incomingCall')}
             {ringingOut && t('call.calling')}
+            {connecting && t('call.connecting')}
             {active && duration}
             {ended && (error || t('call.callEnded'))}
           </Text>

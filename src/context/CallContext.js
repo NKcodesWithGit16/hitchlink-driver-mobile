@@ -10,16 +10,23 @@
 // `hitchlink-voip` native module (PKPushRegistry) reports straight to
 // CallKit via react-native-callkeep — before this JS is necessarily running —
 // so the phone genuinely rings even locked/backgrounded. On iOS, CallKit's
-// native screen is the ONE incoming-call experience we want (product
-// decision — more "professional" than our own in-app modal, and CallKit is
-// the only path that rings from the lock screen at all). But its VoIP push
-// is a separate delivery path from the live SignalR "IncomingCall" below and
-// can arrive later — so on iOS, onIncomingCall holds off showing our own
-// overlay for a short grace window (pendingSignalRIncomingRef) to let CallKit
-// claim the call first (callKitCallIdsRef), and only falls back to the in-app
-// overlay if CallKit never shows up in that window (a failed/unregistered
-// push). On Android, which has no CallKit, the SignalR path is the only path
-// and shows immediately, same as always.
+// native screen is the ONE incoming-call experience the driver should ever
+// see: it rings from the lock screen and from a killed app, neither of which
+// a JS overlay can do.
+//
+// Its VoIP push is a separate delivery path from the live SignalR
+// "IncomingCall" below and can arrive later, or not at all. Rather than race
+// that with a timer — which showed both screens at once whenever the push was
+// slower than the guess — the backend now says which UI should ring, via a
+// "CallRingPath" event carrying whether APNs accepted the push. See the block
+// above pendingSignalRIncomingRef for the rules that fall out of it. On
+// Android there is no CallKit, so the SignalR path is the only path and rings
+// immediately, same as always.
+//
+// Both sides' call timers count from the server's Call.AnsweredAt (threaded
+// through joinDailyRoom), not from whenever each client's own Daily join
+// happened to finish — those are local events the two ends reach seconds
+// apart.
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { useAuth } from './AuthContext';
@@ -82,7 +89,16 @@ const AUDIO_SPEAKER = 'SPEAKERPHONE';
 const AUDIO_EARPIECE = 'WIRED_OR_EARPIECE';
 
 const initialState = {
-  status: 'idle', // idle | ringing-out | ringing-in | active | ended
+  // idle | ringing-out | ringing-in | connecting | active | ended
+  //
+  // `connecting` covers the gap between accepting a call and media actually
+  // being up (/accept, then the Daily join — 1-2s). It exists because both
+  // accept paths used to sit on `ringing-in` for that whole window, which
+  // rendered the Accept/Decline screen and re-started the incoming ringtone on
+  // a call the driver had already answered. Most visible on the CallKit path:
+  // you answer on the iPhone's own screen, then this app's ringing screen
+  // appears over it for a second or two.
+  status: 'idle',
   callId: null,
   peerName: null,
   // Presigned photo of whoever is on the other end. Incoming calls get it from
@@ -208,7 +224,19 @@ export function CallProvider({ children }) {
     catch (err) { console.warn('[Call] Could not apply the audio route; call continues on the default one:', err); }
   }, []);
 
-  const joinDailyRoom = useCallback(async (roomUrl, token) => {
+  // `answeredAt` is the server's Call.AnsweredAt — the one moment both sides
+  // agree on. Falling back to Date.now() keeps this working against a backend
+  // that doesn't send it yet; the cost of the fallback is exactly the drift
+  // this parameter exists to remove, so it's a fallback and not the norm.
+  const startedAtFrom = (answeredAt) => {
+    const t = answeredAt ? new Date(answeredAt).getTime() : NaN;
+    // Guard a clock that's badly wrong or a malformed value: a start time in
+    // the future would render as a negative/frozen timer, which is worse than
+    // being a second or two out.
+    return Number.isFinite(t) && t <= Date.now() ? t : Date.now();
+  };
+
+  const joinDailyRoom = useCallback(async (roomUrl, token, answeredAt = null) => {
     if (!Daily) {
       console.error('[Call] Daily native module unavailable — is this build using a dev client with @daily-co/react-native-daily-js linked?');
       setState((s) => ({ ...initialState, status: 'ended', error: t('call.callingUnavailable') }));
@@ -226,7 +254,7 @@ export function CallProvider({ children }) {
     catch (err) { console.warn('[Call] setNativeInCallAudioMode failed, using the platform default route:', err); }
 
     await co.join({ url: roomUrl, token, startVideoOff: true });
-    setState((s) => ({ ...s, status: 'active', startedAt: Date.now() }));
+    setState((s) => ({ ...s, status: 'active', startedAt: startedAtFrom(answeredAt) }));
 
     // Assert the route explicitly once media is up. setNativeInCallAudioMode
     // decides the *default*, but a CallKit-answered call arrives with iOS's own
@@ -257,7 +285,7 @@ export function CallProvider({ children }) {
         // of sitting on "Calling…" for a resolution that already happened.
         console.info(`[Call] ${res.callId} was already accepted before we learned our own callId — joining now instead of waiting.`);
         setState((s) => ({ ...s, callId: res.callId, roomUrl: res.roomUrl, token: res.token }));
-        joinDailyRoom(res.roomUrl, res.token).catch((err) => {
+        joinDailyRoom(res.roomUrl, res.token, pending.answeredAt).catch((err) => {
           console.error(`[Call] Join failed for ${res.callId} (early-accepted path):`, err);
           teardownCallObject();
           setState({ ...initialState, status: 'ended', error: t('call.couldNotConnect') });
@@ -384,9 +412,13 @@ export function CallProvider({ children }) {
     const { callId, roomUrl, token } = stateRef.current;
     if (!callId || !roomUrl) return;
     acceptInFlightRef.current = true;
+    // Leave the ringing state immediately — the driver has answered, so the
+    // Accept/Decline buttons and the ringtone must both stop now, not when
+    // media finishes coming up a second or two later.
+    setState((s) => ({ ...s, status: 'connecting' }));
     try {
-      await apiAcceptCall(callId);
-      await joinDailyRoom(roomUrl, token);
+      const accepted = await apiAcceptCall(callId);
+      await joinDailyRoom(roomUrl, token, accepted?.answeredAt);
     } catch (err) {
       console.error('[Call] acceptCall failed:', err);
       endCallKitSession(callId);
@@ -444,7 +476,7 @@ export function CallProvider({ children }) {
     }
   }, []);
 
-  const onCallAccepted = useCallback(({ callId }) => {
+  const onCallAccepted = useCallback(({ callId, answeredAt }) => {
     const s = stateRef.current;
     if (s.status !== 'ringing-out') return;
     if (s.callId === null) {
@@ -452,7 +484,7 @@ export function CallProvider({ children }) {
       // continuation pick it up once it knows the callId (and has
       // roomUrl/token to actually join with). See pendingResolutionRef above.
       console.info(`[Call] CallAccepted for ${callId} arrived before our own callId was known — queuing it.`);
-      pendingResolutionRef.current = { type: 'accepted', callId };
+      pendingResolutionRef.current = { type: 'accepted', callId, answeredAt };
       return;
     }
     if (s.callId !== callId) return;
@@ -461,7 +493,7 @@ export function CallProvider({ children }) {
     // why. Mirrors acceptCall()'s error handling, which was previously missing
     // on this caller-side path (an unhandled rejection that left the dispatcher
     // stranded until the ring timeout eventually fired).
-    joinDailyRoom(s.roomUrl, s.token).catch((err) => {
+    joinDailyRoom(s.roomUrl, s.token, answeredAt).catch((err) => {
       console.error(`[Call] Join failed for ${callId} after the dispatcher accepted:`, err);
       teardownCallObject();
       setState({ ...initialState, status: 'ended', error: t('call.couldNotConnect') });
@@ -578,7 +610,10 @@ export function CallProvider({ children }) {
       acceptInFlightRef.current = true;
       setState({
         ...initialState,
-        status: 'ringing-in',
+        // Already answered on CallKit's own screen — go straight to
+        // `connecting`. Using `ringing-in` here put this app's Accept/Decline
+        // screen (and its ringtone) on top of a call the driver had just taken.
+        status: 'connecting',
         callId: meta.serverCallId,
         peerName: meta.callerName,
         // The VoIP push payload is kept minimal and carries no photo, so fall
@@ -591,7 +626,7 @@ export function CallProvider({ children }) {
       });
       console.info(`[Call] Accepting ${meta.serverCallId} via CallKit — calling /accept then joining Daily.`);
       apiAcceptCall(meta.serverCallId)
-        .then(() => { console.info(`[Call] /accept succeeded for ${meta.serverCallId} — dispatcher should now see CallAccepted.`); return joinDailyRoom(meta.roomUrl, meta.token); })
+        .then((accepted) => { console.info(`[Call] /accept succeeded for ${meta.serverCallId} — dispatcher should now see CallAccepted.`); return joinDailyRoom(meta.roomUrl, meta.token, accepted?.answeredAt); })
         .then(() => RNCallKeep.setCurrentCallActive(callUUID))
         .catch((err) => {
           console.error('[Call] CallKit accept failed:', err);

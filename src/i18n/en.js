@@ -569,6 +569,7 @@ export const en = {
   call: {
     incomingCall: 'Incoming call…',
     calling: 'Calling…',
+    connecting: 'Connecting…',
     callEnded: 'Call ended',
     declineCallA11y: 'Decline call',
     decline: 'Decline',

@@ -572,6 +572,7 @@ export const ka = {
   call: {
     incomingCall: 'შემომავალი ზარი…',
     calling: 'რეკავს…',
+    connecting: 'უკავშირდება…',
     callEnded: 'ზარი დასრულდა',
     declineCallA11y: 'ზარის უარყოფა',
     decline: 'უარყოფა',
