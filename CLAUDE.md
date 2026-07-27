@@ -45,8 +45,19 @@ proxies (`:8788` → Identity, `:8789` → Main, reading targets from `.env`) an
 `src/api/config.js` routes web traffic through them (`IDENTITY_BASE`/`MAIN_BASE`). Native builds (APK/iOS)
 skip the proxy and hit Railway directly — CORS doesn't apply there.
 
-`eas.json`'s `development`, `preview`, **and `production`** build profiles all currently point at the
-staging Railway hosts — there is no separate prod-backend profile yet.
+**All four** `eas.json` build profiles point at the staging Railway hosts — there is no production backend
+yet. What distinguishes them is how the build is signed and distributed:
+
+| Profile | Distribution | Use |
+|---|---|---|
+| `development` | internal (ad-hoc) | dev client, loads JS from Metro |
+| `preview` | internal (ad-hoc) | release build for a registered device, installed from a link |
+| `testflight` | store | **TestFlight** — the only ad-hoc profile can't upload to App Store Connect |
+| `production` | store | a real public release; blocked by the guard below until a prod backend exists |
+
+`testflight` exists because TestFlight requires a store-signed build, which `preview` is not, and
+`production` is (correctly) refused while it points at staging. **A `testflight` build must never be
+promoted to a public App Store release from App Store Connect** — it runs against the staging database.
 
 ## Real-time layer: SignalR hubs + REST fallback
 
@@ -193,8 +204,16 @@ with the driver id only (never name/phone/email), and clears it on sign-out.
 
 **A build-time guard blocks shipping production against staging.** `scripts/check-prod-backend.js` runs via the
 `eas-build-pre-install` npm script and fails the build *only* when `EAS_BUILD_PROFILE=production` and the API
-URLs still contain `staging`. Development and preview builds, and plain local `npm install`, are unaffected.
-There is still no dedicated production backend — the guard exists so nobody forgets that.
+URLs still contain `staging`. Development, preview and testflight builds, and plain local `npm install`, are
+unaffected — `testflight` is deliberately outside the guard because internal testing against staging is the
+point of it. There is still no dedicated production backend; the guard exists so nobody forgets that.
+
+⚠️ **`Apns:Production` on the Railway `Dsp.Main` service must match the build's APNs environment.** A
+`development` build uses Apple's sandbox push servers (`false`); `testflight`/`production` builds use the
+production ones (`true`). Mismatched, every VoIP push comes back `BadDeviceToken`, CallKit never rings, and
+the app falls back to its own in-app ring screen for every call (correctly — see `CallRingPath`) with the
+lock-screen ring silently gone. There is only one backend, so the two build types cannot both have working
+CallKit at the same time.
 
 **Local reminders** (`src/lib/localNotifications.js`) schedule on-device notifications for the HOS 30-minute
 break (20 min ahead, from `hos.breakInMinutes`) and credential expiry (30/7/1 days out, from `expiryStatus`).

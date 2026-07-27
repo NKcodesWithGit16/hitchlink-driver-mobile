@@ -25,6 +25,15 @@
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     },
+    "testflight": {
+      "autoIncrement": true,
+      "channel": "testflight",
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://dspidentity-staging.up.railway.app",
+        "EXPO_PUBLIC_API_MAIN_URL": "https://dspmain-staging.up.railway.app",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
+      }
+    },
     "production": {
       "autoIncrement": true,
       "channel": "production",
