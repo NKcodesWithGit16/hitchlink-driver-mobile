@@ -35,7 +35,7 @@ export default function CallOverlay() {
   const t = useT();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  const { status, peerName, peerPhotoUrl, error, muted, startedAt, acceptCall, declineCall, hangUp, toggleMute } = useCall();
+  const { status, peerName, peerPhotoUrl, error, muted, speakerOn, startedAt, acceptCall, declineCall, hangUp, toggleMute, toggleSpeaker } = useCall();
   const duration = useElapsed(status === 'active' ? startedAt : null);
 
   // Presigned URLs expire; a failed load falls back to initials rather than an
@@ -115,6 +115,20 @@ export default function CallOverlay() {
               </Pressable>
               <Text style={styles.actionLabel}>{ringingOut ? t('common.cancel') : t('call.hangUp')}</Text>
             </View>
+            {active && (
+              <View style={styles.actionCol}>
+                <Pressable
+                  onPress={toggleSpeaker}
+                  style={[styles.midBtn, { backgroundColor: speakerOn ? colors.teal : colors.surface2, borderColor: speakerOn ? colors.teal : colors.border }]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: !!speakerOn }}
+                  accessibilityLabel={speakerOn ? t('call.speakerOffA11y') : t('call.speakerOnA11y')}
+                >
+                  <Icon family="ionicons" name={speakerOn ? 'volume-high' : 'volume-low'} size={20} color={speakerOn ? colors.onAccent : colors.textPrimary} />
+                </Pressable>
+                <Text style={styles.actionLabel}>{t('call.speaker')}</Text>
+              </View>
+            )}
           </View>
         )}
       </LinearGradient>

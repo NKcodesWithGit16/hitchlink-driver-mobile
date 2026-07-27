@@ -59,6 +59,14 @@ const RAW_EVENT = {
 
 const CallContext = createContext(null);
 
+// Audio-route ids as @daily-co/react-native-webrtc actually defines them —
+// WebRTCModule+DailyDevicesManager.h on iOS, DailyWebRTCDevicesManager's
+// AudioDeviceType enum on Android. Both are UPPERCASE; setAudioDevice() takes a
+// bare string and silently does nothing for an unrecognised one, so these are
+// not values to guess at.
+const AUDIO_SPEAKER = 'SPEAKERPHONE';
+const AUDIO_EARPIECE = 'WIRED_OR_EARPIECE';
+
 const initialState = {
   status: 'idle', // idle | ringing-out | ringing-in | active | ended
   callId: null,
@@ -71,6 +79,10 @@ const initialState = {
   roomUrl: null,
   token: null,
   muted: false,
+  // Speaker starts ON for every call. A driver taking a dispatch call has both
+  // hands on the wheel and the phone in a mount — holding it to their ear isn't
+  // an option, and iOS otherwise routes a CallKit-answered call to the earpiece.
+  speakerOn: true,
   error: null,
   startedAt: null,
 };
@@ -159,8 +171,24 @@ export function CallProvider({ children }) {
     }
     const co = Daily.createCallObject({ audioSource: true, videoSource: false });
     callObjectRef.current = co;
+    // Must be set BEFORE join — Daily reads the in-call audio mode as it brings
+    // the native audio session up, and changing it afterwards doesn't re-route.
+    // 'video' is the mode whose default route is the loudspeaker ('voice' means
+    // earpiece-first, which is wrong for a driver); see DailyAudioManager's
+    // defaultAudioDevice(). The runtime Speaker button below overrides it either
+    // way via setAudioDevice.
+    try { co.setNativeInCallAudioMode('video'); }
+    catch (err) { console.warn('[Call] setNativeInCallAudioMode failed, using the platform default route:', err); }
+
     await co.join({ url: roomUrl, token, startVideoOff: true });
     setState((s) => ({ ...s, status: 'active', startedAt: Date.now() }));
+
+    // Assert the route explicitly once media is up. setNativeInCallAudioMode
+    // decides the *default*, but a CallKit-answered call arrives with iOS's own
+    // session already configured for the earpiece, so the mode alone isn't
+    // enough to guarantee the speaker on that path.
+    try { await co.setAudioDevice(AUDIO_SPEAKER); }
+    catch (err) { console.warn('[Call] Could not force the speaker on; call continues on the default route:', err); }
   }, []);
 
   // ── Outgoing: driver taps Call on the Messages header ──────────────────
@@ -325,6 +353,22 @@ export function CallProvider({ children }) {
       co.setLocalAudio(!muted);
       return { ...s, muted };
     });
+  }, []);
+
+  // Speaker <-> earpiece. Unlike mute, the route change is async and can be
+  // refused by the OS (another app holding the session, a headset taking
+  // priority), so the flag is only flipped once the switch actually lands —
+  // otherwise the button would lie about where the audio is going.
+  const toggleSpeaker = useCallback(async () => {
+    const co = callObjectRef.current;
+    if (!co) return;
+    const next = !stateRef.current.speakerOn;
+    try {
+      await co.setAudioDevice(next ? AUDIO_SPEAKER : AUDIO_EARPIECE);
+      setState((s) => ({ ...s, speakerOn: next }));
+    } catch (err) {
+      console.warn('[Call] Audio route switch was refused, leaving it where it was:', err);
+    }
   }, []);
 
   const onCallAccepted = useCallback(({ callId }) => {
@@ -567,7 +611,7 @@ export function CallProvider({ children }) {
   }, [teardownCallObject]);
 
   return (
-    <CallContext.Provider value={{ ...state, startCall, acceptCall, declineCall, hangUp, toggleMute, loadCallFallback }}>
+    <CallContext.Provider value={{ ...state, startCall, acceptCall, declineCall, hangUp, toggleMute, toggleSpeaker, loadCallFallback }}>
       {children}
     </CallContext.Provider>
   );
