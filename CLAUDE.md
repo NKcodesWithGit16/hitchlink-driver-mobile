@@ -136,6 +136,9 @@ src/
   components/ui/            generic primitives (PrimaryAction, Card, IconButton, Skeleton, GlassView, …)
   components/driver/        domain components (StatusBar, NextStopCard, DocCard, HOSPill, StageStepper, …)
 modules/hitchlink-voip/     local Expo native module: PKPushRegistry → CallKit bridge (iOS only)
+modules/hitchlink-quicklook/ local Expo native module: QLPreviewController (iOS only) — renders a
+                            downloaded PDF/scan/Office doc in place. Both viewers (Documents tab and
+                            chat attachments) try it first and fall back to Sharing.shareAsync.
 ```
 
 Design tokens (`src/theme/tokens.js`): near-black `#0A0E14` surfaces, near-white (never pure white) text,
@@ -147,12 +150,26 @@ Navigation deliberately hands off to the phone's native Maps app rather than ren
 
 ## Releases, crash reporting and on-device reminders
 
-**OTA updates are wired up.** `expo-updates` points at EAS Update
-(`updates.url` in `app.json`) with `runtimeVersion.policy: "fingerprint"` — deliberately fingerprint and not
-`appVersion`, because this repo ships custom native code (`modules/hitchlink-voip`), and a fingerprint policy
-refuses to hand a JS-only update to a binary whose native side doesn't match. Each `eas.json` profile declares
-its own `channel` (development / preview / production). `fallbackToCacheTimeout: 0` means launch never blocks
-on a network fetch — a truck in a dead zone still opens the app instantly.
+**OTA updates are wired up.** `expo-updates` points at EAS Update (`updates.url` in `app.json`). Each
+`eas.json` profile declares its own `channel` (development / preview / production).
+`fallbackToCacheTimeout: 0` means launch never blocks on a network fetch — a truck in a dead zone still
+opens the app instantly.
+
+⚠️ **`runtimeVersion.policy` is `appVersion`, and that makes bumping `expo.version` a MANUAL, mandatory
+step whenever native code changes.** It was `fingerprint` originally — the policy that refuses to hand a
+JS-only update to a binary whose native side doesn't match, which is exactly what a repo shipping custom
+native modules (`modules/hitchlink-voip`, `modules/hitchlink-quicklook`) wants. Commit `3b4a6a1` moved it
+to `appVersion` deliberately, and **do not move it back without solving what broke**: `expo-updates` adds a
+"Configure expo-updates" build phase that compares the fingerprint computed locally against the one
+computed on the EAS worker; the worker runs prebuild first, so its fingerprint includes an `ios/` directory
+as a `bareNativeDir` source, which a managed checkout structurally cannot produce. The two can never match.
+
+The cost of `appVersion` is that native changes no longer bump the runtime version on their own. Any two
+builds sharing `expo.version` are treated as interchangeable, so an OTA carrying JS that calls a
+newly-added native module — or assumes a different RN architecture — **will** be served to an older binary
+that lacks it and crash on launch. **So: bump `expo.version` in the same commit as any native change, and
+never publish an OTA across one.** Version history so far: `1.0.0` → `1.0.1` (expo-updates + Sentry landed)
+→ `1.0.2` (added `modules/hitchlink-quicklook`, switched to the New Architecture).
 
 **Crash reporting is opt-in via `src/lib/observability.js`.** It only activates when `EXPO_PUBLIC_SENTRY_DSN`
 is set, so a checkout without a Sentry project behaves exactly as before. The root `ErrorBoundary`
@@ -180,12 +197,18 @@ driver's CDL expiry.
   `GET /loads/driver/{id}/history` returns `DeliveredAt` but never the delivery *deadline*, and carries no
   ratings or declines. `src/lib/standing.js` deliberately computes only what that payload supports
   (delivered / miles / earned / streak). Adding on-time needs the deadline in the history projection.
-- **New Architecture is off (`newArchEnabled: false`) on purpose — do not flip it casually.** The calling
-  stack is the blocker: `react-native-callkeep@4.3.16` is a plain legacy ObjC module with no `codegenConfig`,
-  and `@daily-co/react-native-daily-js` peer-depends on `react-native-background-timer@2.4.1` (unmaintained,
+- **New Architecture is ON (`newArchEnabled: true`), as of 2026-07-26.** It had in fact been running for a
+  while before that: a dev client was building with Fabric while `app.json` still said `false`, and the
+  mismatch only surfaced when a device log showed `Running "main" with {…"fabric":true}`. Rather than
+  regress a binary that was demonstrably working, the config was corrected to match reality.
+  What this means for the calling stack, which was the original reason to stay on legacy:
+  `react-native-callkeep@4.3.16` is a plain legacy ObjC module with no `codegenConfig`, and
+  `@daily-co/react-native-daily-js` peer-depends on `react-native-background-timer@2.4.1` (unmaintained,
   legacy bridge) and imports it at runtime — so it is NOT removable despite appearing unused in our own
-  source. Both would run only through the bridgeless interop layer. The local `hitchlink-voip` module is fine
-  (Expo Modules API supports both architectures). Migrating means verifying a real CallKit call on a physical
-  iOS device, so treat it as a scheduled piece of work with device testing, not a config flip.
+  source. **Both run through the bridgeless interop layer, and do work there** — in-app calling and the
+  speaker toggle were both verified on a physical iPhone under Fabric. The local `hitchlink-voip` and
+  `hitchlink-quicklook` modules are fine either way (Expo Modules API supports both architectures).
+  Still unverified under Fabric: a CallKit call answered from the **lock screen** (the VoIP-push path).
+  Test that on a physical device before shipping a production build.
 - `README.md` in this repo is stale (still describes auth/voice/offline-queue as unimplemented placeholders)
   — trust this file and the code over it.
