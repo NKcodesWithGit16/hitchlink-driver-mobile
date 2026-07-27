@@ -47,6 +47,7 @@
     "expo-system-ui": "~55.0.19",
     "expo-task-manager": "~55.0.17",
     "expo-updates": "~55.0.26",
+    "hitchlink-quicklook": "file:./modules/hitchlink-quicklook",
     "hitchlink-voip": "file:./modules/hitchlink-voip",
     "react": "19.2.0",
     "react-dom": "19.2.0",

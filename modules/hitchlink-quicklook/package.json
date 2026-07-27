@@ -1,0 +1,7 @@
+{
+  "name": "hitchlink-quicklook",
+  "version": "1.0.0",
+  "description": "QLPreviewController wrapper so the driver app can render a downloaded PDF, scan or Office document in place instead of exporting it through the share sheet.",
+  "main": "index.js",
+  "license": "MIT"
+}
