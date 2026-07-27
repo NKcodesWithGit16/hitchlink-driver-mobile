@@ -26,6 +26,7 @@ try {
  *   onCallEnded: (payload) => void,
  *   onCallCancelled: (payload) => void,
  *   onCallHandledElsewhere: (payload) => void,
+ *   onCallRingPath: (payload) => void,
  * }} handlers
  */
 export function useCallSocket(driverId, handlers) {
@@ -52,6 +53,11 @@ export function useCallSocket(driverId, handlers) {
     // has accepted/declined a call — lets a sibling session (e.g. the app
     // reconnecting on a second device) stand down instead of ringing forever.
     const onHandledElsewhere = (p) => handlersRef.current.onCallHandledElsewhere?.(p);
+    // Follows IncomingCall by milliseconds and says which UI should ring:
+    // { callId, native } — native true when APNs accepted a VoIP push, so
+    // CallKit is about to present the call itself and the app must not show
+    // its own screen on top. See CallsController's StartCall.
+    const onRingPath = (p) => handlersRef.current.onCallRingPath?.(p);
 
     conn.on('IncomingCall', onIncoming);
     conn.on('CallAccepted', onAccepted);
@@ -59,6 +65,7 @@ export function useCallSocket(driverId, handlers) {
     conn.on('CallEnded', onEnded);
     conn.on('CallCancelled', onCancelled);
     conn.on('CallHandledElsewhere', onHandledElsewhere);
+    conn.on('CallRingPath', onRingPath);
 
     const joinRoom = () => conn.invoke('JoinDriverRoom', String(driverId)).catch(() => {});
     conn.onreconnected(joinRoom);

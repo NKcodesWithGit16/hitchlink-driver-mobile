@@ -75,12 +75,27 @@ once at `app/_layout.js` so a call rings regardless of which tab is open. Audio-
   `react-native-callkeep`, so the phone can ring even fully locked/backgrounded — before any JS is
   necessarily running. `src/hooks/useVoipPushToken.js` registers/syncs this device's VoIP token; both this
   and `RNCallKeep`/`Voip` are `require`d only on iOS and no-op elsewhere.
-- **Two independent delivery paths for one call**: CallKit's native screen (from the VoIP push) and the
-  live SignalR `IncomingCall` event can both fire for the same call, arriving in either order. `CallContext`
-  gives CallKit a short grace window (`CALLKIT_GRACE_MS`) to claim an incoming call before falling back to
-  its own in-app overlay, and tracks `callKitCallIdsRef` / `callKitUuidBySrvIdRef` so whichever path ends
-  the call also retires the *other* path's session — read the large comment block at the top of
-  `CallContext.js` before touching any of this; the ordering/race handling is the entire point of the file.
+- **CallKit owns the audio session**, and WebRTC has to be told the moment iOS activates it. `CallContext`
+  bridges `RNCallKeep`'s `didActivateAudioSession` / `didDeactivateAudioSession` to
+  `RTCAudioSession.audioSessionDidActivate()` from `@daily-co/react-native-webrtc`. **Without that bridge a
+  CallKit-answered call connects completely silently** while the in-app path works fine — which is exactly
+  how it presented in the field. The speaker route is re-applied on activation too, because RNCallKeep runs
+  its own `configureAudioSession` there and can move it back to the earpiece.
+- **One incoming-call UI, chosen by the backend.** CallKit's native screen (from the VoIP push) and the live
+  SignalR `IncomingCall` event are separate delivery paths for the same call and arrive in either order, so
+  the driver used to see both. `CallsController.StartCall` now emits a second SignalR event,
+  `CallRingPath { callId, native }`, right after `IncomingCall`: `native` is true when APNs *accepted* the
+  VoIP push. The app shows nothing when native (CallKit is coming), rings in-app immediately when not, and
+  falls back to `CALLKIT_GRACE_MS` only if the signal never arrives. `CALLKIT_BACKSTOP_MS` covers "Apple
+  accepted it but the handset never rang". `onDisplayed` also stands a late in-app screen down, so the two
+  can never be on screen together. `callKitCallIdsRef` / `callKitUuidBySrvIdRef` still ensure whichever path
+  ends the call retires the other's session — read the large comment block at the top of `CallContext.js`
+  before touching any of this; the ordering/race handling is the entire point of the file.
+- ⚠️ **`Apns:Production` must be true for any TestFlight/App Store build.** `ApnsVoipPushService` talks to
+  `api.sandbox.push.apple.com` unless that config says otherwise. A production-signed build against the
+  sandbox host has every push rejected with `BadDeviceToken`, so CallKit never rings — the app would then
+  ring in-app for every call (correctly, via `CallRingPath`), but the lock-screen ring would be silently
+  gone. It is a Railway env var, not something the code can infer.
 - **Android has no CallKit equivalent.** An incoming call when the app is backgrounded/killed on Android
   arrives only as a regular Expo push notification (`type: "call"`, routed by
   `src/hooks/usePushNotifications.js` to `app/call/[callId].js`) — not a native full-screen ring.
