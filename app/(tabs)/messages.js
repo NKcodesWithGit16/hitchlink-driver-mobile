@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, FlatList, TextInput, Pressable,
   Platform, Linking, Animated, Image, Modal, Keyboard, Dimensions, Alert,
+  ActivityIndicator,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -25,6 +26,7 @@ import {
   downloadChatAttachment, fetchActiveLoad,
   editMessage, deleteMessage, reactToMessage, removeReaction, markChatRead,
 } from '../../src/api/main';
+import { canPreview, previewAsync } from 'hitchlink-quicklook';
 import { useChatSocket } from '../../src/hooks/useChatSocket';
 import { useVoiceRecorder } from '../../src/hooks/useVoiceRecorder';
 import { playMessageSound } from '../../src/lib/sound';
@@ -333,13 +335,38 @@ export default function MessagesScreen() {
     load();
   }, [user?.id, load]);
 
-  const confirmDelete = useCallback(async () => {
-    const m = confirmDel;
-    setConfirmDel(null);
+  // Deliberately NOT optimistic. The confirm sheet is modal and blocks the
+  // thread anyway, so applying the change early buys nothing and costs a
+  // rollback — and rolling back is what made a failed delete look like the
+  // message "came back on its own". Instead the sheet holds a spinner until the
+  // server has actually committed, and rethrows so it can show why if it
+  // hasn't. Errors must not go through Alert here: an iOS alert raised while
+  // this Modal is dismissing hits the same presentation collision that froze
+  // the screen, so it would never appear.
+  //
+  // The two scopes then apply differently: "everyone" leaves a tombstone both
+  // sides can see, while "me" removes the row outright — the server filters it
+  // from every later fetch for this driver (GetHistory's as_=driver /
+  // DeletedForDriver filter), so a placeholder only this phone would show would
+  // be wrong.
+  const confirmDelete = useCallback(async (scope) => {
+    const m = confirmDel?.msg;
     if (!m) return;
-    setItems((prev) => prev.map((x) => (x.id === m.id ? { ...x, deleted: true, text: undefined, kind: undefined, uri: undefined, reactions: [] } : x)));
-    try { await deleteMessage(m.id, user?.id, 'everyone'); } catch {}
-    load();
+    try {
+      await deleteMessage(m.id, user?.id, scope);
+      setItems((prev) => (scope === 'me'
+        ? prev.filter((x) => x.id !== m.id)
+        : prev.map((x) => (x.id === m.id
+          ? { ...x, deleted: true, text: undefined, kind: undefined, uri: undefined, reactions: [] }
+          : x))));
+      setConfirmDel(null);
+      haptics.success();
+      load();
+    } catch (err) {
+      console.error(`[Chat] Delete (${scope}) failed:`, err);
+      haptics.error();
+      throw err; // the sheet renders it, including the HTTP status
+    }
   }, [confirmDel, user?.id, load]);
 
   const pickAttachment = useCallback(async () => {
@@ -363,12 +390,20 @@ export default function MessagesScreen() {
         setItems((prev) => prev.filter((m) => m.id !== localId));
         load();
         haptics.success();
-      } catch {
+      } catch (err) {
+        console.error('[Chat] Photo upload failed:', err);
         setItems((prev) => prev.map((m) => (m.id === localId ? { ...m, failed: true } : m)));
         haptics.error();
       }
-    } catch {}
-  }, [user?.id, replyTo, scrollToEnd, load]);
+    } catch (err) {
+      // The picker itself failed to open or read the pick — there's no bubble
+      // on screen to mark failed, so say so out loud rather than looking like
+      // the tap did nothing.
+      console.error('[Chat] Could not pick a photo:', err);
+      haptics.error();
+      Alert.alert(t('messages.attachFailedTitle'), t('messages.attachFailedBody'));
+    }
+  }, [user?.id, replyTo, scrollToEnd, load, t]);
 
   const pickDocument = useCallback(async () => {
     if (!user?.id) return;
@@ -391,12 +426,17 @@ export default function MessagesScreen() {
         setItems((prev) => prev.filter((m) => m.id !== localId));
         load();
         haptics.success();
-      } catch {
+      } catch (err) {
+        console.error('[Chat] Document upload failed:', err);
         setItems((prev) => prev.map((m) => (m.id === localId ? { ...m, failed: true } : m)));
         haptics.error();
       }
-    } catch {}
-  }, [user?.id, replyTo, scrollToEnd, load]);
+    } catch (err) {
+      console.error('[Chat] Could not pick a document:', err);
+      haptics.error();
+      Alert.alert(t('messages.attachFailedTitle'), t('messages.attachFailedBody'));
+    }
+  }, [user?.id, replyTo, scrollToEnd, load, t]);
 
   // Messages + real per-day separators, flattened into the single keyed array
   // the virtualized list below consumes. Grouping neighbours (prevFrom/
@@ -661,7 +701,10 @@ export default function MessagesScreen() {
         onDocument={pickDocument}
       />
 
-      {/* ── Long-press focused menu: message lifts in place, everything else blurs ── */}
+      {/* ── Long-press focused menu: message lifts in place, everything else blurs ──
+          onDelete fires only once that overlay has fully dismissed (see closeThen
+          inside it) — opening this confirm Modal while the overlay's own Modal was
+          still on screen is what froze the whole screen on iOS. */}
       <FocusedMessageOverlay
         focus={focus}
         colors={colors}
@@ -670,12 +713,12 @@ export default function MessagesScreen() {
         onReact={react}
         onReply={startReply}
         onEdit={startEdit}
-        onDelete={(m) => { setFocus(null); setConfirmDel(m); }}
+        onDelete={(m, canEveryone) => setConfirmDel({ msg: m, canEveryone })}
       />
 
       {/* ── Delete confirmation ── */}
       <ConfirmDelete
-        msg={confirmDel}
+        pending={confirmDel}
         colors={colors}
         styles={styles}
         onCancel={() => setConfirmDel(null)}
@@ -1079,79 +1122,116 @@ function FocusedMessageOverlay({ focus, colors, styles, onClose, onReact, onRepl
     });
   }, [anim, onClose]);
 
+  // Anything that opens ANOTHER <Modal> has to wait for this one to be gone.
+  // On iOS a Modal is a presented UIViewController, and presenting a second one
+  // while this is still on screen (it lingers through the 140ms fade above)
+  // leaves an orphaned presentation that eats every touch — the app looks
+  // frozen until it's reloaded. `onDismiss` fires once the dismissal actually
+  // completes; on Android it never fires and stacking is harmless, so the
+  // action runs inline there. Same pattern as AttachMenuSheet.
+  const pendingRef = useRef(null);
+
+  const runPending = useCallback(() => {
+    const action = pendingRef.current;
+    pendingRef.current = null;
+    action?.();
+  }, []);
+
+  const closeThen = useCallback((action) => {
+    pendingRef.current = action;
+    close();
+    if (Platform.OS !== 'ios') runPending();
+  }, [close, runPending]);
+
+  // The <Modal> below stays MOUNTED even when there's nothing focused, and only
+  // toggles `visible`. Returning null here instead would unmount it, destroying
+  // the native RCTModalHostView before it can deliver onDismiss — and that
+  // event is what runs the deferred action, so Delete silently did nothing.
+  // (AttachMenuSheet works precisely because it never unmounts.)
   const active = focus || held;
-  if (!active) return null;
-
-  const { msg, anchor, mine } = active;
-  const { width: screenW, height: screenH } = Dimensions.get('window');
-  const REACTION_H = 56;
-  const GAP = 10;
-  const isText = msg && !msg.kind;
-  const canEdit = mine && isText && ageMin(msg?.ts) < EDIT_WINDOW_MIN;
-  const canDelete = mine && ageMin(msg?.ts) < DELETE_WINDOW_MIN;
-  const actionCount = 1 + (canEdit ? 1 : 0) + (canDelete ? 1 : 0);
-  const ACTIONS_H = actionCount * 50 + space[2] * 2;
-  const stackH = REACTION_H + GAP + anchor.height + GAP + ACTIONS_H;
-
-  const minTop = insets.top + space[3];
-  const maxTop = Math.max(minTop, screenH - insets.bottom - space[3] - stackH);
-  const groupTop = Math.max(minTop, Math.min(anchor.y - REACTION_H - GAP, maxTop));
-
-  const reactionTop = groupTop;
-  const bubbleTop = groupTop + REACTION_H + GAP;
-  const actionsTop = bubbleTop + anchor.height + GAP;
-
-  const edgeLeft = anchor.x;
-  const edgeRight = screenW - (anchor.x + anchor.width);
-  const sideStyle = mine
-    ? { right: Math.max(edgeRight, space[4]) }
-    : { left: Math.max(edgeLeft, space[4]) };
-  const panelWidth = Math.min(Math.max(anchor.width, 180), 260);
-
-  const mineReaction = msg?.reactions?.find((r) => r.mine)?.emoji;
-  const opacity = anim;
-  const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
-
   return (
-    <Modal visible={!!focus || !!held} transparent animationType="none" onRequestClose={close}>
-      <Animated.View style={[StyleSheet.absoluteFill, { opacity }]} pointerEvents={focus ? 'auto' : 'none'}>
-        <BlurView intensity={45} tint={colors.isDay ? 'light' : 'dark'} style={StyleSheet.absoluteFill} />
-        <Pressable style={StyleSheet.absoluteFill} onPress={close} accessibilityRole="button" accessibilityLabel={t('common.cancel')} />
-      </Animated.View>
-
-      <Animated.View
-        pointerEvents={focus ? 'auto' : 'none'}
-        style={[styles.focusReactions, sideStyle, { top: reactionTop, backgroundColor: colors.surfaceHi, borderColor: colors.border, opacity, transform: [{ scale }] }]}
-      >
-        {EMOJIS.map((e) => (
-          <Pressable
-            key={e}
-            onPress={() => { onReact(msg, e); close(); }}
-            style={[styles.focusReactionBtn, mineReaction === e && { backgroundColor: colors.tealFill, borderColor: colors.teal }]}
-            accessibilityRole="button"
-            accessibilityLabel={`React ${e}`}
-          >
-            <Text style={styles.focusReactionEmoji}>{e}</Text>
-          </Pressable>
-        ))}
-      </Animated.View>
-
-      <View pointerEvents="none" style={{ position: 'absolute', top: bubbleTop, left: anchor.x, width: anchor.width }}>
-        <Animated.View style={{ opacity, transform: [{ scale }] }}>
-          <BubbleVisual msg={msg} mine={mine} colors={colors} styles={styles} onOpenImage={() => {}} />
-        </Animated.View>
-      </View>
-
-      <Animated.View
-        pointerEvents={focus ? 'auto' : 'none'}
-        style={[styles.focusActionsPanel, sideStyle, { top: actionsTop, width: panelWidth, backgroundColor: colors.surface, borderColor: colors.border, opacity, transform: [{ scale }] }]}
-      >
-        <SheetAction icon="corner-up-left" label={t('messages.reply')} colors={colors} styles={styles} onPress={() => { onReply(msg); close(); }} />
-        {canEdit ? <SheetAction icon="edit-2" label={t('common.edit')} colors={colors} styles={styles} onPress={() => { onEdit(msg); close(); }} /> : null}
-        {canDelete ? <SheetAction icon="trash-2" label={t('messages.deleteForEveryone')} danger colors={colors} styles={styles} onPress={() => { onDelete(msg); close(); }} /> : null}
-      </Animated.View>
+    <Modal visible={!!active} transparent animationType="none" onRequestClose={close} onDismiss={runPending}>
+      {active ? renderFocusedBody() : null}
     </Modal>
   );
+
+  function renderFocusedBody() {
+    const { msg, anchor, mine } = active;
+    const { width: screenW, height: screenH } = Dimensions.get('window');
+    const REACTION_H = 56;
+    const GAP = 10;
+    const isText = msg && !msg.kind;
+    const canEdit = mine && isText && ageMin(msg?.ts) < EDIT_WINDOW_MIN;
+    // "Delete for everyone" is the sender's, and only inside the window the
+    // backend enforces. "Delete for me" has neither restriction — it just hides
+    // the row for this driver — so the Delete action is always offered and the
+    // sheet below decides which scopes to put on it. Previously the whole action
+    // disappeared once the window lapsed, which read as "this app has no delete".
+    const canDeleteForEveryone = mine && ageMin(msg?.ts) < DELETE_WINDOW_MIN;
+    const actionCount = 2 + (canEdit ? 1 : 0);
+    const ACTIONS_H = actionCount * 50 + space[2] * 2;
+    const stackH = REACTION_H + GAP + anchor.height + GAP + ACTIONS_H;
+
+    const minTop = insets.top + space[3];
+    const maxTop = Math.max(minTop, screenH - insets.bottom - space[3] - stackH);
+    const groupTop = Math.max(minTop, Math.min(anchor.y - REACTION_H - GAP, maxTop));
+
+    const reactionTop = groupTop;
+    const bubbleTop = groupTop + REACTION_H + GAP;
+    const actionsTop = bubbleTop + anchor.height + GAP;
+
+    const edgeLeft = anchor.x;
+    const edgeRight = screenW - (anchor.x + anchor.width);
+    const sideStyle = mine
+      ? { right: Math.max(edgeRight, space[4]) }
+      : { left: Math.max(edgeLeft, space[4]) };
+    const panelWidth = Math.min(Math.max(anchor.width, 180), 260);
+
+    const mineReaction = msg?.reactions?.find((r) => r.mine)?.emoji;
+    const opacity = anim;
+    const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
+
+    return (
+      <>
+        <Animated.View style={[StyleSheet.absoluteFill, { opacity }]} pointerEvents={focus ? 'auto' : 'none'}>
+          <BlurView intensity={45} tint={colors.isDay ? 'light' : 'dark'} style={StyleSheet.absoluteFill} />
+          <Pressable style={StyleSheet.absoluteFill} onPress={close} accessibilityRole="button" accessibilityLabel={t('common.cancel')} />
+        </Animated.View>
+
+        <Animated.View
+          pointerEvents={focus ? 'auto' : 'none'}
+          style={[styles.focusReactions, sideStyle, { top: reactionTop, backgroundColor: colors.surfaceHi, borderColor: colors.border, opacity, transform: [{ scale }] }]}
+        >
+          {EMOJIS.map((e) => (
+            <Pressable
+              key={e}
+              onPress={() => { onReact(msg, e); close(); }}
+              style={[styles.focusReactionBtn, mineReaction === e && { backgroundColor: colors.tealFill, borderColor: colors.teal }]}
+              accessibilityRole="button"
+              accessibilityLabel={`React ${e}`}
+            >
+              <Text style={styles.focusReactionEmoji}>{e}</Text>
+            </Pressable>
+          ))}
+        </Animated.View>
+
+        <View pointerEvents="none" style={{ position: 'absolute', top: bubbleTop, left: anchor.x, width: anchor.width }}>
+          <Animated.View style={{ opacity, transform: [{ scale }] }}>
+            <BubbleVisual msg={msg} mine={mine} colors={colors} styles={styles} onOpenImage={() => {}} />
+          </Animated.View>
+        </View>
+
+        <Animated.View
+          pointerEvents={focus ? 'auto' : 'none'}
+          style={[styles.focusActionsPanel, sideStyle, { top: actionsTop, width: panelWidth, backgroundColor: colors.surface, borderColor: colors.border, opacity, transform: [{ scale }] }]}
+        >
+          <SheetAction icon="corner-up-left" label={t('messages.reply')} colors={colors} styles={styles} onPress={() => { onReply(msg); close(); }} />
+          {canEdit ? <SheetAction icon="edit-2" label={t('common.edit')} colors={colors} styles={styles} onPress={() => { onEdit(msg); close(); }} /> : null}
+          <SheetAction icon="trash-2" label={t('common.delete')} danger colors={colors} styles={styles} onPress={() => closeThen(() => onDelete(msg, canDeleteForEveryone))} />
+        </Animated.View>
+      </>
+    );
+  }
 }
 
 function SheetAction({ icon, label, danger, colors, styles, onPress }) {
@@ -1168,37 +1248,131 @@ function SheetAction({ icon, label, danger, colors, styles, onPress }) {
   );
 }
 
+// iOS presents a <Modal> as a real UIViewController, and the image/document
+// pickers are view controllers too. Launching one in the same tick as this
+// sheet's dismissal put the two transitions on top of each other: either iOS
+// refused the presentation outright, or the sheet's dismissal tore down the
+// picker presented on top of it. Tapping Photo/Document just closed the sheet
+// and did nothing at all.
+//
+// So the tap only *records* what to do, and the action runs once the sheet is
+// genuinely gone: `onDismiss` fires after the dismissal completes on iOS. It
+// never fires on Android, where presenting is safe anyway — hence the direct
+// call there. Whichever path runs, it clears the ref first, so an action can
+// never fire twice.
 function AttachMenuSheet({ visible, colors, styles, onClose, onPhoto, onDocument }) {
   const t = useT();
+  const pendingRef = useRef(null);
+
+  const runPending = useCallback(() => {
+    const action = pendingRef.current;
+    pendingRef.current = null;
+    action?.();
+  }, []);
+
+  const choose = useCallback((action) => {
+    pendingRef.current = action;
+    onClose();
+    if (Platform.OS !== 'ios') runPending();
+  }, [onClose, runPending]);
+
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} onDismiss={runPending}>
       <Pressable style={styles.sheetOverlay} onPress={onClose}>
         <Pressable style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border }]} onPress={() => {}}>
-          <SheetAction icon="image" label={t('messages.photo')} colors={colors} styles={styles} onPress={() => { onClose(); onPhoto(); }} />
-          <SheetAction icon="file-text" label={t('messages.document')} colors={colors} styles={styles} onPress={() => { onClose(); onDocument(); }} />
+          <SheetAction icon="image" label={t('messages.photo')} colors={colors} styles={styles} onPress={() => choose(onPhoto)} />
+          <SheetAction icon="file-text" label={t('messages.document')} colors={colors} styles={styles} onPress={() => choose(onDocument)} />
         </Pressable>
       </Pressable>
     </Modal>
   );
 }
 
-function ConfirmDelete({ msg, colors, styles, onCancel, onConfirm }) {
+// Scope chooser, WhatsApp-style. "Delete for me" is always on offer; "Delete
+// for everyone" only while the sender is still inside the backend's window
+// (see canDeleteForEveryone), so the sheet never shows an action that would
+// come back as a 400.
+// Scope chooser, WhatsApp-style. "Delete for me" is always on offer; "Delete
+// for everyone" only while the sender is still inside the backend's window
+// (see canDeleteForEveryone), so the sheet never shows an action that would
+// come back as a 400.
+//
+// It stays open until the delete actually lands. A failure is shown right here
+// with the server's status rather than through Alert — an alert raised while
+// this Modal dismisses would never appear on iOS (the same presented-view
+// collision that froze the screen), which is exactly how a failing delete came
+// to look like "nothing happens".
+function ConfirmDelete({ pending, colors, styles, onCancel, onConfirm }) {
   const t = useT();
+  const canEveryone = !!pending?.canEveryone;
+  const [busy, setBusy] = useState(null);   // which scope is in flight
+  const [failed, setFailed] = useState('');
+
+  useEffect(() => { setBusy(null); setFailed(''); }, [pending]);
+
+  const run = async (scope) => {
+    if (busy) return;
+    setBusy(scope);
+    setFailed('');
+    try {
+      await onConfirm(scope);
+    } catch (err) {
+      setFailed(err?.status ? `${t('messages.deleteFailedBody')} (${err.status})` : (err?.message || t('messages.deleteFailedBody')));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
-    <Modal visible={!!msg} transparent animationType="fade" onRequestClose={onCancel}>
+    <Modal visible={!!pending} transparent animationType="fade" onRequestClose={onCancel}>
       <View style={styles.confirmOverlay}>
         <View style={[styles.confirmCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <View style={[styles.confirmIcon, { backgroundColor: colors.surface2, borderColor: colors.danger }]}>
             <Icon name="trash-2" size={24} color={colors.danger} />
           </View>
-          <Text style={[styles.confirmTitle, { color: colors.textPrimary }]}>{t('messages.deleteForEveryoneQ')}</Text>
-          <Text style={[styles.confirmSub, { color: colors.textSecondary }]}>
-            {t('messages.deleteForEveryoneBody')}
+          <Text style={[styles.confirmTitle, { color: colors.textPrimary }]}>
+            {failed ? t('messages.deleteFailedTitle') : t('messages.deleteMessageQ')}
           </Text>
-          <Pressable onPress={onConfirm} style={[styles.confirmDanger, { backgroundColor: colors.danger }]} accessibilityRole="button" accessibilityLabel={t('messages.deleteForEveryone')}>
-            <Text style={styles.confirmDangerText}>{t('common.delete')}</Text>
+          <Text style={[styles.confirmSub, { color: failed ? colors.danger : colors.textSecondary }]}>
+            {failed || (canEveryone ? t('messages.deleteForEveryoneBody') : t('messages.deleteForMeOnlyBody'))}
+          </Text>
+
+          {canEveryone ? (
+            <Pressable
+              onPress={() => run('everyone')}
+              disabled={!!busy}
+              style={[styles.confirmDanger, { backgroundColor: colors.danger, opacity: busy && busy !== 'everyone' ? 0.5 : 1 }]}
+              accessibilityRole="button"
+              accessibilityLabel={t('messages.deleteForEveryone')}
+            >
+              {busy === 'everyone'
+                ? <ActivityIndicator size="small" color="#FFFFFF" />
+                : <Text style={styles.confirmDangerText}>{t('messages.deleteForEveryone')}</Text>}
+            </Pressable>
+          ) : null}
+
+          <Pressable
+            onPress={() => run('me')}
+            disabled={!!busy}
+            style={[canEveryone ? styles.confirmCancel : styles.confirmDanger,
+              canEveryone ? { borderColor: colors.border } : { backgroundColor: colors.danger },
+              { opacity: busy && busy !== 'me' ? 0.5 : 1 }]}
+            accessibilityRole="button"
+            accessibilityLabel={t('messages.deleteForMe')}
+          >
+            {busy === 'me'
+              ? <ActivityIndicator size="small" color={canEveryone ? colors.textPrimary : '#FFFFFF'} />
+              : (
+                <Text style={canEveryone
+                  ? [styles.confirmCancelText, { color: colors.textPrimary }]
+                  : styles.confirmDangerText}
+                >
+                  {t('messages.deleteForMe')}
+                </Text>
+              )}
           </Pressable>
-          <Pressable onPress={onCancel} style={[styles.confirmCancel, { borderColor: colors.border }]} accessibilityRole="button" accessibilityLabel={t('common.cancel')}>
+
+          <Pressable onPress={onCancel} disabled={!!busy} style={[styles.confirmCancel, { borderColor: colors.border, opacity: busy ? 0.5 : 1 }]} accessibilityRole="button" accessibilityLabel={t('common.cancel')}>
             <Text style={[styles.confirmCancelText, { color: colors.textMuted }]}>{t('common.cancel')}</Text>
           </Pressable>
         </View>
@@ -1383,8 +1557,19 @@ function useOpenAttachment(msg, t) {
       const result = await downloadChatAttachment(msg.uri, msg.filename || 'file');
       if (Platform.OS === 'web') {
         window.open(result.uri, '_blank');
+      } else if (canPreview(result.uri)) {
+        // Same in-app system viewer the Documents tab uses — a PDF the
+        // dispatcher sent opens right here instead of bouncing out to Files.
+        await previewAsync(result.uri);
       } else if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(result.uri, msg.mimeType ? { mimeType: msg.mimeType } : undefined);
+        // mimeType is Android-only and UTI iOS-only, so both go in — without
+        // the UTI (and the extension downloadChatAttachment now puts on the
+        // cache file) iOS can't tell what this is and offers nowhere to open it.
+        await Sharing.shareAsync(result.uri, {
+          mimeType: msg.mimeType || result.contentType,
+          ...(result.uti ? { UTI: result.uti } : {}),
+          dialogTitle: msg.filename || undefined,
+        });
       } else {
         await Linking.openURL(msg.uri);
       }

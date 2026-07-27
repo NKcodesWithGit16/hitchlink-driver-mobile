@@ -13,6 +13,8 @@ import FadeInView from '../../src/components/ui/FadeInView';
 import Skeleton from '../../src/components/ui/Skeleton';
 import DocumentReviewModal from '../../src/components/driver/DocumentReviewModal';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
+import haptics from '../../src/lib/haptics';
+import { canPreview, previewAsync } from 'hitchlink-quicklook';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
@@ -446,13 +448,24 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
         return;
       }
       if (Platform.OS === 'web') {
-        window.open(result.blobUrl, '_blank');
+        window.open(result.uri, '_blank');
       } else if (result.contentType?.startsWith('image/')) {
         setPreviewUri(result.uri);
+      } else if (canPreview(result.uri)) {
+        // iOS: render it in place with the system viewer (the same one Files
+        // and Mail use). Anything QuickLook can't handle — and all of Android —
+        // falls through to the share sheet below.
+        await previewAsync(result.uri);
       } else {
         const available = await Sharing.isAvailableAsync();
         if (!available) throw new Error('Sharing unavailable on this device');
-        await Sharing.shareAsync(result.uri, { mimeType: result.contentType });
+        // mimeType is Android-only, UTI is iOS-only — pass both, or the
+        // receiving app on one platform gets no idea what it's being handed.
+        await Sharing.shareAsync(result.uri, {
+          mimeType: result.contentType,
+          ...(result.uti ? { UTI: result.uti } : {}),
+          dialogTitle: doc.label,
+        });
       }
     } catch {
       Alert.alert(t('documents.couldNotOpen'), t('documents.pleaseTryAgain'));
@@ -501,9 +514,14 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
         expiresAt: doc.expires,
       });
       await onUploaded?.();
-      Alert.alert(t('documents.uploaded'), t('documents.renewalSaved'));
+      // No success Alert here: it would be presented on top of this Modal and
+      // then torn down by the onClose below before the driver could read it.
+      // The refreshed list behind us already shows the new expiry date, which
+      // is the confirmation that matters.
+      haptics.success();
       onClose();
     } catch {
+      // Safe: this one is raised while the Modal stays open.
       Alert.alert(t('documents.couldNotUpload'), t('documents.pleaseTryAgain'));
     } finally {
       setUploading(false);
