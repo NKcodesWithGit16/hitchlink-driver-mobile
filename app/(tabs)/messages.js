@@ -37,6 +37,7 @@ import { parsePeaksString, resamplePeaks } from '../../src/lib/waveform';
 import haptics from '../../src/lib/haptics';
 import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
+import { useCallBannerInset } from '../../src/components/call/CallOverlay';
 
 // Quick-tap reactions, plus the windows the backend enforces (mirror them in the
 // UI so we only offer actions that will actually succeed).
@@ -65,6 +66,7 @@ function kindLabel(kind, t) {
 
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
+  const callInset = useCallBannerInset();
   const router = useRouter();
   const { colors } = useTheme();
   const t = useT();
@@ -77,7 +79,14 @@ export default function MessagesScreen() {
     { label: t('messages.quickLoaded'),     icon: 'check-circle' },
     { label: t('messages.quickDelivered'),  icon: 'flag' },
   ];
-  const { startCall } = useCall();
+  const { startCall, status: callStatus, expand: expandCall } = useCall();
+  // Now that a call can be minimized to a pill, the driver can be sitting in
+  // this screen mid-call — and startCall() bails on any non-idle status, so
+  // the Call button would look broken. Reopen the call instead.
+  const onCallPress = useCallback(() => {
+    if (callStatus === 'idle') startCall();
+    else expandCall();
+  }, [callStatus, startCall, expandCall]);
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [items,       setItems]       = useState([]);
   const [text,        setText]        = useState('');
@@ -523,17 +532,17 @@ export default function MessagesScreen() {
         onReactQuick={(emoji) => !isLocal && react(m, emoji)}
         onDoubleTap={() => !m.deleted && !isLocal && react(m, HEART_EMOJI)}
         onOpenImage={setViewerUri}
-        onCallBack={startCall}
+        onCallBack={onCallPress}
         revealed={revealedId === m.id}
         onToggleReveal={() => toggleReveal(m.id)}
         showSeen={m.id === lastReadMineId}
         dispatcher={dispatcher}
       />
     );
-  }, [colors, styles, react, startCall, revealedId, toggleReveal, lastReadMineId, dispatcher]);
+  }, [colors, styles, react, onCallPress, revealedId, toggleReveal, lastReadMineId, dispatcher]);
 
   return (
-    <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+    <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
 
       {/* ── Header ── */}
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
@@ -551,7 +560,7 @@ export default function MessagesScreen() {
         </View>
         <View style={styles.headerActions}>
           <Pressable
-            onPress={startCall}
+            onPress={onCallPress}
             onLongPress={() => dispatcher?.phone && Linking.openURL(`tel:${dispatcher.phone}`).catch(() => {})}
             delayLongPress={400}
             style={styles.callBtn}

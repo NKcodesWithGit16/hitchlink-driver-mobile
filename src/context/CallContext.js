@@ -115,6 +115,13 @@ const initialState = {
   speakerOn: true,
   error: null,
   startedAt: null,
+  // Collapsed to the floating pill instead of the full-screen takeover, so the
+  // driver can keep using the app mid-call (read a document, check the load).
+  // Purely presentational — the Daily call object and CallKit session are
+  // untouched by it. Only ever true while `active`: a ringing call must not be
+  // dismissable to a pill, and every transition out of `active` goes through
+  // `initialState`, which resets this on its own.
+  minimized: false,
 };
 
 export function CallProvider({ children }) {
@@ -465,6 +472,18 @@ export function CallProvider({ children }) {
     if (callId) apiEndCall(callId, reason).catch(() => {});
   }, [reset]);
 
+  // Collapse/restore the call UI. Guarded on `active` so a ringing or
+  // still-connecting call can never be hidden behind a pill the driver might
+  // not notice; `expand` is unconditional so any stale minimized flag resolves
+  // to the full screen rather than sticking.
+  const minimize = useCallback(() => {
+    setState((s) => (s.status === 'active' ? { ...s, minimized: true } : s));
+  }, []);
+
+  const expand = useCallback(() => {
+    setState((s) => (s.minimized ? { ...s, minimized: false } : s));
+  }, []);
+
   const toggleMute = useCallback(() => {
     const co = callObjectRef.current;
     if (!co) return;
@@ -766,7 +785,7 @@ export function CallProvider({ children }) {
   }, [teardownCallObject]);
 
   return (
-    <CallContext.Provider value={{ ...state, startCall, acceptCall, declineCall, hangUp, toggleMute, toggleSpeaker, loadCallFallback }}>
+    <CallContext.Provider value={{ ...state, startCall, acceptCall, declineCall, hangUp, toggleMute, toggleSpeaker, minimize, expand, loadCallFallback }}>
       {children}
     </CallContext.Provider>
   );

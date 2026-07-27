@@ -14,11 +14,13 @@ import haptics from '../src/lib/haptics';
 import { useTheme } from '../src/theme/ThemeContext';
 import { useT } from '../src/i18n/LanguageContext';
 import { useNotifications } from '../src/context/AlertContext';
+import { useCallBannerInset } from '../src/components/call/CallOverlay';
 import { space, type, radius, FONT, motion, shadow } from '../src/theme/tokens';
 
 export default function AlertsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const callInset = useCallBannerInset();
   const { colors } = useTheme();
   const t = useT();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -122,7 +124,7 @@ export default function AlertsScreen() {
   );
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
+    <View style={[styles.screen, { paddingTop: insets.top + callInset }]}>
       {/* Subtle brand wash gives the top of the screen depth instead of a flat slab. */}
       <LinearGradient
         pointerEvents="none"

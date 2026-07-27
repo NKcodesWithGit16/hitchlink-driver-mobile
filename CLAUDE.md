@@ -110,6 +110,19 @@ once at `app/_layout.js` so a call rings regardless of which tab is open. Audio-
 - **Android has no CallKit equivalent.** An incoming call when the app is backgrounded/killed on Android
   arrives only as a regular Expo push notification (`type: "call"`, routed by
   `src/hooks/usePushNotifications.js` to `app/call/[callId].js`) — not a native full-screen ring.
+- **An active call can be minimized, and that is why the call UI is two components.**
+  `src/components/call/CallOverlay.js` renders either the full-screen takeover (a `Modal`, so it covers
+  the tabs) or — when `status === 'active' && minimized` — a thin green banner pinned under the status
+  bar ("Tap to return · 02:14"). The banner is deliberately **not** a `Modal`: an iOS `Modal` swallows
+  every touch beneath it, which is what made the whole app unusable during a call. `minimized` is
+  presentational only — the Daily call object and CallKit session are untouched — and is guarded to
+  `active`, so a *ringing* call can never be hidden behind a banner nobody notices. The takeover's `‹`
+  (top-left) and Android back both minimize; back is swallowed in every other state so it can't silently
+  decline a ringing call. **Screens must add `useCallBannerInset()` to their own top padding** — it
+  returns the banner's height while minimized and 0 otherwise. Every screen with a header already does
+  (the five tabs + `alerts.js`); a new one that skips it will have its header hidden mid-call. Full-screen
+  modals *inside* a screen (image/document viewers) deliberately don't, since a `Modal` renders above the
+  banner anyway.
 - A synchronous ref (`acceptInFlightRef`), not React state, guards every accept path against double-fire
   (double tap, or CallKit's `onAnswered` racing the SignalR path) — a re-entrant `/accept` 409s and its
   catch block would otherwise tear down the call the first invocation just connected.

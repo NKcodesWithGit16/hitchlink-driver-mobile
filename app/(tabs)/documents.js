@@ -26,9 +26,13 @@ import { expiryStatus, fmtDate, daysUntil } from '../../src/lib/format';
 import { scheduleDocumentExpiryReminders } from '../../src/lib/localNotifications';
 import { space, type, radius, toneOf, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
+import { useCallBannerInset } from '../../src/components/call/CallOverlay';
 
 export default function DocumentsScreen() {
   const insets = useSafeAreaInsets();
+  // Extra top padding while a call is minimized to the banner, so the screen
+  // header isn't hidden behind it.
+  const callInset = useCallBannerInset();
   const { colors } = useTheme();
   const t = useT();
   const { userId } = useAuth();
@@ -155,7 +159,7 @@ export default function DocumentsScreen() {
   };
 
   return (
-    <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+    <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
 
       {/* ── Header ── */}
       <View style={styles.head}>

@@ -32,6 +32,7 @@ import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useNetworkStatus } from '../../src/hooks/useNetworkStatus';
 import { enqueue, flush, queueCount } from '../../src/lib/offlineQueue';
 import { TAB_BAR_CLEARANCE } from './_layout';
+import { useCallBannerInset } from '../../src/components/call/CallOverlay';
 
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useT } from '../../src/i18n/LanguageContext';
@@ -53,6 +54,7 @@ import { photos } from '../../src/theme/photos';
 export default function LoadScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const callInset = useCallBannerInset();
   const { colors } = useTheme();
   const t = useT();
   const { user } = useAuth();
@@ -343,7 +345,7 @@ export default function LoadScreen() {
 
   if (loading) {
     return (
-      <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+      <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
         <View style={styles.center}>
           <Icon name="loader" size={26} color={colors.textMuted} />
           <Text style={styles.muted}>{t('load.gettingReady')}</Text>
@@ -354,7 +356,7 @@ export default function LoadScreen() {
 
   if (error && !load) {
     return (
-      <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+      <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
         <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
         <View style={[styles.center, { flex: 1, paddingHorizontal: space[6] }]}>
           <View style={[styles.errorIcon, { backgroundColor: colors.cautionFill, borderColor: colors.bg }]}>
@@ -378,7 +380,7 @@ export default function LoadScreen() {
 
   if (!load) {
     return (
-      <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+      <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
         <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
         <ScrollView
           contentContainerStyle={{ flexGrow: 1 }}
@@ -415,7 +417,7 @@ export default function LoadScreen() {
   const delivered = status === 'Delivered';
 
   return (
-    <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+    <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
       <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
       <StatusBar
         chip={chip}

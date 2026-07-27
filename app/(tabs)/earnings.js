@@ -19,6 +19,7 @@ import { useDistanceUnit } from '../../src/lib/prefs';
 import haptics from '../../src/lib/haptics';
 import { space, type, radius, FONT, shadow, toneOf } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
+import { useCallBannerInset } from '../../src/components/call/CallOverlay';
 
 const CHART_H = 116;
 
@@ -36,6 +37,9 @@ function fmtWhen(x, months) {
 
 export default function EarningsScreen() {
   const insets = useSafeAreaInsets();
+  // The minimized-call banner sits above everything, so the hero and the
+  // sticky summary both start below it while a call is collapsed.
+  const callInset = useCallBannerInset();
   const { colors } = useTheme();
   const t = useT();
   const { userId } = useAuth();
@@ -99,7 +103,7 @@ export default function EarningsScreen() {
   const goal    = d ? (d.goal || fallbackGoal(d)) : 0;
 
   // Summary-bar reveal window: begins as the hero's bottom nears the top.
-  const showAt = Math.max(1, heroH - insets.top - 64);
+  const showAt = Math.max(1, heroH - insets.top - callInset - 64);
   const summaryOpacity = heroH > 0 ? scrollY.interpolate({
     inputRange: [showAt - 40, showAt], outputRange: [0, 1], extrapolate: 'clamp',
   }) : 0;
@@ -118,7 +122,7 @@ export default function EarningsScreen() {
           style={[styles.summaryWrap, { opacity: summaryOpacity, transform: [{ translateY: summaryShift }] }]}
         >
           <LinearGradient colors={colors.gradients.brand} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
-          <View style={{ paddingTop: insets.top }}>
+          <View style={{ paddingTop: insets.top + callInset }}>
             <View style={styles.summaryInner}>
               <Text style={styles.summaryLabel}>{range === 'week' ? t('earnings.thisWeek') : t('earnings.thisMonth')}</Text>
               <View style={styles.summaryRight}>
@@ -136,13 +140,13 @@ export default function EarningsScreen() {
       <Animated.ScrollView
         contentContainerStyle={{ paddingBottom: insets.bottom + TAB_BAR_CLEARANCE }}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.teal} progressViewOffset={insets.top} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.teal} progressViewOffset={insets.top + callInset} />}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
         scrollEventThrottle={16}
       >
         {/* ── Gradient hero ── */}
         <View onLayout={(e) => setHeroH(e.nativeEvent.layout.height)}>
-          <LinearGradient colors={colors.gradients.brand} start={{ x: 0.1, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.hero, { paddingTop: insets.top + space[4] }]}>
+          <LinearGradient colors={colors.gradients.brand} start={{ x: 0.1, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.hero, { paddingTop: insets.top + callInset + space[4] }]}>
             <Sheen />
             <View style={styles.heroTop}>
               <View>

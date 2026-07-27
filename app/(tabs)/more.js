@@ -19,9 +19,11 @@ import { hm, toDistance, money, distNum } from '../../src/lib/format';
 import { computeStanding } from '../../src/lib/standing';
 import { space, type, radius, elevation, toneOf, FONT, shadow, ACCENT_PRESETS, BG_PRESETS_NIGHT } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
+import { useCallBannerInset } from '../../src/components/call/CallOverlay';
 
 export default function MoreScreen() {
   const insets = useSafeAreaInsets();
+  const callInset = useCallBannerInset();
   const router = useRouter();
   const { colors, mode, setMode, accentKey, setAccent, bgKey, setBg, scheme } = useTheme();
   const t = useT();
@@ -151,7 +153,7 @@ export default function MoreScreen() {
     ]);
 
   return (
-    <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+    <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
       <ScrollView
         contentContainerStyle={{ paddingBottom: insets.bottom + TAB_BAR_CLEARANCE, gap: space[5] }}
         showsVerticalScrollIndicator={false}
