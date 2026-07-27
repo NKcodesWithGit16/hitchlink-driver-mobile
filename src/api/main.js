@@ -557,8 +557,19 @@ const stripDataUriPrefix = (b64) => (b64?.startsWith('data:') ? b64.slice(b64.in
 
 // Reads a picked file into raw base64 once, so callers (AI extraction + the
 // final upload) can share a single file read instead of re-reading per call.
+// On web the picker normally supplies the base64 itself; when it doesn't — a
+// chat attachment being filed into Documents arrives as a downloaded blob URL,
+// with no picker involved — fall back to reading the URI.
 export async function readDocumentBase64(uri, base64) {
-  return Platform.OS === 'web' ? stripDataUriPrefix(base64) : await new File(uri).base64();
+  if (Platform.OS !== 'web') return await new File(uri).base64();
+  if (base64) return stripDataUriPrefix(base64);
+  const blob = await (await fetch(uri)).blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(stripDataUriPrefix(String(reader.result)));
+    reader.onerror = () => reject(reader.error || new Error('Could not read file'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 // Adds a real document file (PDF, scan, etc. — not just a photo) picked via

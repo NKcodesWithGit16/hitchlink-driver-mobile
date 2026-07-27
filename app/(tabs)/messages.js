@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../../src/components/ui/Icon';
 import PeerAvatar from '../../src/components/ui/PeerAvatar';
 import RecordingBar from '../../src/components/driver/RecordingBar';
+import DocumentReviewModal from '../../src/components/driver/DocumentReviewModal';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useTheme } from '../../src/theme/ThemeContext';
@@ -90,6 +91,12 @@ export default function MessagesScreen() {
   const [viewerUri,   setViewerUri]   = useState(null);   // photo open in the fullscreen viewer
   const [kbOpen,      setKbOpen]      = useState(false);  // keyboard visibility
   const [attachMenuOpen, setAttachMenuOpen] = useState(false); // paperclip's Photo/Document sheet
+  // "Save to Documents": the picked attachment is downloaded first, then handed
+  // to the same review sheet the Documents tab uses, so the driver tags the
+  // type/label/expiry rather than filing everything as an untyped "Other" with
+  // no expiry — which would quietly defeat the credential-expiry reminders.
+  const [docSaveBusy,  setDocSaveBusy]  = useState(false);
+  const [docSaveAsset, setDocSaveAsset] = useState(null);
   const scrollRef   = useRef(null);
   const kbPad       = useRef(new Animated.Value(0)).current; // live keyboard height → wrapper padding
   const seenIdsRef  = useRef(new Set());    // dispatcher-message ids already dinged/accounted for
@@ -368,6 +375,40 @@ export default function MessagesScreen() {
       throw err; // the sheet renders it, including the HTTP status
     }
   }, [confirmDel, user?.id, load]);
+
+  // POST /documents carries the file as base64 JSON, so the whole thing passes
+  // through JS memory on the way. Rate cons and BOLs are comfortably under
+  // this; the cap is here so an oversized scan says why instead of failing as
+  // an opaque network error.
+  const DOC_SAVE_MAX_BYTES = 15 * 1024 * 1024;
+
+  const saveToDocuments = useCallback(async (msg) => {
+    if (docSaveBusy || !msg?.uri) return;
+    if (msg.sizeBytes && msg.sizeBytes > DOC_SAVE_MAX_BYTES) {
+      haptics.error();
+      Alert.alert(t('messages.tooLargeForDocsTitle'), t('messages.tooLargeForDocsBody'));
+      return;
+    }
+    setDocSaveBusy(true);
+    try {
+      // Pulls the attachment out of R2 into the cache, with the extension and
+      // sanitised name the viewer work already gave it.
+      const file = await downloadChatAttachment(msg.uri, msg.filename || 'document');
+      if (!file?.uri) throw new Error('Attachment download returned nothing');
+      setDocSaveAsset({
+        uri: file.uri,
+        name: file.fileName,
+        mimeType: msg.mimeType || file.contentType,
+        size: msg.sizeBytes,
+      });
+    } catch (err) {
+      console.error('[Chat] Could not stage attachment for Documents:', err);
+      haptics.error();
+      Alert.alert(t('messages.saveToDocsFailedTitle'), t('messages.saveToDocsFailedBody'));
+    } finally {
+      setDocSaveBusy(false);
+    }
+  }, [docSaveBusy, t]);
 
   const pickAttachment = useCallback(async () => {
     if (!user?.id) return;
@@ -714,6 +755,32 @@ export default function MessagesScreen() {
         onReply={startReply}
         onEdit={startEdit}
         onDelete={(m, canEveryone) => setConfirmDel({ msg: m, canEveryone })}
+        onSaveToDocs={saveToDocuments}
+      />
+
+      {/* ── Save to Documents: review/tag before it's filed ──
+          Deliberately NOT a <Modal> for the busy state — the download runs
+          right after the focused overlay dismisses, and stacking another
+          presented view controller there is the collision that froze this
+          screen before. A plain absolute overlay has no such problem. */}
+      {docSaveBusy ? (
+        <View style={styles.docSaveBusy} pointerEvents="auto">
+          <View style={[styles.docSaveBusyCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <ActivityIndicator size="small" color={colors.teal} />
+            <Text style={[styles.docSaveBusyText, { color: colors.textPrimary }]}>{t('messages.preparingDocument')}</Text>
+          </View>
+        </View>
+      ) : null}
+
+      <DocumentReviewModal
+        visible={!!docSaveAsset}
+        asset={docSaveAsset}
+        extraction={null}
+        extractionError={null}
+        driverId={user?.id}
+        onSaved={() => { setDocSaveAsset(null); haptics.success(); }}
+        onCancel={() => setDocSaveAsset(null)}
+        colors={colors}
       />
 
       {/* ── Delete confirmation ── */}
@@ -1099,7 +1166,7 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage, onBubbleDoubleTap,
 // screen blurs behind it, a row of quick reactions floats above/below it, and
 // Reply/Edit/Delete float as a second panel — all anchored to the message's
 // real on-screen position instead of a generic bottom sheet.
-function FocusedMessageOverlay({ focus, colors, styles, onClose, onReact, onReply, onEdit, onDelete }) {
+function FocusedMessageOverlay({ focus, colors, styles, onClose, onReact, onReply, onEdit, onDelete, onSaveToDocs }) {
   const t = useT();
   const insets = useSafeAreaInsets();
   const anim = useRef(new Animated.Value(0)).current;
@@ -1168,7 +1235,14 @@ function FocusedMessageOverlay({ focus, colors, styles, onClose, onReact, onRepl
     // sheet below decides which scopes to put on it. Previously the whole action
     // disappeared once the window lapsed, which read as "this app has no delete".
     const canDeleteForEveryone = mine && ageMin(msg?.ts) < DELETE_WINDOW_MIN;
-    const actionCount = 2 + (canEdit ? 1 : 0);
+    // Paperwork can be filed into the Documents tab from either side of the
+    // thread: the dispatcher sends a rate confirmation, or the driver
+    // photographs a signed BOL and wants their own copy on file. Gated on the
+    // attachment kind rather than the sender, so there's no invisible rule
+    // about which bubbles offer it. Voice/video/gif/sticker are excluded —
+    // nothing there belongs in a tab built around credential expiry.
+    const canSaveToDocs = msg?.kind === 'document' || msg?.kind === 'image';
+    const actionCount = 2 + (canEdit ? 1 : 0) + (canSaveToDocs ? 1 : 0);
     const ACTIONS_H = actionCount * 50 + space[2] * 2;
     const stackH = REACTION_H + GAP + anchor.height + GAP + ACTIONS_H;
 
@@ -1227,6 +1301,7 @@ function FocusedMessageOverlay({ focus, colors, styles, onClose, onReact, onRepl
         >
           <SheetAction icon="corner-up-left" label={t('messages.reply')} colors={colors} styles={styles} onPress={() => { onReply(msg); close(); }} />
           {canEdit ? <SheetAction icon="edit-2" label={t('common.edit')} colors={colors} styles={styles} onPress={() => { onEdit(msg); close(); }} /> : null}
+          {canSaveToDocs ? <SheetAction icon="folder-plus" label={t('messages.saveToDocuments')} colors={colors} styles={styles} onPress={() => closeThen(() => onSaveToDocs(msg))} /> : null}
           <SheetAction icon="trash-2" label={t('common.delete')} danger colors={colors} styles={styles} onPress={() => closeThen(() => onDelete(msg, canDeleteForEveryone))} />
         </Animated.View>
       </>
@@ -1803,6 +1878,19 @@ const makeStyles = (c) => StyleSheet.create({
   confirmDangerText: { ...type.bodyStrong, color: '#fff' },
   confirmCancel: { width: '100%', height: 48, borderRadius: radius.lg, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   confirmCancelText: { ...type.bodyStrong },
+
+  /* Save-to-Documents busy state — a plain overlay, not a Modal (see usage) */
+  docSaveBusy: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  docSaveBusyCard: {
+    flexDirection: 'row', alignItems: 'center', gap: space[3],
+    paddingVertical: space[4], paddingHorizontal: space[5],
+    borderRadius: radius.lg, borderWidth: 1,
+  },
+  docSaveBusyText: { ...type.bodyStrong },
 
   /* Fullscreen photo viewer */
   viewerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.94)', alignItems: 'center', justifyContent: 'center' },
