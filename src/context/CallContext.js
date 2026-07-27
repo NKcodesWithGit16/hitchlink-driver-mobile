@@ -224,19 +224,34 @@ export function CallProvider({ children }) {
     catch (err) { console.warn('[Call] Could not apply the audio route; call continues on the default one:', err); }
   }, []);
 
-  // `answeredAt` is the server's Call.AnsweredAt — the one moment both sides
-  // agree on. Falling back to Date.now() keeps this working against a backend
-  // that doesn't send it yet; the cost of the fallback is exactly the drift
-  // this parameter exists to remove, so it's a fallback and not the norm.
-  const startedAtFrom = (answeredAt) => {
-    const t = answeredAt ? new Date(answeredAt).getTime() : NaN;
-    // Guard a clock that's badly wrong or a malformed value: a start time in
-    // the future would render as a negative/frozen timer, which is worse than
-    // being a second or two out.
-    return Number.isFinite(t) && t <= Date.now() ? t : Date.now();
+  // Translates the server's Call.AnsweredAt onto THIS device's clock, so both
+  // ends of the call count from the same instant.
+  //
+  // The naive version — using answeredAt directly — is wrong twice over. The
+  // displayed duration comes out skewed by however far this device's clock
+  // differs from the server's; and on a device running even slightly BEHIND
+  // the server, answeredAt always looks like it's in the future, which an
+  // earlier guard here treated as a bad value and discarded. That fell back to
+  // stamping the moment the Daily join finished — i.e. silently reverting to
+  // the very drift this exists to remove, worst of all on a locked phone,
+  // where the join is slowest. Hence serverNow: the gap between it and our own
+  // clock at the moment we receive it IS the skew, so subtract it out.
+  const startedAtFrom = (answeredAt, serverNow) => {
+    const answered = answeredAt ? new Date(answeredAt).getTime() : NaN;
+    if (!Number.isFinite(answered)) return Date.now(); // backend hasn't shipped it
+    const srv = serverNow ? new Date(serverNow).getTime() : NaN;
+    // Carries the response's return-trip latency, which is small; serverNow is
+    // stamped as the response is built, not when the request arrived.
+    const skew = Number.isFinite(srv) ? srv - Date.now() : 0;
+    const started = answered - skew;
+    console.info(`[Call] Timer origin: answeredAt=${answeredAt} clockSkew=${Math.round(skew)}ms elapsedAtStart=${Math.max(0, Math.round((Date.now() - started) / 1000))}s`);
+    // Never in the future: a wildly wrong clock would otherwise render a
+    // negative or frozen timer. Clamping still keeps a usable start, unlike
+    // discarding, which threw away the corrected value entirely.
+    return Math.min(started, Date.now());
   };
 
-  const joinDailyRoom = useCallback(async (roomUrl, token, answeredAt = null) => {
+  const joinDailyRoom = useCallback(async (roomUrl, token, answeredAt = null, serverNow = null) => {
     if (!Daily) {
       console.error('[Call] Daily native module unavailable — is this build using a dev client with @daily-co/react-native-daily-js linked?');
       setState((s) => ({ ...initialState, status: 'ended', error: t('call.callingUnavailable') }));
@@ -254,7 +269,7 @@ export function CallProvider({ children }) {
     catch (err) { console.warn('[Call] setNativeInCallAudioMode failed, using the platform default route:', err); }
 
     await co.join({ url: roomUrl, token, startVideoOff: true });
-    setState((s) => ({ ...s, status: 'active', startedAt: startedAtFrom(answeredAt) }));
+    setState((s) => ({ ...s, status: 'active', startedAt: startedAtFrom(answeredAt, serverNow) }));
 
     // Assert the route explicitly once media is up. setNativeInCallAudioMode
     // decides the *default*, but a CallKit-answered call arrives with iOS's own
@@ -285,7 +300,7 @@ export function CallProvider({ children }) {
         // of sitting on "Calling…" for a resolution that already happened.
         console.info(`[Call] ${res.callId} was already accepted before we learned our own callId — joining now instead of waiting.`);
         setState((s) => ({ ...s, callId: res.callId, roomUrl: res.roomUrl, token: res.token }));
-        joinDailyRoom(res.roomUrl, res.token, pending.answeredAt).catch((err) => {
+        joinDailyRoom(res.roomUrl, res.token, pending.answeredAt, pending.serverNow).catch((err) => {
           console.error(`[Call] Join failed for ${res.callId} (early-accepted path):`, err);
           teardownCallObject();
           setState({ ...initialState, status: 'ended', error: t('call.couldNotConnect') });
@@ -418,7 +433,7 @@ export function CallProvider({ children }) {
     setState((s) => ({ ...s, status: 'connecting' }));
     try {
       const accepted = await apiAcceptCall(callId);
-      await joinDailyRoom(roomUrl, token, accepted?.answeredAt);
+      await joinDailyRoom(roomUrl, token, accepted?.answeredAt, accepted?.serverNow);
     } catch (err) {
       console.error('[Call] acceptCall failed:', err);
       endCallKitSession(callId);
@@ -476,7 +491,7 @@ export function CallProvider({ children }) {
     }
   }, []);
 
-  const onCallAccepted = useCallback(({ callId, answeredAt }) => {
+  const onCallAccepted = useCallback(({ callId, answeredAt, serverNow }) => {
     const s = stateRef.current;
     if (s.status !== 'ringing-out') return;
     if (s.callId === null) {
@@ -484,7 +499,7 @@ export function CallProvider({ children }) {
       // continuation pick it up once it knows the callId (and has
       // roomUrl/token to actually join with). See pendingResolutionRef above.
       console.info(`[Call] CallAccepted for ${callId} arrived before our own callId was known — queuing it.`);
-      pendingResolutionRef.current = { type: 'accepted', callId, answeredAt };
+      pendingResolutionRef.current = { type: 'accepted', callId, answeredAt, serverNow };
       return;
     }
     if (s.callId !== callId) return;
@@ -493,7 +508,7 @@ export function CallProvider({ children }) {
     // why. Mirrors acceptCall()'s error handling, which was previously missing
     // on this caller-side path (an unhandled rejection that left the dispatcher
     // stranded until the ring timeout eventually fired).
-    joinDailyRoom(s.roomUrl, s.token, answeredAt).catch((err) => {
+    joinDailyRoom(s.roomUrl, s.token, answeredAt, serverNow).catch((err) => {
       console.error(`[Call] Join failed for ${callId} after the dispatcher accepted:`, err);
       teardownCallObject();
       setState({ ...initialState, status: 'ended', error: t('call.couldNotConnect') });
@@ -626,7 +641,7 @@ export function CallProvider({ children }) {
       });
       console.info(`[Call] Accepting ${meta.serverCallId} via CallKit — calling /accept then joining Daily.`);
       apiAcceptCall(meta.serverCallId)
-        .then((accepted) => { console.info(`[Call] /accept succeeded for ${meta.serverCallId} — dispatcher should now see CallAccepted.`); return joinDailyRoom(meta.roomUrl, meta.token, accepted?.answeredAt); })
+        .then((accepted) => { console.info(`[Call] /accept succeeded for ${meta.serverCallId} — dispatcher should now see CallAccepted.`); return joinDailyRoom(meta.roomUrl, meta.token, accepted?.answeredAt, accepted?.serverNow); })
         .then(() => RNCallKeep.setCurrentCallActive(callUUID))
         .catch((err) => {
           console.error('[Call] CallKit accept failed:', err);
