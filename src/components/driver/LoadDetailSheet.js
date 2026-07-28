@@ -98,18 +98,26 @@ export default function LoadDetailSheet({ load, stats, colors, unit = 'mi', onCl
                   <View style={styles.track}>
                     <View style={[styles.seg, { width: pct(s.loaded), backgroundColor: colors.teal }]} />
                     <View style={[styles.seg, { width: pct(s.deadhead), backgroundColor: colors.caution }]} />
-                    <View style={[styles.marker, { left: pct(s.planned), backgroundColor: colors.textPrimary }]} />
+                    {/* No quote, no marker — a bar at 0% would read as "planned zero". */}
+                    {s.planned != null ? (
+                      <View style={[styles.marker, { left: pct(s.planned), backgroundColor: colors.textPrimary }]} />
+                    ) : null}
                   </View>
                   <View style={styles.legend}>
                     <Legend styles={styles} color={colors.teal} label={t(unit === 'km' ? 'loadDetail.loadedKm' : 'loadDetail.loadedMi', { n: distNum(s.loaded, unit) })} />
                     <Legend styles={styles} color={colors.caution} label={t(unit === 'km' ? 'loadDetail.deadheadKm' : 'loadDetail.deadheadMi', { n: distNum(s.deadhead, unit) })} />
-                    <Legend styles={styles} dashed label={t(unit === 'km' ? 'loadDetail.plannedKm' : 'loadDetail.plannedMi', { n: distNum(s.planned, unit) })} colors={colors} />
+                    {s.planned != null ? (
+                      <Legend styles={styles} dashed label={t(unit === 'km' ? 'loadDetail.plannedKm' : 'loadDetail.plannedMi', { n: distNum(s.planned, unit) })} colors={colors} />
+                    ) : null}
                   </View>
                 </View>
 
                 {/* ── Stat grid ── */}
                 <View style={styles.grid}>
-                  <Tile styles={styles} label={t('loadDetail.planned')} value={distNum(s.planned, unit)} unit={unit} sub={t('loadDetail.brokerBooked')} />
+                  <Tile styles={styles} label={t('loadDetail.planned')}
+                    value={s.planned == null ? '—' : distNum(s.planned, unit)}
+                    unit={s.planned == null ? '' : unit}
+                    sub={s.planned == null ? t('loadDetail.noQuote') : t('loadDetail.brokerBooked')} />
                   <Tile styles={styles} label={t('loadDetail.loaded')} value={distNum(s.loaded, unit)} unit={unit} valueColor={colors.tealBright}
                     sub={s.loadedDelta != null ? t('loadDetail.vsPlanned', { delta: signedNum(toDistance(s.loadedDelta, unit)) }) : t('loadDetail.underFreight')}
                     subColor={s.loadedDelta > 0 ? colors.caution : colors.textSecondary} />
@@ -121,7 +129,12 @@ export default function LoadDetailSheet({ load, stats, colors, unit = 'mi', onCl
               <View style={[styles.note, { borderColor: colors.border }]}>
                 <Icon name="navigation" size={16} color={colors.textMuted} />
                 <Text style={styles.noteText}>
-                  {t(unit === 'km' ? 'loadDetail.noGpsYetKm' : 'loadDetail.noGpsYetMi', { planned: distNum(s.planned, unit) })}
+                  {/* A null planned figure means nobody quoted a mileage, which
+                      is not the same as quoting zero — and distNum(null) prints
+                      "0", so this must not go through the {planned} string. */}
+                  {s.planned == null
+                    ? t('loadDetail.noQuoteNoGps')
+                    : t(unit === 'km' ? 'loadDetail.noGpsYetKm' : 'loadDetail.noGpsYetMi', { planned: distNum(s.planned, unit) })}
                 </Text>
               </View>
             )}

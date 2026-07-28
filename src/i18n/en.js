@@ -393,6 +393,10 @@ export const en = {
     emptyToPickup: 'Empty to pickup',
     totalDriven: 'Total driven',
     gpsOdometer: 'GPS odometer',
+    // A null planned figure means nobody quoted a mileage — not that they
+    // quoted zero. These two must never collapse into each other.
+    noQuote: 'No mileage quoted',
+    noQuoteNoGps: 'No mileage was quoted for this load, and it reported no GPS, so there are no miles to show.',
     noGpsYetMi: 'Booked for {planned} mi. Actual miles driven will show here once this load reports GPS.',
     noGpsYetKm: 'Booked for {planned} km. Actual distance driven will show here once this load reports GPS.',
     loadRate: 'Load rate',
