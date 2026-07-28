@@ -1,8 +1,9 @@
 // Per-load "actual miles" odometer.
 //
-// The heartbeat pipeline already accepts/rejects every GPS fix and measures the
-// segment between fixes with haversineMeters (see lib/geo). This module taps
-// that same accepted-fix stream and sums the segments into per-load buckets, so
+// The heartbeat pipeline already accepts/rejects every GPS fix (see lib/geo).
+// This module taps that same accepted-fix stream, measures and gates each
+// segment with odometerSegmentMeters — the phone-side mirror of the server's
+// 25 m / 30 min rules — and sums what survives into per-load buckets, so
 // on delivery the driver sees how far he ACTUALLY drove — deadhead to the
 // pickup plus loaded miles under freight — not just the broker's quoted number.
 //
@@ -15,7 +16,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { USE_MOCK } from '../api/config';
-import { haversineMeters } from './geo';
+import { odometerSegmentMeters } from './geo';
 import { loadPhase } from './load';
 import { computeLoadStats, freezeRecord, synthActuals, METERS_PER_MILE } from './loadStats';
 
@@ -86,17 +87,24 @@ export function setActiveLoad({ loadId, status, plannedMiles, rate }) {
  * (posted / delivered), or in mock mode (no real GPS to measure). Called from
  * both the foreground watch and the background task — the same accepted-fix
  * gating (isAcceptableFix) has already run before we get here.
+ *
+ * isAcceptableFix is about whether a fix is a truthful LIVE POSITION;
+ * odometerSegmentMeters is the separate question of whether the move between
+ * two of them may be added to a DISTANCE TOTAL. Both are needed, and only the
+ * second mirrors the server's 25 m / 30 min rules — without it this record
+ * drifted upward against the server's for the same trip, because GPS wander on
+ * a parked truck counted here and didn't there.
  */
 export function recordSegment(prevFix, curFix) {
   if (USE_MOCK || !prevFix || !curFix) return Promise.resolve();
+  // Gate before touching storage: on a parked truck almost every fix
+  // contributes nothing, and this keeps them off the serialized
+  // read-modify-write chain entirely instead of queueing a no-op write.
+  const meters = odometerSegmentMeters(prevFix, curFix);
+  if (meters <= 0) return Promise.resolve();
   return serialize(async () => {
     const a = await readActive();
     if (!a || (a.phase !== 'deadhead' && a.phase !== 'loaded')) return;
-    const meters = haversineMeters(
-      prevFix.coords.latitude, prevFix.coords.longitude,
-      curFix.coords.latitude, curFix.coords.longitude,
-    );
-    if (!isFinite(meters) || meters <= 0) return;
     if (a.phase === 'loaded') a.loadedMeters += meters;
     else a.deadheadMeters += meters;
     await writeActive(a);

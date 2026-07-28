@@ -2,8 +2,11 @@ import {
   haversineMeters,
   deriveSpeedKph,
   isAcceptableFix,
+  odometerSegmentMeters,
   MAX_ACCURACY_M,
   MAX_PLAUSIBLE_KPH,
+  MIN_ODOMETER_SEGMENT_METERS,
+  MAX_ODOMETER_GAP_SEC,
 } from '../src/lib/geo';
 
 // Helper to build an expo-location-shaped fix.
@@ -86,4 +89,49 @@ describe('isAcceptableFix', () => {
 test('tunable defaults stay conservative', () => {
   expect(MAX_ACCURACY_M).toBe(100);
   expect(MAX_PLAUSIBLE_KPH).toBe(200);
+});
+
+describe('odometerSegmentMeters', () => {
+  // ~111.2 m per 0.001 deg of latitude, so these distances are easy to reason
+  // about: 0.001 deg ≈ 111 m (counts), 0.0001 deg ≈ 11 m (receiver drift).
+  test('counts a real move between two close-in-time fixes', () => {
+    const m = odometerSegmentMeters(fix(40.0, -74, { t: 0 }), fix(40.001, -74, { t: 10_000 }));
+    expect(m).toBeGreaterThan(110);
+    expect(m).toBeLessThan(112);
+  });
+
+  test('drops GPS wander below the minimum segment', () => {
+    // ~11 m — a parked rig drifting, not a truck moving.
+    expect(odometerSegmentMeters(fix(40.0, -74, { t: 0 }), fix(40.0001, -74, { t: 10_000 }))).toBe(0);
+  });
+
+  test('drops a segment whose gap exceeds the maximum', () => {
+    // A real 1.1 km move, but 45 min apart — the road actually driven between
+    // them is unknown, and a straight chord across it would be a guess.
+    expect(odometerSegmentMeters(fix(40, -74, { t: 0 }), fix(40.01, -74, { t: 2_700_000 }))).toBe(0);
+  });
+
+  test('counts a segment right at the gap limit', () => {
+    expect(odometerSegmentMeters(fix(40, -74, { t: 0 }), fix(40.01, -74, { t: 1_800_000 }))).toBeGreaterThan(0);
+  });
+
+  test('drops a pair with a missing or non-advancing clock', () => {
+    // Without a usable interval the gap rule cannot be applied at all.
+    expect(odometerSegmentMeters(fix(40, -74, { t: 5000 }), fix(40.01, -74, { t: 5000 }))).toBe(0);
+    expect(odometerSegmentMeters(fix(40, -74, { t: 5000 }), fix(40.01, -74, { t: 1000 }))).toBe(0);
+  });
+
+  test('drops an incomplete pair rather than throwing', () => {
+    expect(odometerSegmentMeters(null, fix(40, -74, { t: 1000 }))).toBe(0);
+    expect(odometerSegmentMeters(fix(40, -74, { t: 0 }), null)).toBe(0);
+    expect(odometerSegmentMeters(fix(40, -74, { t: 0 }), { timestamp: 1000, coords: { latitude: NaN, longitude: NaN } })).toBe(0);
+  });
+
+  // These must track HeartbeatCommandHandler's MinOdometerSegmentMeters /
+  // MaxOdometerGapSeconds. If they drift apart, the phone's fallback record
+  // and the server's authoritative one disagree for the same trip.
+  test('constants mirror the backend odometer rules', () => {
+    expect(MIN_ODOMETER_SEGMENT_METERS).toBe(25);
+    expect(MAX_ODOMETER_GAP_SEC).toBe(1800);
+  });
 });

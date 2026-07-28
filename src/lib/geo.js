@@ -62,6 +62,49 @@ export function deriveSpeedKph(prevFix, curFix) {
   return (meters / dt) * 3.6;
 }
 
+// ── Odometer segment gating ────────────────────────────────────────────────
+// These mirror HeartbeatCommandHandler's MinOdometerSegmentMeters /
+// MaxOdometerGapSeconds so the phone's own actual-miles record follows exactly
+// the same rules as the server's. They deliberately differ from isAcceptableFix
+// below: a fix can be perfectly good to REPORT as the live position and still
+// be wrong to fold into a distance total.
+//
+// GPS wander while parked is real: a rig sitting at a truck stop for a 10-hour
+// break would otherwise accumulate phantom miles a few metres at a time.
+export const MIN_ODOMETER_SEGMENT_METERS = 25;
+
+// Past this gap the road actually driven is unknown — the app was killed, or
+// there was no signal for an hour — and a straight chord across it would be a
+// guess. Skipping undercounts through outages, which is the honest failure
+// direction for a number a driver may one day be paid on.
+export const MAX_ODOMETER_GAP_SEC = 1800; // 30 minutes
+
+/**
+ * Metres to fold into a load's odometer for the move between two accepted
+ * fixes, or 0 when the segment must not count: no pair to measure, a missing
+ * or non-advancing clock, too long a gap, or a move small enough to be the
+ * receiver drifting rather than the truck moving.
+ */
+export function odometerSegmentMeters(prevFix, curFix, opts = {}) {
+  const minMeters = opts.minSegmentMeters ?? MIN_ODOMETER_SEGMENT_METERS;
+  const maxGapSec = opts.maxGapSec ?? MAX_ODOMETER_GAP_SEC;
+
+  const a = prevFix?.coords;
+  const b = curFix?.coords;
+  if (!a || !b) return 0;
+  if (!isFinite(a.latitude) || !isFinite(a.longitude)) return 0;
+  if (!isFinite(b.latitude) || !isFinite(b.longitude)) return 0;
+
+  // Without a usable clock we can't tell a 30-second hop from a 3-hour one, so
+  // the gap rule can't be applied at all — don't guess, don't count.
+  const dt = dtSeconds(prevFix, curFix);
+  if (!isFinite(dt) || dt <= 0 || dt > maxGapSec) return 0;
+
+  const meters = haversineMeters(a.latitude, a.longitude, b.latitude, b.longitude);
+  if (!isFinite(meters) || meters < minMeters) return 0;
+  return meters;
+}
+
 /**
  * Whether to accept a fix as the driver's live position. Rejects coarse/cached
  * fixes (poor reported accuracy) and short-window teleports (implausible implied
