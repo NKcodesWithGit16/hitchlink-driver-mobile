@@ -24,10 +24,17 @@ try {
 
 // Show pushes even while the app is foregrounded — a "New Load Assigned"
 // banner is useful mid-drive regardless of which screen is open.
+// shouldShowBanner/shouldShowList replaced the old shouldShowAlert in
+// expo-notifications 54+. The deprecated key is NOT mapped onto the new ones —
+// NotificationsHandler just logs a warning and forwards the object as-is, so a
+// handler that only sets shouldShowAlert leaves both new flags undefined and
+// the banner never renders. Both are required for the "New Load Assigned"
+// heads-up to actually appear while the driver has the app open.
 if (Notifications?.setNotificationHandler) {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
-      shouldShowAlert: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
       shouldPlaySound: true,
       shouldSetBadge: true,
     }),
@@ -91,7 +98,8 @@ export async function unregisterPushNotifications(driverId) {
  * Mount once (root layout). Handles notification taps — including the tap
  * that cold-started the app — and clears the badge when the app opens.
  * Data shapes come from the backend: { type: "LoadAssigned"|"LoadCancelled",
- * loadId }, { type: "chat", driverId }, and { type: "call", callId }.
+ * loadId }, { type: "chat", driverId }, { type: "call", callId }, and
+ * { type: "weather", loadId } (see HeartbeatCommandHandler.CheckRouteWeatherAsync).
  */
 export function usePushNotificationRouting(signedIn) {
   const router = useRouter();
@@ -103,7 +111,12 @@ export function usePushNotificationRouting(signedIn) {
     const route = (data) => {
       if (data?.type === 'chat') router.push('/(tabs)/messages');
       else if (data?.type === 'call' && data?.callId) router.push(`/call/${data.callId}`);
-      else if (data?.type === 'LoadAssigned' || data?.type === 'LoadCancelled') router.push('/(tabs)');
+      // 'document' and 'hos' come from the locally-scheduled reminders in
+      // src/lib/localNotifications.js — tapping one should land on the screen
+      // that lets the driver actually act on it.
+      else if (data?.type === 'document') router.push('/(tabs)/documents');
+      else if (data?.type === 'hos') router.push('/(tabs)/more');
+      else if (data?.type === 'LoadAssigned' || data?.type === 'LoadCancelled' || data?.type === 'weather') router.push('/(tabs)');
     };
 
     // Tap while the app is running (foreground or backgrounded).

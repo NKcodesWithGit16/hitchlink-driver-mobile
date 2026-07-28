@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import { File, Paths } from 'expo-file-system';
+import * as LegacyFS from 'expo-file-system/legacy';
 import { apiFetch, apiUpload, apiFetchRaw, USE_MOCK, BASE } from './client';
 import * as mock from '../data/mock';
 
@@ -161,10 +162,15 @@ export async function declineLoad(loadId, driverId, reason) {
   return apiFetch(`/loads/${loadId}/decline`, { method: 'POST', body: JSON.stringify({ driverId, reason: reason ?? null }) });
 }
 
-export async function fetchMessages(driverId) {
+// `limit` is sent explicitly rather than relying on the server's default (100).
+// GET /chat/{driverId} takes the NEWEST `limit` rows and has no cursor/`before`
+// parameter, so this is a window on the tail of the thread, not a page: there
+// is currently no way to reach anything older than the newest `limit` messages.
+// Loading further back needs a cursor added to ChatController.GetHistory.
+export async function fetchMessages(driverId, { limit = 100 } = {}) {
   if (USE_MOCK) { await wait(); return mock.messages; }
   if (!driverId) return [];
-  const params = new URLSearchParams({ as_: 'driver', actorId: String(driverId) });
+  const params = new URLSearchParams({ as_: 'driver', actorId: String(driverId), limit: String(limit) });
   const data = await apiFetch(`/chat/${driverId}?${params}`, { allow404: true });
   return Array.isArray(data) ? data.map(normalizeMessage) : [];
 }
@@ -258,32 +264,72 @@ export async function sendVoiceMessage(driverId, { uri, durationSec, waveformPea
   return apiUpload(`/chat/${driverId}/voice`, form);
 }
 
-// Sends a photo into the dispatcher chat. Three steps, mirroring the
-// dispatcher web app's attachment flow: sign → PUT the bytes straight to R2
-// → create the message with the storage key. Used by the Messages attach
-// button and the proof-of-delivery capture on the load screen.
+// ─── Direct-to-R2 uploads (chat attachments, load photos) ──────────────────
+// Every one of these is sign → PUT the bytes straight to R2 → create the record
+// with the returned storage key, so the bytes never pass through Railway.
+//
+// Reading the picked file is deliberately NOT `fetch(fileUri)`. That works on
+// iOS (RCTFileRequestHandler serves file:// URIs) but throws on Android, where
+// RN hands the URL to OkHttp, which only accepts http/https — so every chat
+// photo and document upload failed there before it made a single network call.
+// expo-file-system understands file:// on both platforms, and its `uploadAsync`
+// streams the file natively instead of pulling it through JS, which also keeps
+// a 40 MB document from being base64'd into memory just to be sent.
+
+/** Size + MIME of a picked local file, for the sign request. */
+async function statLocalFile(uri, fallbackMime) {
+  if (Platform.OS === 'web') {
+    // On web the picker hands back a blob:/data: URL, which fetch resolves.
+    const blob = await (await fetch(uri)).blob();
+    return { sizeBytes: blob.size, mimeType: blob.type || fallbackMime, blob };
+  }
+  const file = new File(uri);
+  if (!file.exists) throw new Error(`File no longer exists: ${uri}`);
+  // The sign endpoint rejects sizeBytes <= 0 with a bare 400 — catch it here so
+  // the failure names the actual problem instead of blaming the server.
+  if (!(file.size > 0)) throw new Error(`File is empty or unreadable: ${uri}`);
+  return { sizeBytes: file.size, mimeType: file.type || fallbackMime, blob: null };
+}
+
+/**
+ * PUTs a local file to a presigned R2 URL. No auth header — the signed URL
+ * carries its own — but the Content-Type must match what was signed, because
+ * R2 folds it into the signature.
+ */
+async function putSignedFile(uploadUrl, uri, mimeType, blob, label) {
+  if (Platform.OS === 'web') {
+    const put = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': mimeType },
+      body: blob,
+    });
+    if (!put.ok) throw new Error(`${label} upload failed (${put.status})`);
+    return;
+  }
+  const put = await LegacyFS.uploadAsync(uploadUrl, uri, {
+    httpMethod: 'PUT',
+    uploadType: LegacyFS.FileSystemUploadType.BINARY_CONTENT,
+    headers: { 'Content-Type': mimeType },
+  });
+  if (put.status < 200 || put.status >= 300) {
+    throw new Error(`${label} upload failed (${put.status})`);
+  }
+}
+
+// Sends a photo into the dispatcher chat. Used by the Messages attach button
+// and the proof-of-delivery capture on the load screen.
 export async function sendPhotoMessage(driverId, { uri, text = null, replyToMessageId = null } = {}) {
   if (USE_MOCK) { await wait(200); return { ok: true }; }
   if (!driverId || !uri) return null;
 
-  // RN's fetch reads the picker's file:// URI into a Blob; on web the picker
-  // hands back a blob:/data: URL which resolves the same way.
-  const blob = await (await fetch(uri)).blob();
-  const mimeType = blob.type || 'image/jpeg';
+  const { sizeBytes, mimeType, blob } = await statLocalFile(uri, 'image/jpeg');
 
   const signed = await apiFetch(`/chat/${driverId}/attachments/sign`, {
     method: 'POST',
-    body: JSON.stringify({ kind: 'photo', mimeType, sizeBytes: blob.size }),
+    body: JSON.stringify({ kind: 'photo', mimeType, sizeBytes }),
   });
 
-  // Bare fetch — the signed URL carries its own auth, and the Content-Type
-  // must match what was signed (R2 folds it into the signature).
-  const put = await fetch(signed.uploadUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': mimeType },
-    body: blob,
-  });
-  if (!put.ok) throw new Error(`Photo upload failed (${put.status})`);
+  await putSignedFile(signed.uploadUrl, uri, mimeType, blob, 'Photo');
 
   return apiFetch(`/chat/${driverId}/message`, {
     method: 'POST',
@@ -296,7 +342,7 @@ export async function sendPhotoMessage(driverId, { uri, text = null, replyToMess
         storageKey: signed.storageKey,
         kind: 'photo',
         mimeType,
-        sizeBytes: blob.size,
+        sizeBytes,
         filename: 'photo.jpg',
       }],
     }),
@@ -304,29 +350,23 @@ export async function sendPhotoMessage(driverId, { uri, text = null, replyToMess
 }
 
 // Sends a document into the dispatcher chat from the driver's device. Same
-// three-step flow as sendPhotoMessage (sign → PUT bytes straight to R2 →
-// create the message with the storage key) — not the base64-to-/documents
-// flow uploadDocument() uses, which targets the separate load-paperwork feature.
+// flow as sendPhotoMessage — not the base64-to-/documents flow uploadDocument()
+// uses, which targets the separate load-paperwork feature.
 export async function sendDocumentMessage(driverId, { uri, name, mimeType, replyToMessageId = null } = {}) {
   if (USE_MOCK) { await wait(200); return { ok: true }; }
   if (!driverId || !uri) return null;
 
-  const blob = await (await fetch(uri)).blob();
-  const finalMime = mimeType || blob.type || 'application/octet-stream';
+  // The picker's own mimeType wins here: it comes from the provider that
+  // actually owns the file, whereas ours is guessed from the extension.
+  const stat = await statLocalFile(uri, 'application/octet-stream');
+  const finalMime = mimeType || stat.mimeType || 'application/octet-stream';
 
   const signed = await apiFetch(`/chat/${driverId}/attachments/sign`, {
     method: 'POST',
-    body: JSON.stringify({ kind: 'document', mimeType: finalMime, sizeBytes: blob.size }),
+    body: JSON.stringify({ kind: 'document', mimeType: finalMime, sizeBytes: stat.sizeBytes }),
   });
 
-  // Bare fetch — the signed URL carries its own auth, and the Content-Type
-  // must match what was signed (R2 folds it into the signature).
-  const put = await fetch(signed.uploadUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': finalMime },
-    body: blob,
-  });
-  if (!put.ok) throw new Error(`Document upload failed (${put.status})`);
+  await putSignedFile(signed.uploadUrl, uri, finalMime, stat.blob, 'Document');
 
   return apiFetch(`/chat/${driverId}/message`, {
     method: 'POST',
@@ -339,11 +379,76 @@ export async function sendDocumentMessage(driverId, { uri, name, mimeType, reply
         storageKey: signed.storageKey,
         kind: 'document',
         mimeType: finalMime,
-        sizeBytes: blob.size,
+        sizeBytes: stat.sizeBytes,
         filename: name || 'document',
       }],
     }),
   });
+}
+
+// ─── Opening a downloaded file on the device ───────────────────────────────
+// iOS works out what a file IS from its extension, which it resolves to a UTI.
+// Both download paths below used to write the cache file under whatever name
+// the record carried — and that is often a human label like "CDL" rather than
+// a filename, so the file landed extensionless. With no extension iOS can't
+// resolve a type, the share sheet offers nothing useful, and no PDF viewer
+// appears as a target at all. Android's content:// handoff behaves the same.
+//
+// expo-sharing's `mimeType` option is Android-only (see its SharingOptions
+// type); iOS reads `UTI`. Passing only mimeType, as both callers did, means iOS
+// got no type hint whatsoever on top of the missing extension.
+
+const MIME_EXT = {
+  'application/pdf': 'pdf',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/heic': 'heic',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'text/plain': 'txt',
+  'text/csv': 'csv',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+};
+
+const MIME_UTI = {
+  'application/pdf': 'com.adobe.pdf',
+  'image/jpeg': 'public.jpeg',
+  'image/png': 'public.png',
+  'image/heic': 'public.heic',
+  'image/gif': 'com.compuserve.gif',
+  'text/plain': 'public.plain-text',
+  'text/csv': 'public.comma-separated-values-text',
+  'application/msword': 'com.microsoft.word.doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'org.openxmlformats.wordprocessingml.document',
+  'application/vnd.ms-excel': 'com.microsoft.excel.xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'org.openxmlformats.spreadsheetml.sheet',
+  'video/mp4': 'public.mpeg-4',
+  'video/quicktime': 'com.apple.quicktime-movie',
+};
+
+const baseMime = (ct) => (ct || '').split(';')[0].trim().toLowerCase();
+
+/** iOS Uniform Type Identifier for a Content-Type, for Sharing.shareAsync. */
+export const utiForContentType = (ct) => MIME_UTI[baseMime(ct)] || null;
+
+// A cache filename has to survive being a path segment, and carry the right
+// extension for the OS to type it. Labels legitimately contain spaces and
+// slashes ("Medical Card", "Insurance / COI"), neither of which belongs here.
+function cacheFileName(name, contentType) {
+  const cleaned = (name || 'file')
+    .replace(/[/\\:*?"<>|]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80) || 'file';
+
+  const ext = MIME_EXT[baseMime(contentType)];
+  if (!ext) return cleaned;
+  return cleaned.toLowerCase().endsWith(`.${ext}`) ? cleaned : `${cleaned}.${ext}`;
 }
 
 // Downloads a chat attachment (document/video) for local viewing/sharing.
@@ -360,41 +465,33 @@ export async function downloadChatAttachment(url, fileName = 'file') {
 
   if (Platform.OS === 'web') {
     const blob = await res.blob();
-    return { uri: URL.createObjectURL(blob), contentType, fileName };
+    return { uri: URL.createObjectURL(blob), contentType, fileName, uti: null };
   }
+  const named = cacheFileName(fileName, contentType);
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const dest = new File(Paths.cache, fileName);
+  const dest = new File(Paths.cache, named);
   if (dest.exists) dest.delete();
   dest.create();
   dest.write(bytes);
-  return { uri: dest.uri, contentType, fileName };
+  return { uri: dest.uri, contentType, fileName: named, uti: utiForContentType(contentType) };
 }
 
 // Stores a proof-of-delivery photo against the load itself — the permanent
-// record the dispatcher's Completed Loads history reads from. Same three-step
-// flow as sendPhotoMessage (sign → PUT the bytes straight to R2 → create the
-// record with the storage key), but against POST /loads/{id}/photos instead of
-// the chat thread. Captured at delivery on the load screen.
+// record the dispatcher's Completed Loads history reads from. Same flow as
+// sendPhotoMessage, but against POST /loads/{id}/photos instead of the chat
+// thread. Captured at delivery on the load screen.
 export async function uploadLoadPhoto(loadId, { uri, caption = 'Delivery paperwork' } = {}) {
   if (USE_MOCK) { await wait(200); return { ok: true }; }
   if (!loadId || !uri) return null;
 
-  const blob = await (await fetch(uri)).blob();
-  const mimeType = blob.type || 'image/jpeg';
+  const { sizeBytes, mimeType, blob } = await statLocalFile(uri, 'image/jpeg');
 
   const signed = await apiFetch(`/loads/${loadId}/photos/sign`, {
     method: 'POST',
-    body: JSON.stringify({ mimeType, sizeBytes: blob.size }),
+    body: JSON.stringify({ mimeType, sizeBytes }),
   });
 
-  // Bare fetch — the signed URL carries its own auth, and the Content-Type must
-  // match what was signed (R2 folds it into the signature).
-  const put = await fetch(signed.uploadUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': mimeType },
-    body: blob,
-  });
-  if (!put.ok) throw new Error(`Load photo upload failed (${put.status})`);
+  await putSignedFile(signed.uploadUrl, uri, mimeType, blob, 'Load photo');
 
   return apiFetch(`/loads/${loadId}/photos`, {
     method: 'POST',
@@ -403,7 +500,7 @@ export async function uploadLoadPhoto(loadId, { uri, caption = 'Delivery paperwo
       photos: [{
         storageKey: signed.storageKey,
         mimeType,
-        sizeBytes: blob.size,
+        sizeBytes,
         caption,
       }],
     }),
@@ -460,8 +557,19 @@ const stripDataUriPrefix = (b64) => (b64?.startsWith('data:') ? b64.slice(b64.in
 
 // Reads a picked file into raw base64 once, so callers (AI extraction + the
 // final upload) can share a single file read instead of re-reading per call.
+// On web the picker normally supplies the base64 itself; when it doesn't — a
+// chat attachment being filed into Documents arrives as a downloaded blob URL,
+// with no picker involved — fall back to reading the URI.
 export async function readDocumentBase64(uri, base64) {
-  return Platform.OS === 'web' ? stripDataUriPrefix(base64) : await new File(uri).base64();
+  if (Platform.OS !== 'web') return await new File(uri).base64();
+  if (base64) return stripDataUriPrefix(base64);
+  const blob = await (await fetch(uri)).blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(stripDataUriPrefix(String(reader.result)));
+    reader.onerror = () => reject(reader.error || new Error('Could not read file'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 // Adds a real document file (PDF, scan, etc. — not just a photo) picked via
@@ -509,14 +617,18 @@ export async function fetchDocumentContent(documentId, fileName = 'document') {
 
   if (Platform.OS === 'web') {
     const blob = await res.blob();
-    return { blobUrl: URL.createObjectURL(blob), contentType, fileName };
+    // `uri` (not `blobUrl`) — the Documents screen read `result.blobUrl` while
+    // this returned `blobUrl` only here and `uri` everywhere else, so the web
+    // viewer was calling window.open(undefined).
+    return { uri: URL.createObjectURL(blob), contentType, fileName, uti: null };
   }
+  const named = cacheFileName(fileName, contentType);
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const dest = new File(Paths.cache, fileName);
+  const dest = new File(Paths.cache, named);
   if (dest.exists) dest.delete();
   dest.create();
   dest.write(bytes);
-  return { uri: dest.uri, contentType, fileName };
+  return { uri: dest.uri, contentType, fileName: named, uti: utiForContentType(contentType) };
 }
 
 // Reads a freshly-picked image via Claude Haiku vision (server-side — see

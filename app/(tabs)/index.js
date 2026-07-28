@@ -15,6 +15,7 @@ import WeatherStrip from '../../src/components/driver/WeatherStrip';
 import ActionGrid from '../../src/components/driver/ActionGrid';
 import StageStepper from '../../src/components/driver/StageStepper';
 import MissionStrip from '../../src/components/driver/MissionStrip';
+import LoadOfferCard from '../../src/components/driver/LoadOfferCard';
 import PrimaryAction from '../../src/components/ui/PrimaryAction';
 import SectionLabel from '../../src/components/ui/SectionLabel';
 import Card from '../../src/components/ui/Card';
@@ -31,17 +32,21 @@ import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useNetworkStatus } from '../../src/hooks/useNetworkStatus';
 import { enqueue, flush, queueCount } from '../../src/lib/offlineQueue';
 import { TAB_BAR_CLEARANCE } from './_layout';
+import { useCallBannerInset } from '../../src/components/call/CallOverlay';
 
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useAlert } from '../../src/context/AlertContext';
-import { fetchActiveLoad, updateLoadStatus, undoLoadStatus, sendPhotoMessage, uploadLoadPhoto } from '../../src/api/main';
+import { useWeather } from '../../src/context/WeatherContext';
+import { fetchActiveLoad, fetchHos, updateLoadStatus, undoLoadStatus, sendPhotoMessage, uploadLoadPhoto, acceptLoad, declineLoad } from '../../src/api/main';
 import { useLoadStatusSocket } from '../../src/hooks/useLoadStatusSocket';
 import { useConfirmEveryStep, useDistanceUnit } from '../../src/lib/prefs';
-import { hos, weatherNow } from '../../src/data/mock';
+import { USE_MOCK } from '../../src/api/config';
+import { hos as mockHos, weatherNow as mockWeatherNow } from '../../src/data/mock';
 import { nextAction, statusChip, nextStop, isPrePickup } from '../../src/lib/load';
 import { setActiveLoad, finalizeActiveLoad, computeLoadStats } from '../../src/lib/odometer';
+import { scheduleHosBreakReminder } from '../../src/lib/localNotifications';
 import { money, num, distNum, distRpm } from '../../src/lib/format';
 import { space, type, radius, FONT, shadow, toneOf, tap } from '../../src/theme/tokens';
 import { photos } from '../../src/theme/photos';
@@ -49,10 +54,12 @@ import { photos } from '../../src/theme/photos';
 export default function LoadScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const callInset = useCallBannerInset();
   const { colors } = useTheme();
   const t = useT();
   const { user } = useAuth();
   const { unreadCount, activeAlert, openModal: openAlert } = useAlert();
+  const { weatherNow: liveWeatherNow } = useWeather();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const online = useNetworkStatus();
   const confirmEveryStep = useConfirmEveryStep();
@@ -70,6 +77,28 @@ export default function LoadScreen() {
   const [error, setError] = useState(false);
   const [undo, setUndo] = useState(null); // { prevStatus, message }
   const [deliveredStats, setDeliveredStats] = useState(null); // frozen actual miles/rpm
+  const [hos, setHos] = useState(mockHos);
+
+  // Real HOS clocks for the status-bar pill — was previously always the mock
+  // fixture here even in live mode (the More tab already fetched this
+  // correctly; this screen just never did). Falls back to the mock/last-known
+  // value on a failed fetch rather than showing nothing.
+  useEffect(() => {
+    if (!user?.id) return;
+    fetchHos(user.id).then((d) => { if (d) setHos(d); }).catch(() => {});
+  }, [user?.id]);
+
+  // Turn the break clock into an actual reminder. Until now breakInMinutes was
+  // rendered on the More tab and nowhere else, so a driver only found out a
+  // break was due if they happened to open that screen. Re-scheduled on every
+  // HOS change; the helper cancels the previous one so these never stack.
+  useEffect(() => {
+    if (!user?.id || hos?.breakInMinutes == null) return;
+    scheduleHosBreakReminder(hos, {
+      title: t('reminders.hosBreakTitle'),
+      body: t('reminders.hosBreakBody'),
+    }).catch(() => {});
+  }, [user?.id, hos?.breakInMinutes, t]);
 
   // Point the actual-miles odometer at the running load so it accrues GPS
   // distance to the right bucket (deadhead vs loaded) as the status advances.
@@ -253,6 +282,50 @@ export default function LoadScreen() {
     runAction(action);
   };
 
+  // ── Load offer: accept / decline ──────────────────────────────────────
+  // Only meaningful while the load is Assigned and unaccepted; the backend
+  // rejects both calls in any other state, so the UI mirrors that gate rather
+  // than offering a button that will 400.
+  const needsAcceptance = status === 'Assigned' && !load?.acceptedAt;
+
+  const handleAccept = async () => {
+    if (!load?.id || busy) return;
+    haptics.success();
+    setBusy(true);
+    try {
+      await acceptLoad(load.id, user?.id);
+      // Re-read rather than patching locally: accept stamps AcceptedAt server
+      // side, and that field is what dismisses this card.
+      await loadData();
+    } catch (e) {
+      haptics.error();
+      // A 4xx means the offer is no longer live (reassigned, cancelled, or
+      // already accepted elsewhere) — resync so the screen tells the truth.
+      if (e?.status >= 400 && e?.status < 500) await loadData();
+      Alert.alert(t('load.acceptFailTitle'), t('load.acceptFailBody'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDecline = async (reason) => {
+    if (!load?.id || busy) return;
+    setBusy(true);
+    try {
+      await declineLoad(load.id, user?.id, reason);
+      haptics.success();
+      // The load leaves this driver entirely — refetch drops us to the "no
+      // active load" state instead of leaving a stale card on screen.
+      await loadData();
+    } catch (e) {
+      haptics.error();
+      if (e?.status >= 400 && e?.status < 500) await loadData();
+      Alert.alert(t('load.declineFailTitle'), t('load.declineFailBody'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleUndo = async () => {
     if (!undo) return;
     haptics.tap();
@@ -272,7 +345,7 @@ export default function LoadScreen() {
 
   if (loading) {
     return (
-      <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+      <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
         <View style={styles.center}>
           <Icon name="loader" size={26} color={colors.textMuted} />
           <Text style={styles.muted}>{t('load.gettingReady')}</Text>
@@ -283,7 +356,7 @@ export default function LoadScreen() {
 
   if (error && !load) {
     return (
-      <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+      <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
         <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
         <View style={[styles.center, { flex: 1, paddingHorizontal: space[6] }]}>
           <View style={[styles.errorIcon, { backgroundColor: colors.cautionFill, borderColor: colors.bg }]}>
@@ -307,7 +380,7 @@ export default function LoadScreen() {
 
   if (!load) {
     return (
-      <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+      <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
         <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
         <ScrollView
           contentContainerStyle={{ flexGrow: 1 }}
@@ -344,9 +417,16 @@ export default function LoadScreen() {
   const delivered = status === 'Delivered';
 
   return (
-    <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+    <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
       <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
-      <StatusBar chip={chip} driveMinutesLeft={hos.driveMinutesLeft} online={online} onHosPress={() => router.push('/(tabs)/more')} />
+      <StatusBar
+        chip={chip}
+        driveMinutesLeft={hos.driveMinutesLeft}
+        online={online}
+        onHosPress={() => router.push('/(tabs)/more')}
+        weatherAlert={activeAlert}
+        onWeatherAlertPress={openAlert}
+      />
       {!online ? <OfflineBanner pending={pending} /> : null}
 
       <ScrollView
@@ -370,11 +450,35 @@ export default function LoadScreen() {
               <MissionStrip load={load} />
             </FadeInView>
 
-            {/* ── JOURNEY + ACTION: progress → what to do right now ── */}
+            {/* ── WEATHER AHEAD: calm when clear, loud when dangerous.
+                Placed right up top, before the action card, so it doesn't
+                need a scroll to notice — the header badge above also flags
+                an active alert persistently, but this is where the full
+                detail (conditions / near / eta) lives. ── */}
             <FadeInView delay={50}>
+              <WeatherStrip now={USE_MOCK ? mockWeatherNow : liveWeatherNow} alert={activeAlert} onPress={openAlert} />
+            </FadeInView>
+
+            {/* ── OFFER: accept before anything else ──
+                An unaccepted assignment replaces the usual contextual action —
+                the driver shouldn't be able to mark "arrived at pickup" on a
+                load they never agreed to run. ── */}
+            {needsAcceptance ? (
+              <FadeInView delay={100}>
+                <LoadOfferCard
+                  load={load}
+                  busy={busy}
+                  onAccept={handleAccept}
+                  onDecline={handleDecline}
+                />
+              </FadeInView>
+            ) : null}
+
+            {/* ── JOURNEY + ACTION: progress → what to do right now ── */}
+            <FadeInView delay={needsAcceptance ? 150 : 100}>
               <Card style={styles.journeyCard} elevated>
                 <StageStepper status={status} />
-                {action ? (
+                {action && !needsAcceptance ? (
                   <>
                     <View style={[styles.journeyDivider, { backgroundColor: colors.border }]} />
                     <PrimaryAction
@@ -390,13 +494,8 @@ export default function LoadScreen() {
             </FadeInView>
 
             {/* ── CURRENT STOP ── */}
-            <FadeInView delay={100}>
-              <NextStopCard stop={stop} />
-            </FadeInView>
-
-            {/* ── WEATHER AHEAD: calm when clear, loud when dangerous ── */}
             <FadeInView delay={150}>
-              <WeatherStrip now={weatherNow} alert={activeAlert} onPress={openAlert} />
+              <NextStopCard stop={stop} />
             </FadeInView>
           </>
         )}

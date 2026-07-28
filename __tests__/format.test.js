@@ -41,11 +41,29 @@ describe('dates', () => {
     expect(daysUntil('garbage', today)).toBeNull();
   });
 
+  // 'YYYY-MM-DD' N days from today in LOCAL time. Deliberately not
+  // toISOString(), which renders in UTC — local midnight falls on the previous
+  // UTC day in any positive-offset zone, which would shift every date by one.
+  const localIso = (offsetDays = 0) => {
+    const n = new Date();
+    const d = new Date(n.getFullYear(), n.getMonth(), n.getDate() + offsetDays);
+    const p = (x) => String(x).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+
+  test('daysUntil defaults to the real today, not a baked-in demo date', () => {
+    // Regression guard: this used to default to a fixed 2026-06-05, which made
+    // the Documents screen report already-expired credentials as valid.
+    expect(daysUntil(localIso(0))).toBe(0);
+    expect(daysUntil(localIso(10))).toBe(10);
+    expect(daysUntil(localIso(-10))).toBe(-10);
+  });
+
   test('expiryStatus tiers: expired < 0 ≤ expiring ≤ 30 < valid', () => {
-    // These lean on the module's fixed demo "today" (2026-06-05).
-    expect(expiryStatus('2026-06-01').key).toBe('expired');
-    expect(expiryStatus('2026-06-20')).toMatchObject({ key: 'expiring', labelKey: 'documents.statusExpiringDays', labelParams: { days: 15 }, tone: 'caution' });
-    expect(expiryStatus('2027-01-01').key).toBe('valid');
+    // Relative to the real clock — expiryStatus reads it directly now.
+    expect(expiryStatus(localIso(-4)).key).toBe('expired');
+    expect(expiryStatus(localIso(15))).toMatchObject({ key: 'expiring', labelKey: 'documents.statusExpiringDays', labelParams: { days: 15 }, tone: 'caution' });
+    expect(expiryStatus(localIso(400)).key).toBe('valid');
     expect(expiryStatus('garbage').key).toBe('valid'); // unparseable ⇒ don't cry wolf
   });
 });

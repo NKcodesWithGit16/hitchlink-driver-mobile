@@ -3,12 +3,19 @@
     "name": "HitchLink Driver",
     "slug": "hitchlink-driver",
     "scheme": "hitchlinkdriver",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "backgroundColor": "#0A0E14",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
+    "updates": {
+      "url": "https://u.expo.dev/520c98e8-b1f5-40f1-85f6-448089a5b68c",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "plugins": [
       "expo-router",
       [
@@ -50,7 +57,8 @@
       ],
       "expo-sharing",
       "@config-plugins/react-native-callkeep",
-      "expo-localization"
+      "expo-localization",
+      "@sentry/react-native"
     ],
     "ios": {
       "supportsTablet": true,
@@ -60,8 +68,8 @@
         "UIBackgroundModes": [
           "location",
           "remote-notification",
-          "location",
-          "remote-notification"
+          "voip",
+          "audio"
         ],
         "NSMicrophoneUsageDescription": "HitchLink needs your microphone for in-app calls with your dispatcher.",
         "ITSAppUsesNonExemptEncryption": false

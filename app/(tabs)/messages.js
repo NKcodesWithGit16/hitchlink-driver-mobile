@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TextInput, Pressable,
+  View, Text, StyleSheet, ScrollView, FlatList, TextInput, Pressable,
   Platform, Linking, Animated, Image, Modal, Keyboard, Dimensions, Alert,
+  ActivityIndicator,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -12,7 +13,9 @@ import { useRouter } from 'expo-router';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../../src/components/ui/Icon';
+import PeerAvatar from '../../src/components/ui/PeerAvatar';
 import RecordingBar from '../../src/components/driver/RecordingBar';
+import DocumentReviewModal from '../../src/components/driver/DocumentReviewModal';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useTheme } from '../../src/theme/ThemeContext';
@@ -24,14 +27,17 @@ import {
   downloadChatAttachment, fetchActiveLoad,
   editMessage, deleteMessage, reactToMessage, removeReaction, markChatRead,
 } from '../../src/api/main';
+import { canPreview, previewAsync } from 'hitchlink-quicklook';
 import { useChatSocket } from '../../src/hooks/useChatSocket';
 import { useVoiceRecorder } from '../../src/hooks/useVoiceRecorder';
 import { playMessageSound } from '../../src/lib/sound';
+import { buildChatRows, dayLabel } from '../../src/lib/chatRows';
 import { getValidToken } from '../../src/lib/session';
 import { parsePeaksString, resamplePeaks } from '../../src/lib/waveform';
 import haptics from '../../src/lib/haptics';
 import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
+import { useCallBannerInset } from '../../src/components/call/CallOverlay';
 
 // Quick-tap reactions, plus the windows the backend enforces (mirror them in the
 // UI so we only offer actions that will actually succeed).
@@ -60,6 +66,7 @@ function kindLabel(kind, t) {
 
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
+  const callInset = useCallBannerInset();
   const router = useRouter();
   const { colors } = useTheme();
   const t = useT();
@@ -72,7 +79,14 @@ export default function MessagesScreen() {
     { label: t('messages.quickLoaded'),     icon: 'check-circle' },
     { label: t('messages.quickDelivered'),  icon: 'flag' },
   ];
-  const { startCall } = useCall();
+  const { startCall, status: callStatus, expand: expandCall } = useCall();
+  // Now that a call can be minimized to a pill, the driver can be sitting in
+  // this screen mid-call — and startCall() bails on any non-idle status, so
+  // the Call button would look broken. Reopen the call instead.
+  const onCallPress = useCallback(() => {
+    if (callStatus === 'idle') startCall();
+    else expandCall();
+  }, [callStatus, startCall, expandCall]);
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [items,       setItems]       = useState([]);
   const [text,        setText]        = useState('');
@@ -86,6 +100,12 @@ export default function MessagesScreen() {
   const [viewerUri,   setViewerUri]   = useState(null);   // photo open in the fullscreen viewer
   const [kbOpen,      setKbOpen]      = useState(false);  // keyboard visibility
   const [attachMenuOpen, setAttachMenuOpen] = useState(false); // paperclip's Photo/Document sheet
+  // "Save to Documents": the picked attachment is downloaded first, then handed
+  // to the same review sheet the Documents tab uses, so the driver tags the
+  // type/label/expiry rather than filing everything as an untyped "Other" with
+  // no expiry — which would quietly defeat the credential-expiry reminders.
+  const [docSaveBusy,  setDocSaveBusy]  = useState(false);
+  const [docSaveAsset, setDocSaveAsset] = useState(null);
   const scrollRef   = useRef(null);
   const kbPad       = useRef(new Animated.Value(0)).current; // live keyboard height → wrapper padding
   const seenIdsRef  = useRef(new Set());    // dispatcher-message ids already dinged/accounted for
@@ -139,6 +159,16 @@ export default function MessagesScreen() {
   // dispatcher info comes from the driver profile loaded in AuthContext
   const dispatcher = user?.dispatcher;
 
+  // Cheap fingerprint of a server payload — everything that would actually
+  // change what's on screen. The poll runs every 5s while the socket is down
+  // and returns up to 100 unchanged messages the overwhelming majority of the
+  // time; comparing this lets an unchanged poll skip setItems entirely instead
+  // of re-rendering the whole thread on a timer.
+  const signatureOf = (list) => list
+    .map((m) => `${m.id}|${m.editedAt ?? ''}|${m.read ? 1 : 0}|${m.deleted ? 1 : 0}|${(m.reactions || []).map((r) => `${r.emoji}${r.count}${r.mine ? 'm' : ''}`).join(',')}`)
+    .join(';');
+  const lastSigRef = useRef(null);
+
   // Pull chat history and reconcile with any optimistic messages we appended
   // locally but the server hasn't echoed back yet (so they don't flicker away).
   const load = useCallback(async () => {
@@ -154,6 +184,7 @@ export default function MessagesScreen() {
       }
       server.forEach((m) => seenIdsRef.current.add(m.id));
       firstLoadRef.current = false;
+
       setItems((prev) => {
         const serverDriverTexts = new Set(
           server.filter((m) => m.from === 'driver' && m.text).map((m) => m.text)
@@ -161,6 +192,15 @@ export default function MessagesScreen() {
         const stillPending = prev.filter(
           (m) => String(m.id).startsWith('local-') && !(m.text && serverDriverTexts.has(m.text))
         );
+        // Nothing changed server-side and no optimistic bubble needs
+        // reconciling — return the identical array so React bails out of the
+        // re-render instead of rebuilding every bubble on a 5s timer.
+        const sig = signatureOf(server);
+        if (sig === lastSigRef.current && stillPending.length === 0
+            && prev.length === server.length) {
+          return prev;
+        }
+        lastSigRef.current = sig;
         return [...server, ...stillPending];
       });
       // The driver has this screen open and just fetched history — advance
@@ -311,14 +351,73 @@ export default function MessagesScreen() {
     load();
   }, [user?.id, load]);
 
-  const confirmDelete = useCallback(async () => {
-    const m = confirmDel;
-    setConfirmDel(null);
+  // Deliberately NOT optimistic. The confirm sheet is modal and blocks the
+  // thread anyway, so applying the change early buys nothing and costs a
+  // rollback — and rolling back is what made a failed delete look like the
+  // message "came back on its own". Instead the sheet holds a spinner until the
+  // server has actually committed, and rethrows so it can show why if it
+  // hasn't. Errors must not go through Alert here: an iOS alert raised while
+  // this Modal is dismissing hits the same presentation collision that froze
+  // the screen, so it would never appear.
+  //
+  // The two scopes then apply differently: "everyone" leaves a tombstone both
+  // sides can see, while "me" removes the row outright — the server filters it
+  // from every later fetch for this driver (GetHistory's as_=driver /
+  // DeletedForDriver filter), so a placeholder only this phone would show would
+  // be wrong.
+  const confirmDelete = useCallback(async (scope) => {
+    const m = confirmDel?.msg;
     if (!m) return;
-    setItems((prev) => prev.map((x) => (x.id === m.id ? { ...x, deleted: true, text: undefined, kind: undefined, uri: undefined, reactions: [] } : x)));
-    try { await deleteMessage(m.id, user?.id, 'everyone'); } catch {}
-    load();
+    try {
+      await deleteMessage(m.id, user?.id, scope);
+      setItems((prev) => (scope === 'me'
+        ? prev.filter((x) => x.id !== m.id)
+        : prev.map((x) => (x.id === m.id
+          ? { ...x, deleted: true, text: undefined, kind: undefined, uri: undefined, reactions: [] }
+          : x))));
+      setConfirmDel(null);
+      haptics.success();
+      load();
+    } catch (err) {
+      console.error(`[Chat] Delete (${scope}) failed:`, err);
+      haptics.error();
+      throw err; // the sheet renders it, including the HTTP status
+    }
   }, [confirmDel, user?.id, load]);
+
+  // POST /documents carries the file as base64 JSON, so the whole thing passes
+  // through JS memory on the way. Rate cons and BOLs are comfortably under
+  // this; the cap is here so an oversized scan says why instead of failing as
+  // an opaque network error.
+  const DOC_SAVE_MAX_BYTES = 15 * 1024 * 1024;
+
+  const saveToDocuments = useCallback(async (msg) => {
+    if (docSaveBusy || !msg?.uri) return;
+    if (msg.sizeBytes && msg.sizeBytes > DOC_SAVE_MAX_BYTES) {
+      haptics.error();
+      Alert.alert(t('messages.tooLargeForDocsTitle'), t('messages.tooLargeForDocsBody'));
+      return;
+    }
+    setDocSaveBusy(true);
+    try {
+      // Pulls the attachment out of R2 into the cache, with the extension and
+      // sanitised name the viewer work already gave it.
+      const file = await downloadChatAttachment(msg.uri, msg.filename || 'document');
+      if (!file?.uri) throw new Error('Attachment download returned nothing');
+      setDocSaveAsset({
+        uri: file.uri,
+        name: file.fileName,
+        mimeType: msg.mimeType || file.contentType,
+        size: msg.sizeBytes,
+      });
+    } catch (err) {
+      console.error('[Chat] Could not stage attachment for Documents:', err);
+      haptics.error();
+      Alert.alert(t('messages.saveToDocsFailedTitle'), t('messages.saveToDocsFailedBody'));
+    } finally {
+      setDocSaveBusy(false);
+    }
+  }, [docSaveBusy, t]);
 
   const pickAttachment = useCallback(async () => {
     if (!user?.id) return;
@@ -341,12 +440,20 @@ export default function MessagesScreen() {
         setItems((prev) => prev.filter((m) => m.id !== localId));
         load();
         haptics.success();
-      } catch {
+      } catch (err) {
+        console.error('[Chat] Photo upload failed:', err);
         setItems((prev) => prev.map((m) => (m.id === localId ? { ...m, failed: true } : m)));
         haptics.error();
       }
-    } catch {}
-  }, [user?.id, replyTo, scrollToEnd, load]);
+    } catch (err) {
+      // The picker itself failed to open or read the pick — there's no bubble
+      // on screen to mark failed, so say so out loud rather than looking like
+      // the tap did nothing.
+      console.error('[Chat] Could not pick a photo:', err);
+      haptics.error();
+      Alert.alert(t('messages.attachFailedTitle'), t('messages.attachFailedBody'));
+    }
+  }, [user?.id, replyTo, scrollToEnd, load, t]);
 
   const pickDocument = useCallback(async () => {
     if (!user?.id) return;
@@ -369,12 +476,30 @@ export default function MessagesScreen() {
         setItems((prev) => prev.filter((m) => m.id !== localId));
         load();
         haptics.success();
-      } catch {
+      } catch (err) {
+        console.error('[Chat] Document upload failed:', err);
         setItems((prev) => prev.map((m) => (m.id === localId ? { ...m, failed: true } : m)));
         haptics.error();
       }
-    } catch {}
-  }, [user?.id, replyTo, scrollToEnd, load]);
+    } catch (err) {
+      console.error('[Chat] Could not pick a document:', err);
+      haptics.error();
+      Alert.alert(t('messages.attachFailedTitle'), t('messages.attachFailedBody'));
+    }
+  }, [user?.id, replyTo, scrollToEnd, load, t]);
+
+  // Messages + real per-day separators, flattened into the single keyed array
+  // the virtualized list below consumes. Grouping neighbours (prevFrom/
+  // nextFrom) are resolved here rather than by index-peeking during render,
+  // because a FlatList row can't see its siblings.
+  const rows = useMemo(
+    () => buildChatRows(items, (key, date) => dayLabel(key, date, {
+      today: t('common.today'),
+      yesterday: t('common.yesterday'),
+      months: t('common.monthsShort'),
+    })),
+    [items, t],
+  );
 
   // Messenger-style "seen" indicator goes on exactly one message — the most
   // recent driver-sent message the dispatcher's read cursor has passed —
@@ -387,17 +512,42 @@ export default function MessagesScreen() {
     return null;
   }, [items]);
 
+  const renderRow = useCallback(({ item: row }) => {
+    if (row.type === 'sep') {
+      return <DateSeparator label={row.label} colors={colors} styles={styles} />;
+    }
+    const m = row.msg;
+    // Optimistic bubbles have no server id yet, so none of the actions that
+    // address a message by id (react, edit, delete, long-press menu) can apply
+    // to them until the send is reconciled.
+    const isLocal = String(m.id).startsWith('local-');
+    return (
+      <Bubble
+        msg={m}
+        prevFrom={row.prevFrom}
+        nextFrom={row.nextFrom}
+        colors={colors}
+        styles={styles}
+        onAction={(anchor, mine) => !m.deleted && !isLocal && setFocus({ msg: m, anchor, mine })}
+        onReactQuick={(emoji) => !isLocal && react(m, emoji)}
+        onDoubleTap={() => !m.deleted && !isLocal && react(m, HEART_EMOJI)}
+        onOpenImage={setViewerUri}
+        onCallBack={onCallPress}
+        revealed={revealedId === m.id}
+        onToggleReveal={() => toggleReveal(m.id)}
+        showSeen={m.id === lastReadMineId}
+        dispatcher={dispatcher}
+      />
+    );
+  }, [colors, styles, react, onCallPress, revealedId, toggleReveal, lastReadMineId, dispatcher]);
+
   return (
-    <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+    <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
 
       {/* ── Header ── */}
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
         <View style={styles.peerInfo}>
-          <LinearGradient colors={colors.gradients.teal} style={styles.avatar}>
-            <Text style={styles.avatarInitials}>
-              {(dispatcher?.name || 'D').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
-            </Text>
-          </LinearGradient>
+          <PeerAvatar photoUrl={dispatcher?.photoUrl} name={dispatcher?.name} size={48} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.peerName, { color: colors.textPrimary }]} numberOfLines={1}>
               {dispatcher?.name || t('messages.dispatcherFallback')}
@@ -410,7 +560,7 @@ export default function MessagesScreen() {
         </View>
         <View style={styles.headerActions}>
           <Pressable
-            onPress={startCall}
+            onPress={onCallPress}
             onLongPress={() => dispatcher?.phone && Linking.openURL(`tel:${dispatcher.phone}`).catch(() => {})}
             delayLongPress={400}
             style={styles.callBtn}
@@ -469,34 +619,30 @@ export default function MessagesScreen() {
           style={styles.threadGlow}
         />
 
-        {/* ── Chat area ── */}
-        <ScrollView
+        {/* ── Chat area ──
+            Virtualized: a long thread used to mount every bubble at once (each
+            with its own Animated values and, for voice notes, its own player),
+            which is what made opening a busy conversation stutter. Kept
+            NON-inverted so the existing ordering, grouping and scroll-to-end
+            behaviour carry over unchanged. */}
+        <FlatList
           ref={scrollRef}
+          data={rows}
+          keyExtractor={(row) => row.key}
+          renderItem={renderRow}
           contentContainerStyle={styles.chatContent}
           showsVerticalScrollIndicator={false}
           style={styles.chatScroll}
-        >
-          <DateSeparator label={t('common.today')} colors={colors} styles={styles} />
-          {items.map((m, i) => (
-            <Bubble
-              key={m.id}
-              msg={m}
-              prev={items[i - 1]}
-              next={items[i + 1]}
-              colors={colors}
-              styles={styles}
-              onAction={(anchor, mine) => !m.deleted && !String(m.id).startsWith('local-') && setFocus({ msg: m, anchor, mine })}
-              onReactQuick={(emoji) => !String(m.id).startsWith('local-') && react(m, emoji)}
-              onDoubleTap={() => !m.deleted && !String(m.id).startsWith('local-') && react(m, HEART_EMOJI)}
-              onOpenImage={setViewerUri}
-              onCallBack={startCall}
-              revealed={revealedId === m.id}
-              onToggleReveal={() => toggleReveal(m.id)}
-              showSeen={m.id === lastReadMineId}
-            />
-          ))}
-          {typing ? <TypingIndicator colors={colors} styles={styles} /> : null}
-        </ScrollView>
+          ListFooterComponent={typing ? <TypingIndicator colors={colors} styles={styles} dispatcher={dispatcher} /> : null}
+          // The thread opens at the bottom; rendering a screenful up front
+          // keeps that first paint from showing a gap above the newest message.
+          initialNumToRender={20}
+          maxToRenderPerBatch={12}
+          windowSize={11}
+          removeClippedSubviews={Platform.OS === 'android'}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="none"
+        />
 
         {/* ── Quick replies ── */}
         <View style={[styles.quickWrap, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
@@ -605,7 +751,10 @@ export default function MessagesScreen() {
         onDocument={pickDocument}
       />
 
-      {/* ── Long-press focused menu: message lifts in place, everything else blurs ── */}
+      {/* ── Long-press focused menu: message lifts in place, everything else blurs ──
+          onDelete fires only once that overlay has fully dismissed (see closeThen
+          inside it) — opening this confirm Modal while the overlay's own Modal was
+          still on screen is what froze the whole screen on iOS. */}
       <FocusedMessageOverlay
         focus={focus}
         colors={colors}
@@ -614,12 +763,38 @@ export default function MessagesScreen() {
         onReact={react}
         onReply={startReply}
         onEdit={startEdit}
-        onDelete={(m) => { setFocus(null); setConfirmDel(m); }}
+        onDelete={(m, canEveryone) => setConfirmDel({ msg: m, canEveryone })}
+        onSaveToDocs={saveToDocuments}
+      />
+
+      {/* ── Save to Documents: review/tag before it's filed ──
+          Deliberately NOT a <Modal> for the busy state — the download runs
+          right after the focused overlay dismisses, and stacking another
+          presented view controller there is the collision that froze this
+          screen before. A plain absolute overlay has no such problem. */}
+      {docSaveBusy ? (
+        <View style={styles.docSaveBusy} pointerEvents="auto">
+          <View style={[styles.docSaveBusyCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <ActivityIndicator size="small" color={colors.teal} />
+            <Text style={[styles.docSaveBusyText, { color: colors.textPrimary }]}>{t('messages.preparingDocument')}</Text>
+          </View>
+        </View>
+      ) : null}
+
+      <DocumentReviewModal
+        visible={!!docSaveAsset}
+        asset={docSaveAsset}
+        extraction={null}
+        extractionError={null}
+        driverId={user?.id}
+        onSaved={() => { setDocSaveAsset(null); haptics.success(); }}
+        onCancel={() => setDocSaveAsset(null)}
+        colors={colors}
       />
 
       {/* ── Delete confirmation ── */}
       <ConfirmDelete
-        msg={confirmDel}
+        pending={confirmDel}
         colors={colors}
         styles={styles}
         onCancel={() => setConfirmDel(null)}
@@ -681,11 +856,14 @@ function BubbleVisual({ msg, mine, colors, styles, onOpenImage, onBubbleDoubleTa
   return <View style={bubbleStyle}>{body}</View>;
 }
 
-function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onDoubleTap, onOpenImage, onCallBack, revealed, onToggleReveal, showSeen }) {
+// prevFrom/nextFrom are the senders of the neighbouring messages WITHIN the
+// same day, resolved upstream by buildChatRows — a virtualized row can't reach
+// its siblings, and grouping must not span a date separator.
+function Bubble({ msg, prevFrom, nextFrom, colors, styles, onAction, onReactQuick, onDoubleTap, onOpenImage, onCallBack, revealed, onToggleReveal, showSeen, dispatcher }) {
   const t = useT();
   const mine = msg.from === 'driver';
-  const prevSame = prev?.from === msg.from;
-  const nextSame = next?.from === msg.from;
+  const prevSame = prevFrom === msg.from;
+  const nextSame = nextFrom === msg.from;
   const showAvatar = !mine && !nextSame;
   const hasReactions = msg.reactions?.length > 0;
 
@@ -795,9 +973,7 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onDou
         {/* Dispatcher avatar — shown only on last bubble in group */}
         {!mine ? (
           showAvatar ? (
-            <LinearGradient colors={colors.gradients.teal} style={styles.dispAvatar}>
-              <Text style={styles.dispAvatarText}>D</Text>
-            </LinearGradient>
+            <PeerAvatar photoUrl={dispatcher?.photoUrl} name={dispatcher?.name} size={34} />
           ) : (
             <View style={{ width: 34 }} />
           )
@@ -864,9 +1040,7 @@ function Bubble({ msg, prev, next, colors, styles, onAction, onReactQuick, onDou
               instead of WhatsApp-style checkmarks on every sent message. */}
           {showSeen ? (
             <View style={styles.seenRow}>
-              <LinearGradient colors={colors.gradients.teal} style={styles.seenAvatar}>
-                <Text style={styles.seenAvatarText}>D</Text>
-              </LinearGradient>
+              <PeerAvatar photoUrl={dispatcher?.photoUrl} name={dispatcher?.name} size={16} />
             </View>
           ) : null}
         </View>
@@ -1001,7 +1175,7 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage, onBubbleDoubleTap,
 // screen blurs behind it, a row of quick reactions floats above/below it, and
 // Reply/Edit/Delete float as a second panel — all anchored to the message's
 // real on-screen position instead of a generic bottom sheet.
-function FocusedMessageOverlay({ focus, colors, styles, onClose, onReact, onReply, onEdit, onDelete }) {
+function FocusedMessageOverlay({ focus, colors, styles, onClose, onReact, onReply, onEdit, onDelete, onSaveToDocs }) {
   const t = useT();
   const insets = useSafeAreaInsets();
   const anim = useRef(new Animated.Value(0)).current;
@@ -1024,79 +1198,124 @@ function FocusedMessageOverlay({ focus, colors, styles, onClose, onReact, onRepl
     });
   }, [anim, onClose]);
 
+  // Anything that opens ANOTHER <Modal> has to wait for this one to be gone.
+  // On iOS a Modal is a presented UIViewController, and presenting a second one
+  // while this is still on screen (it lingers through the 140ms fade above)
+  // leaves an orphaned presentation that eats every touch — the app looks
+  // frozen until it's reloaded. `onDismiss` fires once the dismissal actually
+  // completes; on Android it never fires and stacking is harmless, so the
+  // action runs inline there. Same pattern as AttachMenuSheet.
+  const pendingRef = useRef(null);
+
+  const runPending = useCallback(() => {
+    const action = pendingRef.current;
+    pendingRef.current = null;
+    action?.();
+  }, []);
+
+  const closeThen = useCallback((action) => {
+    pendingRef.current = action;
+    close();
+    if (Platform.OS !== 'ios') runPending();
+  }, [close, runPending]);
+
+  // The <Modal> below stays MOUNTED even when there's nothing focused, and only
+  // toggles `visible`. Returning null here instead would unmount it, destroying
+  // the native RCTModalHostView before it can deliver onDismiss — and that
+  // event is what runs the deferred action, so Delete silently did nothing.
+  // (AttachMenuSheet works precisely because it never unmounts.)
   const active = focus || held;
-  if (!active) return null;
-
-  const { msg, anchor, mine } = active;
-  const { width: screenW, height: screenH } = Dimensions.get('window');
-  const REACTION_H = 56;
-  const GAP = 10;
-  const isText = msg && !msg.kind;
-  const canEdit = mine && isText && ageMin(msg?.ts) < EDIT_WINDOW_MIN;
-  const canDelete = mine && ageMin(msg?.ts) < DELETE_WINDOW_MIN;
-  const actionCount = 1 + (canEdit ? 1 : 0) + (canDelete ? 1 : 0);
-  const ACTIONS_H = actionCount * 50 + space[2] * 2;
-  const stackH = REACTION_H + GAP + anchor.height + GAP + ACTIONS_H;
-
-  const minTop = insets.top + space[3];
-  const maxTop = Math.max(minTop, screenH - insets.bottom - space[3] - stackH);
-  const groupTop = Math.max(minTop, Math.min(anchor.y - REACTION_H - GAP, maxTop));
-
-  const reactionTop = groupTop;
-  const bubbleTop = groupTop + REACTION_H + GAP;
-  const actionsTop = bubbleTop + anchor.height + GAP;
-
-  const edgeLeft = anchor.x;
-  const edgeRight = screenW - (anchor.x + anchor.width);
-  const sideStyle = mine
-    ? { right: Math.max(edgeRight, space[4]) }
-    : { left: Math.max(edgeLeft, space[4]) };
-  const panelWidth = Math.min(Math.max(anchor.width, 180), 260);
-
-  const mineReaction = msg?.reactions?.find((r) => r.mine)?.emoji;
-  const opacity = anim;
-  const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
-
   return (
-    <Modal visible={!!focus || !!held} transparent animationType="none" onRequestClose={close}>
-      <Animated.View style={[StyleSheet.absoluteFill, { opacity }]} pointerEvents={focus ? 'auto' : 'none'}>
-        <BlurView intensity={45} tint={colors.isDay ? 'light' : 'dark'} style={StyleSheet.absoluteFill} />
-        <Pressable style={StyleSheet.absoluteFill} onPress={close} accessibilityRole="button" accessibilityLabel={t('common.cancel')} />
-      </Animated.View>
-
-      <Animated.View
-        pointerEvents={focus ? 'auto' : 'none'}
-        style={[styles.focusReactions, sideStyle, { top: reactionTop, backgroundColor: colors.surfaceHi, borderColor: colors.border, opacity, transform: [{ scale }] }]}
-      >
-        {EMOJIS.map((e) => (
-          <Pressable
-            key={e}
-            onPress={() => { onReact(msg, e); close(); }}
-            style={[styles.focusReactionBtn, mineReaction === e && { backgroundColor: colors.tealFill, borderColor: colors.teal }]}
-            accessibilityRole="button"
-            accessibilityLabel={`React ${e}`}
-          >
-            <Text style={styles.focusReactionEmoji}>{e}</Text>
-          </Pressable>
-        ))}
-      </Animated.View>
-
-      <View pointerEvents="none" style={{ position: 'absolute', top: bubbleTop, left: anchor.x, width: anchor.width }}>
-        <Animated.View style={{ opacity, transform: [{ scale }] }}>
-          <BubbleVisual msg={msg} mine={mine} colors={colors} styles={styles} onOpenImage={() => {}} />
-        </Animated.View>
-      </View>
-
-      <Animated.View
-        pointerEvents={focus ? 'auto' : 'none'}
-        style={[styles.focusActionsPanel, sideStyle, { top: actionsTop, width: panelWidth, backgroundColor: colors.surface, borderColor: colors.border, opacity, transform: [{ scale }] }]}
-      >
-        <SheetAction icon="corner-up-left" label={t('messages.reply')} colors={colors} styles={styles} onPress={() => { onReply(msg); close(); }} />
-        {canEdit ? <SheetAction icon="edit-2" label={t('common.edit')} colors={colors} styles={styles} onPress={() => { onEdit(msg); close(); }} /> : null}
-        {canDelete ? <SheetAction icon="trash-2" label={t('messages.deleteForEveryone')} danger colors={colors} styles={styles} onPress={() => { onDelete(msg); close(); }} /> : null}
-      </Animated.View>
+    <Modal visible={!!active} transparent animationType="none" onRequestClose={close} onDismiss={runPending}>
+      {active ? renderFocusedBody() : null}
     </Modal>
   );
+
+  function renderFocusedBody() {
+    const { msg, anchor, mine } = active;
+    const { width: screenW, height: screenH } = Dimensions.get('window');
+    const REACTION_H = 56;
+    const GAP = 10;
+    const isText = msg && !msg.kind;
+    const canEdit = mine && isText && ageMin(msg?.ts) < EDIT_WINDOW_MIN;
+    // "Delete for everyone" is the sender's, and only inside the window the
+    // backend enforces. "Delete for me" has neither restriction — it just hides
+    // the row for this driver — so the Delete action is always offered and the
+    // sheet below decides which scopes to put on it. Previously the whole action
+    // disappeared once the window lapsed, which read as "this app has no delete".
+    const canDeleteForEveryone = mine && ageMin(msg?.ts) < DELETE_WINDOW_MIN;
+    // Paperwork can be filed into the Documents tab from either side of the
+    // thread: the dispatcher sends a rate confirmation, or the driver
+    // photographs a signed BOL and wants their own copy on file. Gated on the
+    // attachment kind rather than the sender, so there's no invisible rule
+    // about which bubbles offer it. Voice/video/gif/sticker are excluded —
+    // nothing there belongs in a tab built around credential expiry.
+    const canSaveToDocs = msg?.kind === 'document' || msg?.kind === 'image';
+    const actionCount = 2 + (canEdit ? 1 : 0) + (canSaveToDocs ? 1 : 0);
+    const ACTIONS_H = actionCount * 50 + space[2] * 2;
+    const stackH = REACTION_H + GAP + anchor.height + GAP + ACTIONS_H;
+
+    const minTop = insets.top + space[3];
+    const maxTop = Math.max(minTop, screenH - insets.bottom - space[3] - stackH);
+    const groupTop = Math.max(minTop, Math.min(anchor.y - REACTION_H - GAP, maxTop));
+
+    const reactionTop = groupTop;
+    const bubbleTop = groupTop + REACTION_H + GAP;
+    const actionsTop = bubbleTop + anchor.height + GAP;
+
+    const edgeLeft = anchor.x;
+    const edgeRight = screenW - (anchor.x + anchor.width);
+    const sideStyle = mine
+      ? { right: Math.max(edgeRight, space[4]) }
+      : { left: Math.max(edgeLeft, space[4]) };
+    const panelWidth = Math.min(Math.max(anchor.width, 180), 260);
+
+    const mineReaction = msg?.reactions?.find((r) => r.mine)?.emoji;
+    const opacity = anim;
+    const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
+
+    return (
+      <>
+        <Animated.View style={[StyleSheet.absoluteFill, { opacity }]} pointerEvents={focus ? 'auto' : 'none'}>
+          <BlurView intensity={45} tint={colors.isDay ? 'light' : 'dark'} style={StyleSheet.absoluteFill} />
+          <Pressable style={StyleSheet.absoluteFill} onPress={close} accessibilityRole="button" accessibilityLabel={t('common.cancel')} />
+        </Animated.View>
+
+        <Animated.View
+          pointerEvents={focus ? 'auto' : 'none'}
+          style={[styles.focusReactions, sideStyle, { top: reactionTop, backgroundColor: colors.surfaceHi, borderColor: colors.border, opacity, transform: [{ scale }] }]}
+        >
+          {EMOJIS.map((e) => (
+            <Pressable
+              key={e}
+              onPress={() => { onReact(msg, e); close(); }}
+              style={[styles.focusReactionBtn, mineReaction === e && { backgroundColor: colors.tealFill, borderColor: colors.teal }]}
+              accessibilityRole="button"
+              accessibilityLabel={`React ${e}`}
+            >
+              <Text style={styles.focusReactionEmoji}>{e}</Text>
+            </Pressable>
+          ))}
+        </Animated.View>
+
+        <View pointerEvents="none" style={{ position: 'absolute', top: bubbleTop, left: anchor.x, width: anchor.width }}>
+          <Animated.View style={{ opacity, transform: [{ scale }] }}>
+            <BubbleVisual msg={msg} mine={mine} colors={colors} styles={styles} onOpenImage={() => {}} />
+          </Animated.View>
+        </View>
+
+        <Animated.View
+          pointerEvents={focus ? 'auto' : 'none'}
+          style={[styles.focusActionsPanel, sideStyle, { top: actionsTop, width: panelWidth, backgroundColor: colors.surface, borderColor: colors.border, opacity, transform: [{ scale }] }]}
+        >
+          <SheetAction icon="corner-up-left" label={t('messages.reply')} colors={colors} styles={styles} onPress={() => { onReply(msg); close(); }} />
+          {canEdit ? <SheetAction icon="edit-2" label={t('common.edit')} colors={colors} styles={styles} onPress={() => { onEdit(msg); close(); }} /> : null}
+          {canSaveToDocs ? <SheetAction icon="folder-plus" label={t('messages.saveToDocuments')} colors={colors} styles={styles} onPress={() => closeThen(() => onSaveToDocs(msg))} /> : null}
+          <SheetAction icon="trash-2" label={t('common.delete')} danger colors={colors} styles={styles} onPress={() => closeThen(() => onDelete(msg, canDeleteForEveryone))} />
+        </Animated.View>
+      </>
+    );
+  }
 }
 
 function SheetAction({ icon, label, danger, colors, styles, onPress }) {
@@ -1113,37 +1332,131 @@ function SheetAction({ icon, label, danger, colors, styles, onPress }) {
   );
 }
 
+// iOS presents a <Modal> as a real UIViewController, and the image/document
+// pickers are view controllers too. Launching one in the same tick as this
+// sheet's dismissal put the two transitions on top of each other: either iOS
+// refused the presentation outright, or the sheet's dismissal tore down the
+// picker presented on top of it. Tapping Photo/Document just closed the sheet
+// and did nothing at all.
+//
+// So the tap only *records* what to do, and the action runs once the sheet is
+// genuinely gone: `onDismiss` fires after the dismissal completes on iOS. It
+// never fires on Android, where presenting is safe anyway — hence the direct
+// call there. Whichever path runs, it clears the ref first, so an action can
+// never fire twice.
 function AttachMenuSheet({ visible, colors, styles, onClose, onPhoto, onDocument }) {
   const t = useT();
+  const pendingRef = useRef(null);
+
+  const runPending = useCallback(() => {
+    const action = pendingRef.current;
+    pendingRef.current = null;
+    action?.();
+  }, []);
+
+  const choose = useCallback((action) => {
+    pendingRef.current = action;
+    onClose();
+    if (Platform.OS !== 'ios') runPending();
+  }, [onClose, runPending]);
+
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} onDismiss={runPending}>
       <Pressable style={styles.sheetOverlay} onPress={onClose}>
         <Pressable style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border }]} onPress={() => {}}>
-          <SheetAction icon="image" label={t('messages.photo')} colors={colors} styles={styles} onPress={() => { onClose(); onPhoto(); }} />
-          <SheetAction icon="file-text" label={t('messages.document')} colors={colors} styles={styles} onPress={() => { onClose(); onDocument(); }} />
+          <SheetAction icon="image" label={t('messages.photo')} colors={colors} styles={styles} onPress={() => choose(onPhoto)} />
+          <SheetAction icon="file-text" label={t('messages.document')} colors={colors} styles={styles} onPress={() => choose(onDocument)} />
         </Pressable>
       </Pressable>
     </Modal>
   );
 }
 
-function ConfirmDelete({ msg, colors, styles, onCancel, onConfirm }) {
+// Scope chooser, WhatsApp-style. "Delete for me" is always on offer; "Delete
+// for everyone" only while the sender is still inside the backend's window
+// (see canDeleteForEveryone), so the sheet never shows an action that would
+// come back as a 400.
+// Scope chooser, WhatsApp-style. "Delete for me" is always on offer; "Delete
+// for everyone" only while the sender is still inside the backend's window
+// (see canDeleteForEveryone), so the sheet never shows an action that would
+// come back as a 400.
+//
+// It stays open until the delete actually lands. A failure is shown right here
+// with the server's status rather than through Alert — an alert raised while
+// this Modal dismisses would never appear on iOS (the same presented-view
+// collision that froze the screen), which is exactly how a failing delete came
+// to look like "nothing happens".
+function ConfirmDelete({ pending, colors, styles, onCancel, onConfirm }) {
   const t = useT();
+  const canEveryone = !!pending?.canEveryone;
+  const [busy, setBusy] = useState(null);   // which scope is in flight
+  const [failed, setFailed] = useState('');
+
+  useEffect(() => { setBusy(null); setFailed(''); }, [pending]);
+
+  const run = async (scope) => {
+    if (busy) return;
+    setBusy(scope);
+    setFailed('');
+    try {
+      await onConfirm(scope);
+    } catch (err) {
+      setFailed(err?.status ? `${t('messages.deleteFailedBody')} (${err.status})` : (err?.message || t('messages.deleteFailedBody')));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
-    <Modal visible={!!msg} transparent animationType="fade" onRequestClose={onCancel}>
+    <Modal visible={!!pending} transparent animationType="fade" onRequestClose={onCancel}>
       <View style={styles.confirmOverlay}>
         <View style={[styles.confirmCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <View style={[styles.confirmIcon, { backgroundColor: colors.surface2, borderColor: colors.danger }]}>
             <Icon name="trash-2" size={24} color={colors.danger} />
           </View>
-          <Text style={[styles.confirmTitle, { color: colors.textPrimary }]}>{t('messages.deleteForEveryoneQ')}</Text>
-          <Text style={[styles.confirmSub, { color: colors.textSecondary }]}>
-            {t('messages.deleteForEveryoneBody')}
+          <Text style={[styles.confirmTitle, { color: colors.textPrimary }]}>
+            {failed ? t('messages.deleteFailedTitle') : t('messages.deleteMessageQ')}
           </Text>
-          <Pressable onPress={onConfirm} style={[styles.confirmDanger, { backgroundColor: colors.danger }]} accessibilityRole="button" accessibilityLabel={t('messages.deleteForEveryone')}>
-            <Text style={styles.confirmDangerText}>{t('common.delete')}</Text>
+          <Text style={[styles.confirmSub, { color: failed ? colors.danger : colors.textSecondary }]}>
+            {failed || (canEveryone ? t('messages.deleteForEveryoneBody') : t('messages.deleteForMeOnlyBody'))}
+          </Text>
+
+          {canEveryone ? (
+            <Pressable
+              onPress={() => run('everyone')}
+              disabled={!!busy}
+              style={[styles.confirmDanger, { backgroundColor: colors.danger, opacity: busy && busy !== 'everyone' ? 0.5 : 1 }]}
+              accessibilityRole="button"
+              accessibilityLabel={t('messages.deleteForEveryone')}
+            >
+              {busy === 'everyone'
+                ? <ActivityIndicator size="small" color="#FFFFFF" />
+                : <Text style={styles.confirmDangerText}>{t('messages.deleteForEveryone')}</Text>}
+            </Pressable>
+          ) : null}
+
+          <Pressable
+            onPress={() => run('me')}
+            disabled={!!busy}
+            style={[canEveryone ? styles.confirmCancel : styles.confirmDanger,
+              canEveryone ? { borderColor: colors.border } : { backgroundColor: colors.danger },
+              { opacity: busy && busy !== 'me' ? 0.5 : 1 }]}
+            accessibilityRole="button"
+            accessibilityLabel={t('messages.deleteForMe')}
+          >
+            {busy === 'me'
+              ? <ActivityIndicator size="small" color={canEveryone ? colors.textPrimary : '#FFFFFF'} />
+              : (
+                <Text style={canEveryone
+                  ? [styles.confirmCancelText, { color: colors.textPrimary }]
+                  : styles.confirmDangerText}
+                >
+                  {t('messages.deleteForMe')}
+                </Text>
+              )}
           </Pressable>
-          <Pressable onPress={onCancel} style={[styles.confirmCancel, { borderColor: colors.border }]} accessibilityRole="button" accessibilityLabel={t('common.cancel')}>
+
+          <Pressable onPress={onCancel} disabled={!!busy} style={[styles.confirmCancel, { borderColor: colors.border, opacity: busy ? 0.5 : 1 }]} accessibilityRole="button" accessibilityLabel={t('common.cancel')}>
             <Text style={[styles.confirmCancelText, { color: colors.textMuted }]}>{t('common.cancel')}</Text>
           </Pressable>
         </View>
@@ -1175,7 +1488,7 @@ function ImageViewer({ uri, colors, styles, onClose }) {
   );
 }
 
-function TypingIndicator({ colors, styles }) {
+function TypingIndicator({ colors, styles, dispatcher }) {
   const dots = [useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current];
 
   useEffect(() => {
@@ -1195,9 +1508,7 @@ function TypingIndicator({ colors, styles }) {
 
   return (
     <View style={[styles.bubbleRow, styles.rowTheirs, { marginTop: 10 }]}>
-      <LinearGradient colors={colors.gradients.teal} style={styles.dispAvatar}>
-        <Text style={styles.dispAvatarText}>D</Text>
-      </LinearGradient>
+      <PeerAvatar photoUrl={dispatcher?.photoUrl} name={dispatcher?.name} size={34} />
       <View style={[styles.typingBubble, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         {dots.map((d, i) => (
           <Animated.View
@@ -1330,8 +1641,19 @@ function useOpenAttachment(msg, t) {
       const result = await downloadChatAttachment(msg.uri, msg.filename || 'file');
       if (Platform.OS === 'web') {
         window.open(result.uri, '_blank');
+      } else if (canPreview(result.uri)) {
+        // Same in-app system viewer the Documents tab uses — a PDF the
+        // dispatcher sent opens right here instead of bouncing out to Files.
+        await previewAsync(result.uri);
       } else if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(result.uri, msg.mimeType ? { mimeType: msg.mimeType } : undefined);
+        // mimeType is Android-only and UTI iOS-only, so both go in — without
+        // the UTI (and the extension downloadChatAttachment now puts on the
+        // cache file) iOS can't tell what this is and offers nowhere to open it.
+        await Sharing.shareAsync(result.uri, {
+          mimeType: msg.mimeType || result.contentType,
+          ...(result.uti ? { UTI: result.uti } : {}),
+          dialogTitle: msg.filename || undefined,
+        });
       } else {
         await Linking.openURL(msg.uri);
       }
@@ -1433,8 +1755,6 @@ const makeStyles = (c) => StyleSheet.create({
     backgroundColor: c.surface, zIndex: 10, borderBottomWidth: 1,
   },
   peerInfo: { flexDirection: 'row', alignItems: 'center', gap: space[3], flex: 1, minWidth: 0 },
-  avatar: { width: 48, height: 48, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  avatarInitials: { fontSize: 16, fontFamily: FONT.black, color: c.onAccent },
   peerName: { ...type.bodyStrong, fontSize: 16 },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 },
   statusDot: { width: 7, height: 7, borderRadius: 999 },
@@ -1469,9 +1789,6 @@ const makeStyles = (c) => StyleSheet.create({
   rowMine: { justifyContent: 'flex-end' },
   rowTheirs: { justifyContent: 'flex-start' },
 
-  dispAvatar: { width: 34, height: 34, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  dispAvatarText: { fontSize: 12, fontFamily: FONT.black, color: c.onAccent },
-
   // Messenger-style: one uniform pill radius for every bubble — grouping
   // reads from spacing + avatar placement only, never a cut tail corner.
   bubble: { borderRadius: radius.xl, paddingHorizontal: space[4], paddingVertical: space[3], gap: 4, borderWidth: 0 },
@@ -1491,8 +1808,6 @@ const makeStyles = (c) => StyleSheet.create({
   // Messenger-style "seen" indicator — dispatcher's tiny avatar under the
   // last driver-sent message they've read, instead of per-message checkmarks.
   seenRow: { marginTop: 3, alignItems: 'flex-end' },
-  seenAvatar: { width: 16, height: 16, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
-  seenAvatarText: { fontSize: 8, fontFamily: FONT.black, color: c.onAccent },
 
   /* Document / video attachment cards */
   docCard: { flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 200, maxWidth: 240, paddingVertical: 2 },
@@ -1572,6 +1887,19 @@ const makeStyles = (c) => StyleSheet.create({
   confirmDangerText: { ...type.bodyStrong, color: '#fff' },
   confirmCancel: { width: '100%', height: 48, borderRadius: radius.lg, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   confirmCancelText: { ...type.bodyStrong },
+
+  /* Save-to-Documents busy state — a plain overlay, not a Modal (see usage) */
+  docSaveBusy: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  docSaveBusyCard: {
+    flexDirection: 'row', alignItems: 'center', gap: space[3],
+    paddingVertical: space[4], paddingHorizontal: space[5],
+    borderRadius: radius.lg, borderWidth: 1,
+  },
+  docSaveBusyText: { ...type.bodyStrong },
 
   /* Fullscreen photo viewer */
   viewerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.94)', alignItems: 'center', justifyContent: 'center' },

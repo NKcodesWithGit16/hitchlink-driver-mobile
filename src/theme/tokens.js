@@ -109,6 +109,10 @@ const night = {
     caution: ['#FFC24D', '#D98A00'], danger: ['#FF6062', '#C81E1E'],
     brand: ['#0193AB', '#04285A'], card: ['#1A2230', '#11161F'],
     splash: ['#0A3A78', '#04285A', '#0E7C90'],
+    // Full-bleed backdrop for the call takeover. Deliberately identical in
+    // both themes: a call screen is dark everywhere (iOS, WhatsApp, Telegram),
+    // and a driver answering at night shouldn't get a white flash.
+    call: ['#0B3E7A', '#04285A', '#070C14'],
     weatherWarn: ['#3A2E12', '#241B0A'], weatherSevere: ['#3A1416', '#240A0B'],
   },
 };
@@ -137,6 +141,7 @@ const day = {
     caution: ['#C98400', '#A86400'], danger: ['#E0413F', '#C81E1E'],
     brand: ['#0193AB', '#04285A'], card: ['#FFFFFF', '#EFF3F9'],
     splash: ['#0A3A78', '#04285A', '#0E7C90'],
+    call: ['#0B3E7A', '#04285A', '#070C14'],   // same as night — see the note there
     weatherWarn: ['#FFF2D6', '#FCE3A6'], weatherSevere: ['#FBE0E0', '#F6C6C6'],
   },
 };

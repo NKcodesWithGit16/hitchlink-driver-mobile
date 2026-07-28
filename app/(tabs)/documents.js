@@ -13,6 +13,8 @@ import FadeInView from '../../src/components/ui/FadeInView';
 import Skeleton from '../../src/components/ui/Skeleton';
 import DocumentReviewModal from '../../src/components/driver/DocumentReviewModal';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
+import haptics from '../../src/lib/haptics';
+import { canPreview, previewAsync } from 'hitchlink-quicklook';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
@@ -21,11 +23,16 @@ import {
   extractDocumentFields, readDocumentBase64,
 } from '../../src/api/main';
 import { expiryStatus, fmtDate, daysUntil } from '../../src/lib/format';
+import { scheduleDocumentExpiryReminders } from '../../src/lib/localNotifications';
 import { space, type, radius, toneOf, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
+import { useCallBannerInset } from '../../src/components/call/CallOverlay';
 
 export default function DocumentsScreen() {
   const insets = useSafeAreaInsets();
+  // Extra top padding while a call is minimized to the banner, so the screen
+  // header isn't hidden behind it.
+  const callInset = useCallBannerInset();
   const { colors } = useTheme();
   const t = useT();
   const { userId } = useAuth();
@@ -74,6 +81,21 @@ export default function DocumentsScreen() {
     await loadData();
     setRefreshing(false);
   }, [loadData]);
+
+  // Expiry only ever surfaced on this screen, which a driver has no reason to
+  // open until something has already lapsed. Schedule on-device reminders at
+  // 30/7/1 days out so the phone raises it instead. Re-run on every refetch:
+  // the helper clears its previous schedule first, so renewing or deleting a
+  // document stops its reminders.
+  useEffect(() => {
+    if (!docs.length) return;
+    scheduleDocumentExpiryReminders(docs, (doc, days) => ({
+      title: t('reminders.docExpiryTitle', { label: doc.label }),
+      body: days === 1
+        ? t('reminders.docExpiryBodyTomorrow', { label: doc.label })
+        : t('reminders.docExpiryBodyDays', { label: doc.label, days }),
+    })).catch(() => {});
+  }, [docs, t]);
 
   const counts = useMemo(() => {
     const c = { valid: 0, expiring: 0, expired: 0 };
@@ -137,7 +159,7 @@ export default function DocumentsScreen() {
   };
 
   return (
-    <ScreenFade style={[styles.screen, { paddingTop: insets.top }]}>
+    <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
 
       {/* ── Header ── */}
       <View style={styles.head}>
@@ -430,13 +452,24 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
         return;
       }
       if (Platform.OS === 'web') {
-        window.open(result.blobUrl, '_blank');
+        window.open(result.uri, '_blank');
       } else if (result.contentType?.startsWith('image/')) {
         setPreviewUri(result.uri);
+      } else if (canPreview(result.uri)) {
+        // iOS: render it in place with the system viewer (the same one Files
+        // and Mail use). Anything QuickLook can't handle — and all of Android —
+        // falls through to the share sheet below.
+        await previewAsync(result.uri);
       } else {
         const available = await Sharing.isAvailableAsync();
         if (!available) throw new Error('Sharing unavailable on this device');
-        await Sharing.shareAsync(result.uri, { mimeType: result.contentType });
+        // mimeType is Android-only, UTI is iOS-only — pass both, or the
+        // receiving app on one platform gets no idea what it's being handed.
+        await Sharing.shareAsync(result.uri, {
+          mimeType: result.contentType,
+          ...(result.uti ? { UTI: result.uti } : {}),
+          dialogTitle: doc.label,
+        });
       }
     } catch {
       Alert.alert(t('documents.couldNotOpen'), t('documents.pleaseTryAgain'));
@@ -485,9 +518,14 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
         expiresAt: doc.expires,
       });
       await onUploaded?.();
-      Alert.alert(t('documents.uploaded'), t('documents.renewalSaved'));
+      // No success Alert here: it would be presented on top of this Modal and
+      // then torn down by the onClose below before the driver could read it.
+      // The refreshed list behind us already shows the new expiry date, which
+      // is the confirmation that matters.
+      haptics.success();
       onClose();
     } catch {
+      // Safe: this one is raised while the Modal stays open.
       Alert.alert(t('documents.couldNotUpload'), t('documents.pleaseTryAgain'));
     } finally {
       setUploading(false);

@@ -8,7 +8,9 @@ import { readUserFromToken } from '../utils/jwtUtils';
 import { fetchDriver } from '../api/main';
 import { registerForPushNotifications, unregisterPushNotifications } from '../hooks/usePushNotifications';
 import { stopBackgroundTracking } from '../lib/backgroundLocation';
+import { cancelAllLocalReminders } from '../lib/localNotifications';
 import { onSessionExpired, refreshNow } from '../lib/session';
+import { identify } from '../lib/observability';
 import { useT } from '../i18n/LanguageContext';
 
 const AuthContext = createContext(null);
@@ -92,6 +94,10 @@ export function AuthProvider({ children }) {
     // signed-out phone doesn't keep receiving the old driver's messages.
     await stopBackgroundTracking();
     await unregisterPushNotifications(userId);
+    // Locally-scheduled reminders live on the device, not the server, so
+    // deactivating the push token doesn't stop them — a signed-out phone would
+    // otherwise keep announcing the previous driver's break and CDL expiry.
+    await cancelAllLocalReminders();
     await clearToken();
     await clearRefreshToken();
     await AsyncStorage.multiRemove([NAME_KEY, EMAIL_KEY]);
@@ -101,6 +107,11 @@ export function AuthProvider({ children }) {
     setUserEmail('');
     setDriverProfile(null);
   };
+
+  // Tag crash reports with the driver id (and only the id) so a field crash
+  // can be traced back to the shift and load it happened on. Cleared on sign
+  // out so a shared cab phone never attributes one driver's crash to another.
+  useEffect(() => { identify(userId); }, [userId]);
 
   // Terminal session expiry: the Identity service rejected our refresh token
   // (revoked, or the driver was away longer than its lifetime). Sign out and

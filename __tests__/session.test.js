@@ -8,9 +8,12 @@
 
 jest.mock('../src/utils/tokenStorage', () => ({
   readToken: jest.fn(),
-  writeToken: jest.fn(() => Promise.resolve()),
+  writeToken: jest.fn(() => Promise.resolve(true)),
   readRefreshToken: jest.fn(),
-  writeRefreshToken: jest.fn(() => Promise.resolve()),
+  readRefreshTokenStrict: jest.fn(),
+  // Writes report whether the value actually reached storage — see
+  // __tests__/tokenStorage.test.js for the memory fallback behind it.
+  writeRefreshToken: jest.fn(() => Promise.resolve(true)),
 }));
 jest.mock('../src/api/auth', () => ({
   refreshSession: jest.fn(),
@@ -45,7 +48,7 @@ describe('getValidToken', () => {
 
   test('refreshes proactively inside the 60s expiry margin', async () => {
     storage.readToken.mockResolvedValue(makeToken(30)); // expires in 30s < margin
-    storage.readRefreshToken.mockResolvedValue('rt-1');
+    storage.readRefreshTokenStrict.mockResolvedValue('rt-1');
     authApi.refreshSession.mockResolvedValue({ token: 'new-access', refreshToken: 'rt-2' });
 
     await expect(session.getValidToken()).resolves.toBe('new-access');
@@ -71,7 +74,7 @@ describe('getValidToken', () => {
 describe('single-flight refresh', () => {
   test('concurrent callers share one refresh call', async () => {
     storage.readToken.mockResolvedValue(makeToken(10));
-    storage.readRefreshToken.mockResolvedValue('rt-1');
+    storage.readRefreshTokenStrict.mockResolvedValue('rt-1');
     let release;
     authApi.refreshSession.mockReturnValue(new Promise((r) => { release = r; }));
 
@@ -87,7 +90,7 @@ describe('single-flight refresh', () => {
   });
 
   test('a later refresh after completion starts a new flight', async () => {
-    storage.readRefreshToken.mockResolvedValue('rt-1');
+    storage.readRefreshTokenStrict.mockResolvedValue('rt-1');
     authApi.refreshSession.mockResolvedValue({ token: 't1', refreshToken: 'rt-2' });
     await session.refreshNow();
     await session.refreshNow();
@@ -97,7 +100,7 @@ describe('single-flight refresh', () => {
 
 describe('session expiry semantics', () => {
   test('an explicit rejection from Identity fires sessionExpired', async () => {
-    storage.readRefreshToken.mockResolvedValue('rt-dead');
+    storage.readRefreshTokenStrict.mockResolvedValue('rt-dead');
     authApi.refreshSession.mockRejectedValue(new Error('Invalid or expired refresh token'));
     const expired = jest.fn();
     session.onSessionExpired(expired);
@@ -107,7 +110,7 @@ describe('session expiry semantics', () => {
   });
 
   test('missing refresh token is terminal too', async () => {
-    storage.readRefreshToken.mockResolvedValue(null);
+    storage.readRefreshTokenStrict.mockResolvedValue(null);
     const expired = jest.fn();
     session.onSessionExpired(expired);
 
@@ -118,7 +121,7 @@ describe('session expiry semantics', () => {
   test('a network blip does NOT end the session — stale token rides along', async () => {
     const stale = makeToken(10);
     storage.readToken.mockResolvedValue(stale);
-    storage.readRefreshToken.mockResolvedValue('rt-1');
+    storage.readRefreshTokenStrict.mockResolvedValue('rt-1');
     authApi.refreshSession.mockRejectedValue(new TypeError('Network request failed'));
     const expired = jest.fn();
     session.onSessionExpired(expired);
@@ -128,8 +131,80 @@ describe('session expiry semantics', () => {
     expect(expired).not.toHaveBeenCalled();
   });
 
+  // Access tokens live 15 minutes, so this path runs several times an hour on
+  // a shift. Every one of these used to sign the driver out — the Identity
+  // service answers 200 with an `isAccepted` verdict for a real rejection, so
+  // none of them is one.
+  test.each([
+    ['a 502 from a restarting service', 'Session refresh failed (HTTP 502)'],
+    ['an HTML error page instead of JSON', 'Session refresh returned an unreadable body: Unexpected token <'],
+    ['a 200 carrying no token pair', 'Session refresh returned an incomplete token pair'],
+    ['an unreachable host', 'Session refresh unreachable: Network request failed'],
+  ])('%s does NOT end the session', async (_label, message) => {
+    storage.readRefreshTokenStrict.mockResolvedValue('rt-1');
+    const err = new Error(message);
+    err.transient = true;
+    authApi.refreshSession.mockRejectedValue(err);
+    const expired = jest.fn();
+    session.onSessionExpired(expired);
+
+    await expect(session.refreshNow()).resolves.toBeNull();
+    expect(expired).not.toHaveBeenCalled();
+  });
+
+  test('an unreadable keystore does NOT end the session', async () => {
+    // iOS refuses keychain reads while the device is locked — the normal state
+    // while the background location task is sending heartbeats.
+    storage.readRefreshTokenStrict.mockRejectedValue(new Error('User interaction is not allowed.'));
+    const expired = jest.fn();
+    session.onSessionExpired(expired);
+
+    await expect(session.refreshNow()).resolves.toBeNull();
+    expect(expired).not.toHaveBeenCalled();
+    expect(authApi.refreshSession).not.toHaveBeenCalled();
+  });
+
+  test('a transient failure leaves the stored refresh token alone', async () => {
+    storage.readRefreshTokenStrict.mockResolvedValue('rt-1');
+    const err = new Error('Session refresh failed (HTTP 503)');
+    err.transient = true;
+    authApi.refreshSession.mockRejectedValue(err);
+
+    await session.refreshNow();
+    // Overwriting it here — with a blank, or anything at all — is what made the
+    // NEXT refresh terminal instead of just retrying this one.
+    expect(storage.writeRefreshToken).not.toHaveBeenCalled();
+    expect(storage.writeToken).not.toHaveBeenCalled();
+  });
+
+  test('a refresh token that cannot be persisted does NOT end the session', async () => {
+    storage.readRefreshTokenStrict.mockResolvedValue('rt-1');
+    authApi.refreshSession.mockResolvedValue({ token: 'fresh', refreshToken: 'rt-2' });
+    storage.writeRefreshToken.mockResolvedValue(false); // keystore refused the write
+    const expired = jest.fn();
+    session.onSessionExpired(expired);
+
+    // The refresh itself succeeded, so the caller still gets a usable token —
+    // tokenStorage holds the rotated one in memory for the rest of this run.
+    await expect(session.refreshNow()).resolves.toBe('fresh');
+    expect(expired).not.toHaveBeenCalled();
+  });
+
+  test('the rotated refresh token is persisted BEFORE the access token', async () => {
+    storage.readRefreshTokenStrict.mockResolvedValue('rt-1');
+    authApi.refreshSession.mockResolvedValue({ token: 'fresh', refreshToken: 'rt-2' });
+    const order = [];
+    storage.writeRefreshToken.mockImplementation(() => { order.push('refresh'); return Promise.resolve(true); });
+    storage.writeToken.mockImplementation(() => { order.push('access'); return Promise.resolve(true); });
+
+    await session.refreshNow();
+    // The server has already rotated by now; the refresh token is the only
+    // value that can't be re-derived, so it goes down first.
+    expect(order).toEqual(['refresh', 'access']);
+  });
+
   test('unsubscribe stops notifications', async () => {
-    storage.readRefreshToken.mockResolvedValue(null);
+    storage.readRefreshTokenStrict.mockResolvedValue(null);
     const expired = jest.fn();
     const off = session.onSessionExpired(expired);
     off();

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { useAuth } from '../context/AuthContext';
+import { useWeather } from '../context/WeatherContext';
 import { sendHeartbeat } from '../api/main';
 import { startBackgroundTracking } from '../lib/backgroundLocation';
 import { deriveSpeedKph, isAcceptableFix } from '../lib/geo';
@@ -30,6 +31,7 @@ const MAX_FIX_AGE_MS = 5 * 60 * 1000; // never report a stale fix as "here now"
 
 export function useLocationSharing() {
   const { userId } = useAuth();
+  const { setFromHeartbeat } = useWeather();
 
   useEffect(() => {
     if (!userId || !Location) return;
@@ -65,6 +67,7 @@ export function useLocationSharing() {
           // coords.speed comes back null (see geo.deriveSpeedKph).
           speedKph: Math.max(0, fix._speedKph ?? 0),
         });
+        setFromHeartbeat(res);
         schedule(res?.nextHeartbeatSeconds ?? DEFAULT_INTERVAL_SEC);
       } catch {
         // Offline or backend hiccup — keep the loop alive, try again later.
@@ -117,5 +120,5 @@ export function useLocationSharing() {
       try { sub?.remove(); } catch {}
       try { appStateSub?.remove(); } catch {}
     };
-  }, [userId]);
+  }, [userId, setFromHeartbeat]);
 }

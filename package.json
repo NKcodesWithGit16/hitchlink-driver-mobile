@@ -10,7 +10,9 @@
     "web:direct": "expo start --web",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:ci": "jest --ci --reporters=default --maxWorkers=2"
+    "test:ci": "jest --ci --reporters=default --maxWorkers=2",
+    "check:prod-backend": "node scripts/check-prod-backend.js",
+    "eas-build-pre-install": "node scripts/check-prod-backend.js"
   },
   "dependencies": {
     "@config-plugins/react-native-callkeep": "^13.0.0",
@@ -21,6 +23,7 @@
     "@microsoft/signalr": "^10.0.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/netinfo": "11.5.2",
+    "@sentry/react-native": "~7.11.0",
     "expo": "~55.0.27",
     "expo-audio": "~55.0.15",
     "expo-blur": "~55.0.15",
@@ -43,6 +46,8 @@
     "expo-status-bar": "~55.0.6",
     "expo-system-ui": "~55.0.19",
     "expo-task-manager": "~55.0.17",
+    "expo-updates": "~55.0.26",
+    "hitchlink-quicklook": "file:./modules/hitchlink-quicklook",
     "hitchlink-voip": "file:./modules/hitchlink-voip",
     "react": "19.2.0",
     "react-dom": "19.2.0",
