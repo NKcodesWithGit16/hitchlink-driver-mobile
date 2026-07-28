@@ -67,6 +67,11 @@ export const en = {
     undoFailTitle: "Couldn't undo",
     undoFailBody: "That update was already saved. Ask your dispatcher to correct the status if it's wrong.",
     paperworkCaption: 'Delivery paperwork',
+    // Offered on the delivered card when no POD was captured — the case a
+    // geofence delivery always lands in, since it never passes the camera.
+    addPod: 'Add proof of delivery',
+    addPodSub: 'Optional — your dispatcher will see it',
+    addPodA11y: 'Add a proof-of-delivery photo for this load',
     photoNotSentTitle: 'Photo not sent',
     photoNotSentBody: "Your delivery was recorded, but the paperwork photo couldn't upload. Please resend it from Messages.",
     unreadAlertsA11y: '{count} unread alerts — open',

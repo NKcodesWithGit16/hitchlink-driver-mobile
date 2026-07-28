@@ -73,6 +73,7 @@ export default function LoadScreen() {
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [podUri, setPodUri] = useState(null);
+  const [podBusy, setPodBusy] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
   const [error, setError] = useState(false);
   const [undo, setUndo] = useState(null); // { prevStatus, message }
@@ -233,6 +234,40 @@ export default function LoadScreen() {
     }
   };
 
+  // Store the paperwork two ways: against the load itself (the permanent record
+  // the dispatcher's Completed Loads history reads) and as a chat photo (a live
+  // heads-up in the dispatch thread). The delivery still counts if either
+  // upload fails — tell the driver so they can resend it from Messages instead
+  // of silently losing the paperwork.
+  const attachPod = (uri, loadId) => {
+    setPodUri(uri);
+    return Promise.allSettled([
+      uploadLoadPhoto(loadId, { uri, caption: t('load.paperworkCaption') }),
+      sendPhotoMessage(user?.id, { uri, text: `📄 ${t('load.paperworkCaption')} — ${loadId ?? 'load'}` }),
+    ]).then((results) => {
+      if (results.some((r) => r.status === 'rejected')) {
+        Alert.alert(t('load.photoNotSentTitle'), t('load.photoNotSentBody'));
+      }
+    });
+  };
+
+  // Paperwork after the fact, from the delivered card. Two ways a load reaches
+  // Delivered without ever passing the camera: the dropoff geofence firing on a
+  // heartbeat (the server delivers it and the app only learns over the socket),
+  // or the driver dismissing the picker on the manual step. Both used to leave
+  // the load with no way to ever attach its POD — the action row is gone by
+  // then. Optional, and the load is already saved either way.
+  const addPodPhoto = async () => {
+    if (podBusy) return;
+    setPodBusy(true);
+    try {
+      const uri = await capturePod();
+      if (uri) await attachPod(uri, load?.id);
+    } finally {
+      setPodBusy(false);
+    }
+  };
+
   // Perform a status step: capture POD if the step calls for it, advance, then
   // offer a short-lived Undo (every step except the final Delivered, and only
   // when online — Undo needs the server).
@@ -241,22 +276,7 @@ export default function LoadScreen() {
     const prevStatus = status;
     if (action.pod) {
       const uri = await capturePod();
-      if (uri) {
-        setPodUri(uri);
-        // Store the paperwork two ways: against the load itself (the permanent
-        // record the dispatcher's Completed Loads history reads) and as a chat
-        // photo (a live heads-up in the dispatch thread). The delivery still
-        // counts if either upload fails — tell the driver so they can resend it
-        // from Messages instead of silently losing the paperwork.
-        Promise.allSettled([
-          uploadLoadPhoto(load?.id, { uri, caption: t('load.paperworkCaption') }),
-          sendPhotoMessage(user?.id, { uri, text: `📄 ${t('load.paperworkCaption')} — ${load?.id ?? 'load'}` }),
-        ]).then((results) => {
-          if (results.some((r) => r.status === 'rejected')) {
-            Alert.alert(t('load.photoNotSentTitle'), t('load.photoNotSentBody'));
-          }
-        });
-      }
+      if (uri) attachPod(uri, load?.id);
     }
     advance(action.next);
     if (action.next !== 'Delivered' && online) {
@@ -440,6 +460,8 @@ export default function LoadScreen() {
             styles={styles}
             load={load}
             podUri={podUri}
+            podBusy={podBusy}
+            onAddPhoto={addPodPhoto}
             stats={deliveredStats ?? computeLoadStats(load, null)}
             unit={distanceUnit}
           />
@@ -622,7 +644,7 @@ function DetailRow({ colors, styles, icon, label, value }) {
   );
 }
 
-function DeliveredCard({ colors, styles, load, podUri, stats, unit }) {
+function DeliveredCard({ colors, styles, load, podUri, podBusy, onAddPhoto, stats, unit }) {
   const t = useT();
   const reduce = useReduceMotion();
   const scale = useRef(new Animated.Value(reduce ? 1 : 0.9)).current;
@@ -667,7 +689,28 @@ function DeliveredCard({ colors, styles, load, podUri, stats, unit }) {
           </View>
         ) : null}
 
-        {podUri ? <Image source={{ uri: podUri }} style={styles.podThumb} /> : null}
+        {/* Paperwork: the shot already taken, or the offer to take one. The
+            offer is what a geofence-delivered load needs — it never passed the
+            camera on its way here. Never blocks: the load is already saved. */}
+        {podUri ? (
+          <Image source={{ uri: podUri }} style={styles.podThumb} />
+        ) : (
+          <Pressable
+            onPress={onAddPhoto}
+            disabled={podBusy}
+            style={({ pressed }) => [styles.podAdd, { borderColor: ink, opacity: podBusy ? 0.6 : pressed ? 0.75 : 1 }]}
+            accessibilityRole="button"
+            accessibilityLabel={t('load.addPodA11y')}
+          >
+            <Icon name={podBusy ? 'loader' : 'camera'} size={18} color={ink} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.podAddText, { color: ink }]}>
+                {podBusy ? t('ui.oneSec') : t('load.addPod')}
+              </Text>
+              <Text style={[styles.podAddSub, { color: ink }]}>{t('load.addPodSub')}</Text>
+            </View>
+          </Pressable>
+        )}
       </LinearGradient>
     </Animated.View>
   );
@@ -787,6 +830,13 @@ const makeStyles = (c) => StyleSheet.create({
   deliveredSplitText: { fontSize: 12.5, fontFamily: FONT.bold, opacity: 0.72, fontVariant: ['tabular-nums'] },
   deliveredSplitPip: { width: 5, height: 5, borderRadius: 3, opacity: 0.55 },
   podThumb: { width: 120, height: 120, borderRadius: radius.md, marginTop: space[4], borderWidth: 2, borderColor: '#fff' },
+  podAdd: {
+    flexDirection: 'row', alignItems: 'center', gap: space[3], alignSelf: 'stretch',
+    marginTop: space[4], minHeight: tap.secondary, paddingHorizontal: space[4],
+    borderRadius: radius.md, borderWidth: 1, borderStyle: 'dashed',
+  },
+  podAddText: { fontSize: 15, fontFamily: FONT.bold },
+  podAddSub: { fontSize: 11.5, fontFamily: FONT.medium, opacity: 0.8, marginTop: 1 },
 
   confirmOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 40, paddingHorizontal: space[5] },
   confirmCard: { width: '100%', borderRadius: radius['2xl'], borderWidth: 1, padding: space[6], alignItems: 'center', gap: space[3] },
