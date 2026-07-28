@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Switch, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Switch, Image, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import ScreenFade from '../../src/components/ui/ScreenFade';
@@ -12,7 +12,8 @@ import { hosState } from '../../src/components/driver/HOSPill';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useT, useLanguage } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
-import { useConfirmEveryStep, setConfirmEveryStep, useDistanceUnit, setDistanceUnit } from '../../src/lib/prefs';
+import { useConfirmEveryStep, setConfirmEveryStep, useDistanceUnit, setDistanceUnit, useNavApp, setNavApp } from '../../src/lib/prefs';
+import { availableNavApps, resolveNavApp, NAV_APP_LABELS } from '../../src/lib/navApps';
 import { fetchHos, fetchActiveLoad, fetchEarnings, fetchLoadHistory } from '../../src/api/main';
 import { hos as mockHos, earnings as mockEarnings } from '../../src/data/mock';
 import { hm, toDistance, money, distNum } from '../../src/lib/format';
@@ -57,6 +58,10 @@ export default function MoreScreen() {
   const languageLabel = lang === 'ka' ? t('more.languageGeorgian') : t('more.languageEnglish');
   const distanceUnit = useDistanceUnit();
   const distanceUnitLabel = distanceUnit === 'km' ? t('more.kilometers') : t('more.miles');
+  // Resolved, not raw: this row must name the app Navigate will actually open.
+  // A driver who picked Trucker Path before it was withdrawn from the iOS
+  // picker would otherwise read "Trucker Path" while getting Google Maps.
+  const navApp = resolveNavApp(useNavApp(), Platform.OS);
 
   // ACCENT_PRESETS/BG_PRESETS_NIGHT live in theme/tokens.js (design tokens,
   // not text) with English preset.label values — translate at the render
@@ -88,7 +93,7 @@ export default function MoreScreen() {
         { icon: 'bell',        label: t('more.notifications'), tone: 'orange', meta: t('more.on') },
         { icon: 'globe',       label: t('more.language'),      tone: 'green',  meta: languageLabel, key: 'language' },
         { icon: 'map',         label: t('more.distanceUnits'), tone: 'teal',   meta: distanceUnitLabel, key: 'distanceUnit' },
-        { icon: 'navigation',  label: t('more.navigationApp'), tone: 'blue',   meta: t('more.appleMaps') },
+        { icon: 'navigation',  label: t('more.navigationApp'), tone: 'blue',   meta: NAV_APP_LABELS[navApp], key: 'navApp' },
         { icon: 'eye-off',     label: t('more.hiddenLoads'),   tone: 'purple', meta: t('more.manage'), route: '/hidden-loads' },
       ],
     },
@@ -139,6 +144,19 @@ export default function MoreScreen() {
       Alert.alert(t('more.distanceUnits'), undefined, [
         { text: t('more.miles'), onPress: () => setDistanceUnit('mi') },
         { text: t('more.kilometers'), onPress: () => setDistanceUnit('km') },
+        { text: t('common.cancel'), style: 'cancel' },
+      ]);
+      return;
+    }
+    if (row.key === 'navApp') {
+      // Brand names, so no i18n here (see lib/navApps). availableNavApps drops
+      // Apple Maps on Android — it doesn't exist there, and dropping it also
+      // keeps this to three buttons, which is all an Android Alert can show.
+      Alert.alert(t('more.navigationApp'), undefined, [
+        ...availableNavApps(Platform.OS).map((app) => ({
+          text: NAV_APP_LABELS[app],
+          onPress: () => setNavApp(app),
+        })),
         { text: t('common.cancel'), style: 'cancel' },
       ]);
       return;

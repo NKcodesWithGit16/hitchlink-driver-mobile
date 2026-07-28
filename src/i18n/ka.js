@@ -201,9 +201,9 @@ export const ka = {
     distanceUnits: 'მანძილის ერთეული',
     miles: 'მილი',
     kilometers: 'კილომეტრი',
+    // აპების სახელები ბრენდებია და არ ითარგმნება — იხ. lib/navApps.js.
     navigationApp: 'ნავიგაციის აპი',
     hiddenLoads: 'დამალული ტვირთები',
-    appleMaps: 'Apple Maps',
     helpCenter: 'დახმარების ცენტრი',
     contactSupport: 'დაუკავშირდით მხარდაჭერას',
     rateApp: 'შეაფასეთ აპლიკაცია',

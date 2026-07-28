@@ -2,7 +2,7 @@
 // durable AsyncStorage backing, plus a tiny subscribe/emit so a change made on
 // the More tab is reflected everywhere else without either remounting.
 //
-// Two flags today:
+// Three flags today:
 //   - "confirm every status update" — a safety opt-in for drivers who'd rather
 //     tap twice on every step than rely on Undo. Off by default: milestones
 //     (Loaded, Delivered) already confirm regardless.
@@ -10,9 +10,12 @@
 //     computation (lib/geo, lib/odometer, lib/loadStats, the AsyncStorage
 //     stats records) always stays in miles; this only controls what screens
 //     convert to at render time, so it's safe to flip anytime.
+//   - "navigation app" — which app the Navigate button hands off to. Purely a
+//     hand-off target (see lib/navApps); nothing else in the app reads it.
 
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { DEFAULT_NAV_APP, normalizeNavApp } from './navApps';
 
 const KEY = 'hl_confirm_every_step';
 
@@ -106,4 +109,53 @@ export function useDistanceUnit() {
     return subscribeDistanceUnit(setUnit);
   }, []);
   return unit;
+}
+
+const NAV_APP_KEY = 'hl_nav_app';
+
+let navApp = DEFAULT_NAV_APP; // 'google' | 'apple' | 'truckerpath'
+let navAppLoaded = false;
+const navAppListeners = new Set();
+
+function emitNavApp() {
+  navAppListeners.forEach((l) => { try { l(navApp); } catch {} });
+}
+
+export async function loadNavApp() {
+  if (navAppLoaded) return navApp;
+  try {
+    const v = await AsyncStorage.getItem(NAV_APP_KEY);
+    // normalize, not a bare assignment: a value written by a build that offered
+    // an app this one doesn't must degrade to the default, never leave Navigate
+    // pointing at a scheme nothing can open.
+    if (v) navApp = normalizeNavApp(v);
+  } catch {}
+  navAppLoaded = true;
+  emitNavApp();
+  return navApp;
+}
+
+export function getNavApp() {
+  return navApp;
+}
+
+export async function setNavApp(app) {
+  navApp = normalizeNavApp(app);
+  navAppLoaded = true;
+  emitNavApp();
+  try { await AsyncStorage.setItem(NAV_APP_KEY, navApp); } catch {}
+}
+
+export function subscribeNavApp(fn) {
+  navAppListeners.add(fn);
+  return () => navAppListeners.delete(fn);
+}
+
+export function useNavApp() {
+  const [app, setApp] = useState(navApp);
+  useEffect(() => {
+    loadNavApp().then(setApp);
+    return subscribeNavApp(setApp);
+  }, []);
+  return app;
 }

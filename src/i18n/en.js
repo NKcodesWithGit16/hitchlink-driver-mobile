@@ -198,9 +198,10 @@ export const en = {
     distanceUnits: 'Distance units',
     miles: 'Miles',
     kilometers: 'Kilometers',
+    // The app names themselves are brands, not copy — they live in
+    // lib/navApps.js (NAV_APP_LABELS) and read the same in every locale.
     navigationApp: 'Navigation app',
     hiddenLoads: 'Hidden loads',
-    appleMaps: 'Apple Maps',
     helpCenter: 'Help center',
     contactSupport: 'Contact support',
     rateApp: 'Rate the app',

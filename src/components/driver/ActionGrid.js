@@ -1,6 +1,8 @@
 import { View, StyleSheet, Linking, Platform } from 'react-native';
 import IconButton from '../ui/IconButton';
 import { useT } from '../../i18n/LanguageContext';
+import { useNavApp } from '../../lib/prefs';
+import { navUrlCandidates, resolveNavApp } from '../../lib/navApps';
 import { space } from '../../theme/tokens';
 
 // Loaded defensively, same probe pattern as useLocationSharing — if
@@ -36,29 +38,40 @@ async function currentCoords() {
 }
 
 /* Navigate / Call / Chat — the three things a driver reaches for.
-   Navigate HANDS OFF to the phone's own maps app (never in-app). */
+   Navigate HANDS OFF to the phone's own navigation app (never in-app), to
+   whichever one the driver picked under More › Navigation app. */
 export default function ActionGrid({ address, lat, lng, phone, onChat }) {
   const t = useT();
+  const navApp = useNavApp();
+
   const navigate = async () => {
     // Prefer the geocoded pickup/dropoff coordinates over the free-text
     // address — a street name alone can be ambiguous (multiple towns share
     // one), where a lat/lng pair never is.
     const destination = (lat != null && lng != null) ? `${lat},${lng}` : (address || '');
-    const q = encodeURIComponent(destination);
+    if (!destination) return;
     const origin = await currentCoords();
-    const o = origin ? encodeURIComponent(origin) : null;
-    const gmWeb = o
-      ? `https://www.google.com/maps/dir/?api=1&origin=${o}&destination=${q}&travelmode=driving`
-      : `https://www.google.com/maps/dir/?api=1&destination=${q}&travelmode=driving`;
-    // Google Maps app first on every platform — comgooglemaps:// on iOS,
-    // google.navigation: on Android. Falls back to the Google Maps website
-    // (never Apple Maps) if the app isn't installed.
-    const url = Platform.select({
-      ios: o ? `comgooglemaps://?saddr=${o}&daddr=${q}&directionsmode=driving` : `comgooglemaps://?daddr=${q}&directionsmode=driving`,
-      android: `google.navigation:q=${q}`,
-      default: gmWeb,
+
+    // Ordered fallbacks: the chosen app's native scheme, then its web form or
+    // its store page. Walk them until one opens — openURL rejects for a scheme
+    // no installed app handles, which is exactly the "not installed" signal.
+    const candidates = navUrlCandidates({
+      // Resolve first: a preference this platform no longer offers (Trucker
+      // Path on iOS) must fall back to the default rather than build a
+      // hand-off that opens an app without the stop.
+      app: resolveNavApp(navApp, Platform.OS),
+      platform: Platform.OS,
+      destination,
+      origin,
     });
-    Linking.openURL(url).catch(() => Linking.openURL(gmWeb));
+    for (const url of candidates) {
+      try {
+        await Linking.openURL(url);
+        return;
+      } catch {
+        // Not installed / scheme unhandled — try the next one down.
+      }
+    }
   };
 
   const call = () => phone && Linking.openURL(`tel:${phone}`).catch(() => {});
