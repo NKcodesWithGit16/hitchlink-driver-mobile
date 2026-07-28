@@ -69,6 +69,16 @@ builds without `@microsoft/signalr`, or with no API URL configured — screens t
 - `src/hooks/useCallSocket.js` — `IncomingCall` / `CallAccepted` / `CallDeclined` / `CallEnded` /
   `CallCancelled` / `CallHandledElsewhere`
 
+**The chat thread pins itself to the newest message**, and the rules are deliberate. `messages.js` re-pins
+on every `onContentSizeChange` — not on message-count change, which missed both the first paint (FlatList
+measures rows in batches, so the "bottom" moves several times) and the send/echo swap (same count, taller
+bubble). The pin is conditional on the driver already being within `BOTTOM_PIN_SLOP` of the bottom, which
+is what keeps it from re-introducing the bug that got `onContentSizeChange` removed originally: a bubble
+growing 22px for its reveal-on-tap timestamp must not yank someone reading history down to the end.
+Sending force-pins regardless. Entering the tab **always** drops to the newest message — that's a
+`useFocusEffect`, not a mount effect, because the tab stays mounted and restoring the old scroll offset
+after a tab switch was reported as a bug: opening a chat means "show me the latest".
+
 All three resolve the hub's JWT via `accessTokenFactory: () => getValidToken()` (`src/lib/session.js`), so
 a reconnect after token expiry re-authenticates automatically rather than failing. On `onreconnected`, the
 chat/load hooks re-join their room and force a re-fetch to catch anything missed while the socket was down
@@ -186,6 +196,12 @@ worse than undercounting) or fall under `MinOdometerSegmentMeters` (25 m — GPS
 otherwise add phantom miles across a 10-hour break). Good enough for a dispatcher metric; **not** a legal
 odometer, and not something to base per-mile pay on without more work.
 
+`geo.odometerSegmentMeters` is the phone-side mirror of those two rules and gates every `recordSegment`
+call. Keep it in step with `HeartbeatCommandHandler` — the device record used to have no filter at all, so
+it drifted upward against the server's for the same trip, which only stayed invisible because the server
+wins whenever it reports anything. Note it is a *separate* question from `isAcceptableFix`: a fix can be
+perfectly good to report as the live position and still be wrong to add to a distance total.
+
 **The Pay tab's stats follow the visible history.** `src/lib/earningsAdjust.js` takes the hidden loads back
 out of the period the screen is showing, so hero/chart/insights/grid/breakdown all move the instant a load is
 removed or restored — no refetch, just a `useMemo` on `hiddenIds`. It is an *adjustment*, not a recompute,
@@ -245,8 +261,41 @@ Design tokens (`src/theme/tokens.js`): near-black `#0A0E14` surfaces, near-white
 brand teal `#1FB6CE` / navy `#04285A`. Action colors are meaningful — teal = progress, green = completion,
 red = call/severe weather, amber = plan a stop. Primary actions are 64px tall with tabular-number stats.
 
-Navigation deliberately hands off to the phone's native Maps app rather than rendering in-app turn-by-turn
-— a product decision, not a gap.
+Navigation deliberately hands off to the phone's own navigation app rather than rendering in-app
+turn-by-turn — a product decision, not a gap. **Which** app is a driver preference (More › Navigation app,
+persisted by `lib/prefs.js`): Google Maps (default), Apple Maps, or Trucker Path. `lib/navApps.js` is the
+pure URL half — it returns an *ordered* candidate list and `ActionGrid` opens the first the OS accepts,
+because `Linking.openURL` rejecting an unhandled scheme is the only "app not installed" signal available.
+Nothing calls `canOpenURL`, deliberately: on iOS that needs every scheme in `LSApplicationQueriesSchemes`,
+which is a native change, and a native change means bumping `expo.version` before any OTA (see below).
+Apple Maps is dropped from the Android picker — it can't exist there, and dropping it also keeps that
+Alert to the three buttons Android can render.
+
+⚠️ **Trucker Path publishes no deep link.** Google and Apple document their URL formats; Trucker Path's
+help centre only says it *can* publish a scheme on request (`truckerpath://route?...` is their own
+example). Requested at integrations@truckerpath.com on 2026-07-28 — when they answer, pin their format and
+delete the guesses. Until then the two platforms differ, and the difference is the whole design:
+
+- **Android works properly today** via `geo:`, which hands the destination to whichever app holds the
+  system default-navigation role — a role Trucker Path publishes its own guide to claiming. A driver who
+  picked Trucker Path here but never set that default gets their real default (usually Google Maps) or a
+  chooser; the *destination* still arrives, which is what matters. Because something always handles
+  `geo:`, the bare-scheme and store entries after it are unreachable on Android. That's deliberate: we
+  can't detect whether Trucker Path is installed without manifest `<queries>` (a native change), and
+  arriving in the wrong app **with** the stop beats arriving in the right one without it.
+- **iOS cannot be solved from here, so Trucker Path is hidden from the iOS/web picker.** There's no
+  `geo:` equivalent, and since any path under a registered scheme opens an app on iOS, the first guess
+  would launch Trucker Path whether or not it understands the destination — the driver only discovers the
+  missing stop mid-route. Adding it back to `availableNavApps` is the ONLY change needed when a real
+  scheme arrives: `navUrlCandidates` still builds the iOS form and is still tested for it.
+
+`availableNavApps`/`resolveNavApp` (product policy — which apps we offer) are deliberately separate from
+`navUrlCandidates` (physics — what URLs would open app X). Callers **must** `resolveNavApp` first: a
+preference stored before an app was withdrawn otherwise builds a dead hand-off, and the More row must
+render the *resolved* app or it names one Navigate isn't using.
+
+Store fallbacks are searches rather than product links because neither the App Store id nor the Android
+package name is verified — they were asked for in the same email.
 
 ## Releases, crash reporting and on-device reminders
 
@@ -270,6 +319,15 @@ newly-added native module — or assumes a different RN architecture — **will*
 that lacks it and crash on launch. **So: bump `expo.version` in the same commit as any native change, and
 never publish an OTA across one.** Version history so far: `1.0.0` → `1.0.1` (expo-updates + Sentry landed)
 → `1.0.2` (added `modules/hitchlink-quicklook`, switched to the New Architecture).
+
+The rule cuts both ways, and the second half is easy to forget: a bump is *mandatory* for a native change
+but **not free otherwise**, because it strands every installed binary on the old runtime version. Work
+that is purely JS should normally ship as an OTA to the existing build rather than as a new version.
+TestFlight `1.0.2 (3)` had 18 installs when the nav-app picker, chat-scroll and odometer work landed —
+all JS — so those shipped as an `eas update` on the `testflight` channel and the version deliberately
+stayed at `1.0.2`. Before bumping, run `git diff --name-only <last-bump>..HEAD` and look for
+`package.json`, `app.json`, `modules/` or `ios/`; if none appear, an OTA reaches drivers already on the
+build instead of asking them to install a new one.
 
 **Crash reporting is opt-in via `src/lib/observability.js`.** It only activates when `EXPO_PUBLIC_SENTRY_DSN`
 is set, so a checkout without a Sentry project behaves exactly as before. The root `ErrorBoundary`
