@@ -9,7 +9,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../../src/components/ui/Icon';
@@ -53,6 +53,14 @@ const replyPreviewOf = (m) => ({ id: m.id, from: m.from, text: m.text, kind: m.k
 // guaranteed top-down expand (see Bubble's revealAnim) instead of leaving it
 // to LayoutAnimation, which doesn't let us control which edge stays put.
 const REVEALED_ROW_HEIGHT = 22;
+// Anything within this of the bottom of the thread counts as "at the bottom"
+// for auto-scroll purposes — roughly one short bubble, so a pixel or two of
+// overscroll doesn't unpin it. See "Keeping the newest message in view".
+const BOTTOM_PIN_SLOP = 120;
+// How long the thread gets to lay itself out before scroll events are treated
+// as the driver's own. FlatList measures rows in batches, so the real bottom
+// moves several times after the first paint.
+const SETTLE_MS = 800;
 
 // "kind" describes an attachment message's payload type; used both for the
 // reply-quote preview and the composer's edit/reply context bar.
@@ -107,6 +115,11 @@ export default function MessagesScreen() {
   const [docSaveBusy,  setDocSaveBusy]  = useState(false);
   const [docSaveAsset, setDocSaveAsset] = useState(null);
   const scrollRef   = useRef(null);
+  // Bottom-pinning state — see the "Keeping the newest message in view" block
+  // below. Declared up here with the other refs because the keyboard listeners
+  // (which run before that block in source order) read them too.
+  const atBottomRef = useRef(true);   // driver is parked on the newest message
+  const settledRef  = useRef(false);  // first paint finished laying itself out
   const kbPad       = useRef(new Animated.Value(0)).current; // live keyboard height → wrapper padding
   const seenIdsRef  = useRef(new Set());    // dispatcher-message ids already dinged/accounted for
   const firstLoadRef = useRef(true);        // skip the sound on the initial history fetch
@@ -140,7 +153,12 @@ export default function MessagesScreen() {
         duration: e?.duration || 220,
         useNativeDriver: false,
       }).start();
-      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+      // Follow the keyboard down to the newest message only if that's where
+      // the driver already was. Scrolled up re-reading something, tapping the
+      // composer must not throw away their place.
+      if (atBottomRef.current) {
+        requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+      }
     });
     const h = Keyboard.addListener(hideEvt, (e) => {
       setKbOpen(false);
@@ -254,21 +272,72 @@ export default function MessagesScreen() {
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated }));
   }, []);
 
-  // Auto-scroll only when a message is actually ADDED — not on every content
-  // size change. The ScrollView used to jump to the bottom on ANY layout
-  // change (onContentSizeChange), which fired every time a bubble's reveal-
-  // on-tap timestamp appeared/disappeared or a voice/document bubble's tap
-  // toggled its reveal state, yanking the view to the bottom mid-tap.
-  const prevItemCountRef = useRef(0);
-  useEffect(() => {
-    if (items.length > prevItemCountRef.current) scrollToEnd(prevItemCountRef.current > 0);
-    prevItemCountRef.current = items.length;
-  }, [items.length, scrollToEnd]);
+  // ── Keeping the newest message in view ──────────────────────────────────
+  // A messenger opens on the newest message and stays there. Auto-scrolling
+  // only when the message COUNT rose (what this did before) missed both of the
+  // cases that matter:
+  //
+  //   Opening the tab — the one scroll fired a frame after the data arrived,
+  //   before FlatList had measured the variable-height bubbles. It only ever
+  //   renders a batch at a time, so "the bottom" it scrolled to was the bottom
+  //   of the first ~20 rows, part-way up the thread.
+  //
+  //   Sending — the optimistic bubble bumps the count and scrolls, then the
+  //   server echo replaces it with the persisted copy. Same count, different
+  //   height (plus a "seen" avatar row appearing), so nothing re-scrolled and
+  //   the driver was left just off the bottom of their own message.
+  //
+  // So pin to the bottom on every content-size change instead, but ONLY while
+  // the driver is already there. That guard is what lets this coexist with the
+  // reveal-on-tap timestamp: scrolled up reading history, a bubble growing
+  // 22px no longer yanks the view down — which is the exact bug that got
+  // onContentSizeChange removed in the first place.
+  //
+  // Until the thread settles, FlatList is still measuring batches and the
+  // bottom keeps moving, so every change pins unconditionally and without
+  // animation — the driver should never SEE the thread walking itself down.
+  // Settled means either they took control (a drag) or layout has had time to
+  // converge; from then on it's the conditional pin, animated.
+  //
+  // This runs on FOCUS, not just on mount, and that's the whole point: the tab
+  // stays mounted when the driver switches away, so scrolling up to re-read
+  // something and coming back used to restore the old scroll offset. Opening
+  // the chat means "show me the latest", so every entry resets the pin and
+  // drops to the newest message — the scroll position is not worth preserving
+  // across a tab switch, the conversation is.
+  useFocusEffect(
+    useCallback(() => {
+      atBottomRef.current = true;
+      settledRef.current = false;
+      scrollToEnd(false);
+      const id = setTimeout(() => { settledRef.current = true; }, SETTLE_MS);
+      return () => clearTimeout(id);
+    }, [scrollToEnd]),
+  );
+
+  const onScroll = useCallback((e) => {
+    if (!settledRef.current) return; // our own settling scrolls, not the driver
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    const fromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
+    atBottomRef.current = fromBottom <= BOTTOM_PIN_SLOP;
+  }, []);
+
+  const onContentSizeChange = useCallback(() => {
+    if (!settledRef.current) { scrollToEnd(false); return; }
+    if (atBottomRef.current) scrollToEnd(true);
+  }, [scrollToEnd]);
+
+  // Sending is an explicit "I'm on the newest message" — even if the driver had
+  // scrolled up, their own message has to land in view.
+  const pinToBottom = useCallback(() => {
+    atBottomRef.current = true;
+    scrollToEnd(settledRef.current);
+  }, [scrollToEnd]);
 
   const append = useCallback((msg) => {
     setItems((prev) => [...prev, { id: `local-${Date.now()}`, from: 'driver', at: nowStr(), ...msg }]);
-    scrollToEnd();
-  }, [scrollToEnd]);
+    pinToBottom();
+  }, [pinToBottom]);
 
   const send = useCallback((body) => {
     const value = (body ?? text).trim();
@@ -306,7 +375,7 @@ export default function MessagesScreen() {
     const localId = `local-${Date.now()}`;
     setItems((prev) => [...prev, { id: localId, from: 'driver', at: nowStr(), kind: 'voice', uri, durationSec, waveformPeaks, ...(replyTo ? { replyTo: replyPreviewOf(replyTo) } : {}) }]);
     setReplyTo(null);
-    scrollToEnd();
+    pinToBottom();
     try {
       await sendVoiceMessage(user.id, { uri, durationSec, waveformPeaks, replyToMessageId: rid });
       setItems((prev) => prev.filter((m) => m.id !== localId));
@@ -316,7 +385,7 @@ export default function MessagesScreen() {
       setItems((prev) => prev.map((m) => (m.id === localId ? { ...m, failed: true } : m)));
       haptics.error();
     }
-  }, [user?.id, load, scrollToEnd, replyTo]);
+  }, [user?.id, load, pinToBottom, replyTo]);
 
   // Tap-to-record voice: start() flips the composer into a recording bar,
   // stop() sends the clip through sendVoice, cancel() discards it.
@@ -434,7 +503,7 @@ export default function MessagesScreen() {
       const localId = `local-${Date.now()}`;
       setItems((prev) => [...prev, { id: localId, from: 'driver', at: nowStr(), kind: 'image', uri, ...(replyTo ? { replyTo: replyPreviewOf(replyTo) } : {}) }]);
       setReplyTo(null);
-      scrollToEnd();
+      pinToBottom();
       try {
         await sendPhotoMessage(user.id, { uri, replyToMessageId: rid });
         setItems((prev) => prev.filter((m) => m.id !== localId));
@@ -453,7 +522,7 @@ export default function MessagesScreen() {
       haptics.error();
       Alert.alert(t('messages.attachFailedTitle'), t('messages.attachFailedBody'));
     }
-  }, [user?.id, replyTo, scrollToEnd, load, t]);
+  }, [user?.id, replyTo, pinToBottom, load, t]);
 
   const pickDocument = useCallback(async () => {
     if (!user?.id) return;
@@ -470,7 +539,7 @@ export default function MessagesScreen() {
         ...(replyTo ? { replyTo: replyPreviewOf(replyTo) } : {}),
       }]);
       setReplyTo(null);
-      scrollToEnd();
+      pinToBottom();
       try {
         await sendDocumentMessage(user.id, { uri: asset.uri, name: asset.name, mimeType: asset.mimeType, replyToMessageId: rid });
         setItems((prev) => prev.filter((m) => m.id !== localId));
@@ -486,7 +555,7 @@ export default function MessagesScreen() {
       haptics.error();
       Alert.alert(t('messages.attachFailedTitle'), t('messages.attachFailedBody'));
     }
-  }, [user?.id, replyTo, scrollToEnd, load, t]);
+  }, [user?.id, replyTo, pinToBottom, load, t]);
 
   // Messages + real per-day separators, flattened into the single keyed array
   // the virtualized list below consumes. Grouping neighbours (prevFrom/
@@ -634,6 +703,15 @@ export default function MessagesScreen() {
           showsVerticalScrollIndicator={false}
           style={styles.chatScroll}
           ListFooterComponent={typing ? <TypingIndicator colors={colors} styles={styles} dispatcher={dispatcher} /> : null}
+          // Bottom-pinning (see the block above onScroll): the content size
+          // changes several times while FlatList measures its batches, and each
+          // one re-pins until the real bottom is reached.
+          onContentSizeChange={onContentSizeChange}
+          onScroll={onScroll}
+          scrollEventThrottle={16}
+          // A drag means the driver has taken over — stop treating scroll
+          // events as our own settling and honour where they leave the thread.
+          onScrollBeginDrag={() => { settledRef.current = true; }}
           // The thread opens at the bottom; rendering a screenful up front
           // keeps that first paint from showing a gap above the newest message.
           initialNumToRender={20}
