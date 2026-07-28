@@ -47,20 +47,51 @@ export function freezeRecord({ loadId, plannedMiles, rate, deadheadMiles, loaded
   };
 }
 
+const n = (x) => (x == null ? 0 : Number(x) || 0);
+
 /**
  * Merge a load with any stored actuals into one stats object the UI reads.
- * Precedence for each figure: a frozen record → inline fields on the load
- * (mock history today, backend tomorrow) → planned-only. `hasActual` tells the
- * UI whether to show the driven/deadhead breakdown or just the booked numbers,
- * so a live load with no GPS yet degrades to planned instead of printing zeros.
+ *
+ * The actuals come from one of two places and the choice is deliberate:
+ *
+ *   SERVER  — `deadheadMiles`/`loadedMiles`/`actualMiles` on the load, summed
+ *             by the backend from this same GPS stream (HeartbeatCommandHandler).
+ *             Authoritative: it survives a reinstall or a new phone, can't be
+ *             edited on the device, and the dispatcher sees the same number.
+ *   DEVICE  — the frozen record from lib/odometer.js, in AsyncStorage.
+ *
+ * The server wins whenever it reports any distance at all. A server total of 0
+ * means "nothing tracked" — a load delivered before the odometer existed, or a
+ * trip that never reported — and there the device record is all anyone has, so
+ * it stands. The two are taken as a SET rather than field-by-field: mixing a
+ * server `loaded` with a device `deadhead` would produce a total that matches
+ * neither source. Mock mode has no server figures, so it uses the record.
+ *
+ * `planned` may legitimately be null now — a dispatcher can book a load without
+ * quoting mileage — which is why every downstream figure guards it.
+ * `hasActual` tells the UI whether to show the driven/deadhead breakdown or
+ * just the booked numbers, so a live load with no GPS yet degrades to planned
+ * instead of printing zeros.
  */
 export function computeLoadStats(load, record) {
   const planned = record?.plannedMiles ?? load?.miles ?? null;
   const rate = record?.rate ?? load?.rate ?? null;
-  const loaded = record?.loadedMiles ?? load?.loadedMiles ?? null;
-  const deadhead = record?.deadheadMiles ?? load?.deadheadMiles ?? null;
 
-  let driven = record?.drivenMiles ?? load?.drivenMiles ?? null;
+  // `actualMiles` is the API's name for it; `drivenMiles` is the mock's and the
+  // frozen record's. Same quantity.
+  const serverDriven = n(load?.actualMiles ?? load?.drivenMiles);
+  const useServer = serverDriven > 0 || n(load?.loadedMiles) + n(load?.deadheadMiles) > 0;
+
+  const loaded = useServer
+    ? n(load?.loadedMiles)
+    : (record?.loadedMiles ?? null);
+  const deadhead = useServer
+    ? n(load?.deadheadMiles)
+    : (record?.deadheadMiles ?? null);
+
+  let driven = useServer
+    ? (serverDriven || n(load?.loadedMiles) + n(load?.deadheadMiles))
+    : (record?.drivenMiles ?? null);
   if (driven == null && (loaded != null || deadhead != null)) {
     driven = (loaded || 0) + (deadhead || 0);
   }

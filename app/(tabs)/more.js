@@ -89,6 +89,7 @@ export default function MoreScreen() {
         { icon: 'globe',       label: t('more.language'),      tone: 'green',  meta: languageLabel, key: 'language' },
         { icon: 'map',         label: t('more.distanceUnits'), tone: 'teal',   meta: distanceUnitLabel, key: 'distanceUnit' },
         { icon: 'navigation',  label: t('more.navigationApp'), tone: 'blue',   meta: t('more.appleMaps') },
+        { icon: 'eye-off',     label: t('more.hiddenLoads'),   tone: 'purple', meta: t('more.manage'), route: '/hidden-loads' },
       ],
     },
     {

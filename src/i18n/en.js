@@ -194,6 +194,7 @@ export const en = {
     miles: 'Miles',
     kilometers: 'Kilometers',
     navigationApp: 'Navigation app',
+    hiddenLoads: 'Hidden loads',
     appleMaps: 'Apple Maps',
     helpCenter: 'Help center',
     contactSupport: 'Contact support',
@@ -313,6 +314,13 @@ export const en = {
     perKm: 'Per km',
     milesDriven: 'Miles driven',
     kilometersDriven: 'Kilometers driven',
+    // Planned (the dispatcher's quote, may be missing) vs actual (GPS-measured)
+    plannedSub: 'Planned {n}',
+    gpsMeasured: 'GPS measured',
+    plannedNoGps: 'Planned — no GPS yet',
+    milesPlannedActual: '{planned} {unit} planned · {actual} {unit} driven',
+    milesPlannedOnly: '{planned} {unit} planned',
+    milesActualOnly: '{actual} {unit} driven',
     loadsCompleted: 'Loads completed',
     revenuePerMile: 'Revenue / mile',
     revenuePerKm: 'Revenue / km',
@@ -347,6 +355,22 @@ export const en = {
     photoFallback: 'Photo',
     previousPhotoA11y: 'Previous photo',
     nextPhotoA11y: 'Next photo',
+    // Long-press → focus mode → remove a load from this driver's own history
+    longPressRemoveA11y: 'Press and hold to remove this load from your history',
+    closeFocusA11y: 'Close and keep this load',
+    deleteFromHistory: 'Delete from history',
+    deleteHint: 'Removes it from your history on this phone only. Your pay and your dispatcher’s records don’t change.',
+    deleteConfirmTitle: 'Delete this load?',
+    deleteConfirmBody: 'It disappears from your load history. You have 3 weeks to bring it back from More › Hidden loads — after that it’s gone for good.',
+    keepLoad: 'Keep it',
+    removedFromHistory: 'Removed from history',
+    historyAllHiddenRestore: 'Every load in your history is hidden. Restore them from More › Hidden loads.',
+    historyAllHidden: 'Every load in your history is hidden.',
+    hiddenCount: '{count} hidden',
+    excludesRemovedOne: 'Excludes 1 load you removed',
+    excludesRemovedMany: 'Excludes {count} loads you removed',
+    hiddenLoadsA11y: 'View and restore hidden loads',
+    restore: 'Restore',
   },
 
   loadDetail: {
@@ -382,6 +406,17 @@ export const en = {
     earnedSentenceMi: 'You earned {rpm} for every mile you actually turned — the {deadhead} empty miles to pickup pull it below the booked {booked}.',
     earnedSentenceKm: 'You earned {rpm} for every km you actually turned — the {deadhead} empty km to pickup pull it below the booked {booked}.',
     proofOfDelivery: 'Proof of delivery',
+  },
+
+  hiddenLoads: {
+    title: 'Hidden loads',
+    blurb: 'Loads you removed from your Pay history. They’re only hidden on this phone — your dispatcher, your pay and your settlements are unchanged. You can restore one for 3 weeks after removing it; after that it’s permanent.',
+    empty: 'Nothing to restore. Press and hold a load in your Pay history to remove it from the list.',
+    daysLeft: 'Restorable for {days} more days',
+    lastDay: 'Last day to restore',
+    restore: 'Restore',
+    restoreAll: 'Restore all',
+    restoreA11y: 'Restore {origin} to {destination} to your history',
   },
 
   documents: {

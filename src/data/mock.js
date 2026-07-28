@@ -78,7 +78,7 @@ export const quickReplies = ['On my way', 'Running late', 'At the dock', 'Loaded
 
 export const earnings = {
   week: {
-    net: 3284, gross: 3760, miles: 2140, loads: 4, rpm: 1.76,
+    net: 3284, gross: 3760, miles: 2140, actualMiles: 2318, loads: 4, rpm: 1.76,
     fuelGal: 329, fuelCost: 1184, deductions: 476, prevNet: 2980, goal: 4000,
     bars: [
       { d: 'Mon', v: 520 }, { d: 'Tue', v: 0 }, { d: 'Wed', v: 880 },
@@ -86,7 +86,7 @@ export const earnings = {
     ],
   },
   month: {
-    net: 12940, gross: 15010, miles: 8620, loads: 17, rpm: 1.74,
+    net: 12940, gross: 15010, miles: 8620, actualMiles: 9341, loads: 17, rpm: 1.74,
     fuelGal: 1326, fuelCost: 4770, deductions: 2070, prevNet: 11200, goal: 15000,
     bars: [
       { d: 'W1', v: 2980 }, { d: 'W2', v: 3120 }, { d: 'W3', v: 3556 }, { d: 'W4', v: 3284 },

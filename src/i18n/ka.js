@@ -197,6 +197,7 @@ export const ka = {
     miles: 'მილი',
     kilometers: 'კილომეტრი',
     navigationApp: 'ნავიგაციის აპი',
+    hiddenLoads: 'დამალული ტვირთები',
     appleMaps: 'Apple Maps',
     helpCenter: 'დახმარების ცენტრი',
     contactSupport: 'დაუკავშირდით მხარდაჭერას',
@@ -316,6 +317,13 @@ export const ka = {
     perKm: 'კმ-ზე',
     milesDriven: 'გავლილი მილი',
     kilometersDriven: 'გავლილი კილომეტრი',
+    // დაგეგმილი (დისპეტჩერის მითითებული) vs ფაქტობრივი (GPS-ით გაზომილი)
+    plannedSub: 'დაგეგმილი {n}',
+    gpsMeasured: 'GPS-ით გაზომილი',
+    plannedNoGps: 'დაგეგმილი — GPS ჯერ არ არის',
+    milesPlannedActual: '{planned} {unit} დაგეგმილი · {actual} {unit} გავლილი',
+    milesPlannedOnly: '{planned} {unit} დაგეგმილი',
+    milesActualOnly: '{actual} {unit} გავლილი',
     loadsCompleted: 'დასრულებული ტვირთი',
     revenuePerMile: 'შემოსავალი/მილი',
     revenuePerKm: 'შემოსავალი/კმ',
@@ -350,6 +358,22 @@ export const ka = {
     photoFallback: 'ფოტო',
     previousPhotoA11y: 'წინა ფოტო',
     nextPhotoA11y: 'შემდეგი ფოტო',
+    // ხანგრძლივი დაჭერა → ფოკუსის რეჟიმი → ტვირთის წაშლა საკუთარი ისტორიიდან
+    longPressRemoveA11y: 'დააჭირეთ და გეჭიროთ, რომ ეს ტვირთი ისტორიიდან წაშალოთ',
+    closeFocusA11y: 'დახურვა და ტვირთის შენარჩუნება',
+    deleteFromHistory: 'ისტორიიდან წაშლა',
+    deleteHint: 'იშლება მხოლოდ ამ ტელეფონის ისტორიიდან. თქვენი ანაზღაურება და დისპეტჩერის ჩანაწერები არ იცვლება.',
+    deleteConfirmTitle: 'წავშალოთ ეს ტვირთი?',
+    deleteConfirmBody: 'ის გაქრება ტვირთების ისტორიიდან. 3 კვირის განმავლობაში შეგიძლიათ დააბრუნოთ აქედან: მეტი › დამალული ტვირთები — შემდეგ ის სამუდამოდ წაიშლება.',
+    keepLoad: 'დარჩეს',
+    removedFromHistory: 'ისტორიიდან წაიშალა',
+    historyAllHiddenRestore: 'ისტორიაში ყველა ტვირთი დამალულია. აღდგენა შეგიძლიათ აქედან: მეტი › დამალული ტვირთები.',
+    historyAllHidden: 'ისტორიაში ყველა ტვირთი დამალულია.',
+    hiddenCount: '{count} დამალული',
+    excludesRemovedOne: 'არ მოიცავს 1 წაშლილ ტვირთს',
+    excludesRemovedMany: 'არ მოიცავს {count} წაშლილ ტვირთს',
+    hiddenLoadsA11y: 'დამალული ტვირთების ნახვა და აღდგენა',
+    restore: 'აღდგენა',
   },
 
   loadDetail: {
@@ -385,6 +409,17 @@ export const ka = {
     earnedSentenceMi: 'თქვენ გამოიმუშავეთ {rpm} ყოველ ფაქტობრივად გავლილ მილზე — {deadhead} ცარიელი მილი აღებამდე ამცირებს მას დაჯავშნილ {booked}-ზე დაბლა.',
     earnedSentenceKm: 'თქვენ გამოიმუშავეთ {rpm} ყოველ ფაქტობრივად გავლილ კმ-ზე — {deadhead} ცარიელი კმ აღებამდე ამცირებს მას დაჯავშნილ {booked}-ზე დაბლა.',
     proofOfDelivery: 'მიწოდების დამადასტურებელი დოკუმენტი',
+  },
+
+  hiddenLoads: {
+    title: 'დამალული ტვირთები',
+    blurb: 'ტვირთები, რომლებიც ანაზღაურების ისტორიიდან წაშალეთ. ისინი დამალულია მხოლოდ ამ ტელეფონზე — დისპეტჩერი, თქვენი ანაზღაურება და ანგარიშსწორება უცვლელია. წაშლიდან 3 კვირის განმავლობაში შეგიძლიათ აღადგინოთ; შემდეგ წაშლა საბოლოოა.',
+    empty: 'აღსადგენი არაფერია. ანაზღაურების ისტორიაში ტვირთს დააჭირეთ და გეჭიროთ, რომ სიიდან წაშალოთ.',
+    daysLeft: 'აღდგენა შესაძლებელია კიდევ {days} დღე',
+    lastDay: 'აღდგენის ბოლო დღე',
+    restore: 'აღდგენა',
+    restoreAll: 'ყველას აღდგენა',
+    restoreA11y: '{origin}-დან {destination}-მდე ტვირთის ისტორიაში აღდგენა',
   },
 
   documents: {

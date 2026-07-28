@@ -70,6 +70,56 @@ describe('computeLoadStats', () => {
   });
 });
 
+// ── Server-measured actuals vs the device odometer ──────────────────────
+// The backend accumulates the same GPS stream (HeartbeatCommandHandler) and is
+// authoritative: it survives a reinstall and can't be edited on the phone. A
+// server total of 0 means "nothing tracked", not "drove nothing".
+describe('computeLoadStats actual-miles precedence', () => {
+  const deviceRecord = { plannedMiles: 700, rate: 1800, deadheadMiles: 50, loadedMiles: 700, drivenMiles: 750 };
+
+  test('server actuals win over the device record', () => {
+    const s = computeLoadStats(
+      { miles: 700, rate: 1800, deadheadMiles: 62, loadedMiles: 731, actualMiles: 793 },
+      deviceRecord,
+    );
+    expect(s.deadhead).toBe(62);
+    expect(s.loaded).toBe(731);
+    expect(s.driven).toBe(793);
+  });
+
+  test('an untracked load (server 0) keeps whatever this device recorded', () => {
+    const s = computeLoadStats(
+      { miles: 700, rate: 1800, deadheadMiles: 0, loadedMiles: 0, actualMiles: 0 },
+      deviceRecord,
+    );
+    expect(s.driven).toBe(750);
+    expect(s.deadhead).toBe(50);
+  });
+
+  test('the two sources are never mixed into a total that matches neither', () => {
+    // Server reports loaded miles but no deadhead (driver started at the shipper).
+    const s = computeLoadStats(
+      { miles: 700, rate: 1800, deadheadMiles: 0, loadedMiles: 710, actualMiles: 710 },
+      deviceRecord,
+    );
+    expect(s.deadhead).toBe(0);              // not the device's 50
+    expect(s.loaded + s.deadhead).toBe(s.driven);
+  });
+
+  test('drivenMiles is accepted as an alias for actualMiles (mock fixtures)', () => {
+    const s = computeLoadStats({ miles: 700, rate: 1800, deadheadMiles: 74, loadedMiles: 938, drivenMiles: 1012 }, null);
+    expect(s.driven).toBe(1012);
+  });
+
+  test('a load booked without a mileage quote has a null planned figure', () => {
+    const s = computeLoadStats({ miles: null, rate: 1800, actualMiles: 500, loadedMiles: 500, deadheadMiles: 0 }, null);
+    expect(s.planned).toBeNull();
+    expect(s.bookedRpm).toBeNull();
+    expect(s.driven).toBe(500);
+    expect(s.effectiveRpm).toBeCloseTo(3.6, 3);
+  });
+});
+
 test('METERS_PER_MILE is the standard conversion', () => {
   expect(METERS_PER_MILE).toBeCloseTo(1609.344, 3);
 });

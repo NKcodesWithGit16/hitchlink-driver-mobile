@@ -149,6 +149,64 @@ Load status updates apply optimistically and queue to an AsyncStorage replay que
 (`src/lib/offlineQueue.js`, `enqueue`/`flush`/`queueCount`, wired into `app/(tabs)/index.js`) that flushes on
 reconnect (`src/hooks/useNetworkStatus.js`).
 
+## "Delete from history" is a device-local hide, deliberately
+
+Long-pressing a card in the Pay tab's load history opens `HistoryFocusOverlay` and offers to delete it.
+That writes the load id to `src/lib/hiddenLoads.js` (AsyncStorage, **keyed by driver** so a shared cab phone
+never applies one driver's list to another) and filters it out of the list — nothing is sent to the server.
+The earnings figures above the list are backend-computed and deliberately unchanged.
+
+**Do not "fix" this by calling `DELETE /loads/{id}`.** That endpoint is a global soft-delete (`IsActive =
+false`) that would pull the load out of the dispatcher's records, billing and settlements, and it has no
+driver scoping. A delivered load is a financial record. If per-driver hiding ever needs to sync across
+devices it wants a new driver-scoped flag on the backend — only the `read`/`write` pair in `hiddenLoads.js`
+would change.
+
+## Planned vs actual miles
+
+Two different mileage figures travel together everywhere, and confusing them is the main hazard:
+
+- **Planned** — `load.miles`, what the dispatcher quoted. **Nullable since 2026-07-28**: the booking form
+  makes it optional, so `null` means "never quoted" and must render as `—`, never `0`. `rpm` is nullable for
+  the same reason (it's `rate / miles`). Every reader has to guard it.
+- **Actual** — `deadheadMiles` / `loadedMiles` / `actualMiles`, accumulated **server-side** in
+  `HeartbeatCommandHandler` by summing the haversine segment between accepted GPS fixes into the active
+  load, split at `LoadedAt` (before = deadhead, after = loaded). Always present; `0` means nothing tracked.
+  It climbs live, so the dispatcher board shows it while the truck is still rolling.
+
+`src/lib/loadStats.js` picks between the server figures and this device's own `lib/odometer.js` record: the
+**server wins whenever it reports any distance**, because it survives a reinstall and can't be edited on the
+phone. A server total of 0 falls back to the device record (older loads, mock mode). The two are taken as a
+**set, never field-by-field** — mixing a server `loaded` with a device `deadhead` yields a total matching
+neither source.
+
+Accuracy caveats, deliberate: straight lines between samples **undercount** road distance; segments are
+dropped when the gap exceeds `MaxOdometerGapSeconds` (30 min — the path is unknown, and inventing it is
+worse than undercounting) or fall under `MinOdometerSegmentMeters` (25 m — GPS wander while parked would
+otherwise add phantom miles across a 10-hour break). Good enough for a dispatcher metric; **not** a legal
+odometer, and not something to base per-mile pay on without more work.
+
+**The Pay tab's stats follow the visible history.** `src/lib/earningsAdjust.js` takes the hidden loads back
+out of the period the screen is showing, so hero/chart/insights/grid/breakdown all move the instant a load is
+removed or restored — no refetch, just a `useMemo` on `hiddenIds`. It is an *adjustment*, not a recompute,
+and that distinction matters: `GET /drivers/{id}/earnings` aggregates **settlements** bucketed by payment
+date, while history only carries a load's `rate`/`miles`/`completedAt`, so the client cannot rebuild the
+period from scratch. A removed load's share of period gross comes out of every figure proportionally (exact
+for `gross`, estimated for net/fuel/deductions); miles and the load count come off exactly; bars are cut on
+the delivery day, then reconciled so the chart never totals more than the take-home above it; cancelled loads
+move nothing (they never produced a settlement). Because the numbers then differ from the driver's settlement
+statement, an adjusted period carries `excluded` and the hero captions itself "Excludes N loads you removed".
+Don't delete that caption.
+
+**A removal goes permanent after `RESTORE_WINDOW_MS` (3 weeks).** Until then it is recoverable — an
+`UndoToast` fires immediately, and `app/hidden-loads.js` (More › Hidden loads, plus a link under the history
+list) restores it, each row counting down its remaining days. Past the window `compact()` reduces the entry
+to a bare `{id, hiddenAt}` tombstone: the snapshot is wiped off the device and `getHidden` stops offering it,
+but **the id must stay** — `getHiddenIds` still feeds the history filter, and dropping the id would un-hide
+the load on the next fetch, the opposite of a permanent delete. `unhideLoad` refuses an expired entry even
+when called directly, and "Restore all" (`clearHidden`) leaves tombstones alone. Expiry is enforced lazily
+on every read, since there is no background job and the app can sit closed for months.
+
 ## Structure
 
 ```
@@ -158,7 +216,9 @@ app/                       expo-router — file = route
                             An Assigned load with acceptedAt == null shows LoadOfferCard (accept/decline)
                             INSTEAD of that action — a driver can't mark "arrived" on a load they never took.
   (tabs)/messages.js        Chat + voice messages + call
-  (tabs)/earnings.js        Pay history, stats, fuel estimate
+  (tabs)/earnings.js        Pay history, stats, fuel estimate. Long-pressing a history card opens
+                            HistoryFocusOverlay (blurred backdrop + confirm) to remove it — see below.
+  hidden-loads.js           Restore anything removed from Pay history (also reachable from More)
   (tabs)/documents.js       CDL/Medical/Registration/Insurance, expiry alerts, offline viewer
   (tabs)/more.js            HOS detail, truck info, theme, notifications, sign out
   call/[callId].js          Deep-link target for a tapped call push notification
@@ -169,7 +229,8 @@ src/
   hooks/                    one hook per real-time concern (chat/call/load-status sockets, push, GPS, VoIP)
   lib/                      pure logic: geo, load, loadStats, odometer, offlineQueue, session, format, sound,
                             standing (driver record from history), chatRows (day separators + grouping),
-                            localNotifications (on-device reminders), observability (opt-in Sentry)
+                            localNotifications (on-device reminders), observability (opt-in Sentry),
+                            hiddenLoads (device-local "removed from my history" list)
   theme/tokens.js           dark + day theme tables, resolved through theme/ThemeContext — never hardcode hexes
   i18n/{en,ka}.js + LanguageContext.js   full English + Georgian coverage; new UI strings need both
   components/ui/            generic primitives (PrimaryAction, Card, IconButton, Skeleton, GlassView, …)

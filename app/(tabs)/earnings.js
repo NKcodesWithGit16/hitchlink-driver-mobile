@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Animated, RefreshControl, Modal, Image, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect, useRouter } from 'expo-router';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../../src/components/ui/Icon';
 import CountUp from '../../src/components/ui/CountUp';
 import FadeInView from '../../src/components/ui/FadeInView';
 import Skeleton from '../../src/components/ui/Skeleton';
+import UndoToast from '../../src/components/ui/UndoToast';
 import LoadDetailSheet from '../../src/components/driver/LoadDetailSheet';
+import HistoryFocusOverlay from '../../src/components/driver/HistoryFocusOverlay';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { fetchEarnings, fetchLoadHistory } from '../../src/api/main';
+import { getHiddenState, hideLoad, unhideLoad, partitionHidden } from '../../src/lib/hiddenLoads';
+import { adjustEarnings } from '../../src/lib/earningsAdjust';
 import { getStats, computeLoadStats } from '../../src/lib/odometer';
 import { money, num, distNum, distRpm } from '../../src/lib/format';
 import { useDistanceUnit } from '../../src/lib/prefs';
@@ -35,6 +40,23 @@ function fmtWhen(x, months) {
   return isNaN(d.getTime()) ? String(x) : `${months[d.getMonth()]} ${d.getDate()}`;
 }
 
+// One row's mileage: the quote and what was actually driven, whichever exist.
+// Planned is null for a load booked without a mileage quote, and actual is 0
+// for anything delivered before the GPS odometer or never tracked — so all four
+// combinations are real and none of them may print a bare "0 mi".
+function milesLabel(load, unit, t) {
+  const planned = load?.miles || 0;
+  const actual  = Number(load?.actualMiles ?? load?.drivenMiles) || 0;
+  if (planned > 0 && actual > 0) {
+    return t('earnings.milesPlannedActual', {
+      planned: distNum(planned, unit), actual: distNum(actual, unit), unit,
+    });
+  }
+  if (actual > 0)  return t('earnings.milesActualOnly',  { actual: distNum(actual, unit), unit });
+  if (planned > 0) return t('earnings.milesPlannedOnly', { planned: distNum(planned, unit), unit });
+  return null;
+}
+
 export default function EarningsScreen() {
   const insets = useSafeAreaInsets();
   // The minimized-call banner sits above everything, so the hero and the
@@ -52,6 +74,16 @@ export default function EarningsScreen() {
   const [history, setHistory] = useState([]);
   const [lightbox, setLightbox] = useState(null); // { photos, index }
   const [detail, setDetail] = useState(null);     // { load, stats } — open detail sheet
+  // Loads this driver removed from their own history (device-local — see
+  // src/lib/hiddenLoads.js; the load itself is untouched everywhere else).
+  // `hiddenIds` filters the list and includes removals that have gone
+  // permanent; `restorable` is only those still inside the 3-week window, and
+  // is what the "restore" link may advertise.
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
+  const [restorable, setRestorable] = useState(0);
+  const [focus, setFocus] = useState(null);       // long-pressed load, in focus mode
+  const [undo, setUndo] = useState(null);         // { load } — the just-removed load
+  const router = useRouter();
 
   // Open the per-load breakdown: pull any stored actual-miles record and merge
   // it with the load into display-ready stats.
@@ -83,13 +115,57 @@ export default function EarningsScreen() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Re-read on every focus, not just on mount: the Hidden-loads screen in More
+  // can restore a load while this tab stays mounted behind it.
+  useFocusEffect(useCallback(() => {
+    let alive = true;
+    getHiddenState(userId).then(({ ids, restorable: n }) => {
+      if (!alive) return;
+      setHiddenIds(ids);
+      setRestorable(n);
+    });
+    return () => { alive = false; };
+  }, [userId]));
+
+  const { visible: visibleHistory, hidden: hiddenHistory } =
+    useMemo(() => partitionHidden(history, hiddenIds), [history, hiddenIds]);
+
+  // Long-press → focus mode. Removing only writes the id to local storage and
+  // drops the card; the undo toast gives a few seconds to take it back.
+  const openFocus = useCallback((l) => { haptics.impact(); setFocus(l); }, []);
+
+  const removeFromHistory = useCallback(async (l) => {
+    await hideLoad(userId, l);
+    setHiddenIds((prev) => new Set(prev).add(String(l.id)));
+    setRestorable((n) => n + 1);
+    setFocus(null);
+    setUndo({ load: l });
+  }, [userId]);
+
+  const undoRemove = useCallback(async () => {
+    const l = undo?.load;
+    setUndo(null);
+    if (!l) return;
+    if (!(await unhideLoad(userId, l.id))) return;
+    setHiddenIds((prev) => { const next = new Set(prev); next.delete(String(l.id)); return next; });
+    setRestorable((n) => Math.max(0, n - 1));
+  }, [undo, userId]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadData();
     setRefreshing(false);
   }, [loadData]);
 
-  const d = data?.[range];
+  // Every figure below is derived from `d`, so adjusting the period here is
+  // what makes the whole screen — hero, chart, insights, grid, breakdown —
+  // follow the history the driver can actually see. Removing a load updates
+  // it on the spot (no refetch): `hiddenIds` changes, this memo re-runs.
+  // Returns the untouched period when nothing in it is hidden.
+  const d = useMemo(
+    () => adjustEarnings(data?.[range], hiddenHistory, { range }),
+    [data, range, hiddenHistory],
+  );
   // Guard every ratio against a zero denominator (no loads yet this period) —
   // NaN as a `flex` value crashes the waterfall bar's layout on web.
   const delta   = useMemo(() => (d && d.prevNet ? Math.round(((d.net - d.prevNet) / d.prevNet) * 100) : 0), [d]);
@@ -99,7 +175,16 @@ export default function EarningsScreen() {
   const dedPct  = d ? d.deductions / wfTotal : 0;
   const bestBar = d ? d.bars.reduce((a, b) => (b.v > a.v ? b : a), d.bars[0]) : null;
   const avgLoad = d && d.loads ? Math.round(d.net / d.loads) : 0;
-  const dpm     = d && d.miles ? d.net / d.miles : 0;
+
+  // Two mileage figures now: what the loads were QUOTED at (nullable — a
+  // dispatcher can book without knowing the mileage) and what the truck
+  // actually turned, measured from the GPS heartbeats. The rate figures divide
+  // by the measured distance when we have it, since that's the money the driver
+  // really made per mile driven; the quote is the fallback.
+  const actualMiles  = d?.actualMiles || 0;
+  const plannedMiles = d?.miles || 0;
+  const rateMiles    = actualMiles > 0 ? actualMiles : plannedMiles;
+  const dpm     = rateMiles ? d.net / rateMiles : 0;
   const goal    = d ? (d.goal || fallbackGoal(d)) : 0;
 
   // Summary-bar reveal window: begins as the hero's bottom nears the top.
@@ -172,6 +257,17 @@ export default function EarningsScreen() {
                 <Text style={styles.heroCompare}>
                   {t(range === 'week' ? 'earnings.vsLastWeek' : 'earnings.vsLastMonth', { amount: money(d.prevNet) })}
                 </Text>
+                {/* These figures no longer match the settlement statement, and
+                    the driver has to be told why — they asked for the loads to
+                    be gone, not for their pay to quietly shrink. */}
+                {d.excluded > 0 ? (
+                  <View style={styles.heroNote}>
+                    <Icon name="eye-off" size={12} color="rgba(255,255,255,0.75)" />
+                    <Text style={styles.heroNoteText} numberOfLines={2}>
+                      {d.excluded === 1 ? t('earnings.excludesRemovedOne') : t('earnings.excludesRemovedMany', { count: d.excluded })}
+                    </Text>
+                  </View>
+                ) : null}
                 <GoalBar value={d.net} goal={goal} colors={colors} styles={styles} t={t} />
               </>
             ) : error ? (
@@ -219,13 +315,25 @@ export default function EarningsScreen() {
               {/* Stats grid */}
               <FadeInView delay={160}>
                 <View style={styles.grid}>
-                  <StatCard icon="navigation" label={unit === 'km' ? t('earnings.kilometersDriven') : t('earnings.milesDriven')} value={distNum(d.miles, unit)} accent={colors.teal} colors={colors} styles={styles} />
+                  {/* Measured distance leads — the card says "driven" — with the
+                      quoted figure underneath so the two are never confused. */}
+                  <StatCard
+                    icon="navigation"
+                    label={unit === 'km' ? t('earnings.kilometersDriven') : t('earnings.milesDriven')}
+                    value={rateMiles ? distNum(rateMiles, unit) : '—'}
+                    sub={
+                      actualMiles > 0
+                        ? (plannedMiles > 0 ? t('earnings.plannedSub', { n: distNum(plannedMiles, unit) }) : t('earnings.gpsMeasured'))
+                        : (plannedMiles > 0 ? t('earnings.plannedNoGps') : null)
+                    }
+                    accent={colors.teal} colors={colors} styles={styles}
+                  />
                   <StatCard icon="repeat"     label={t('earnings.loadsCompleted')} value={String(d.loads)} accent={colors.teal} colors={colors} styles={styles} />
                 </View>
               </FadeInView>
               <FadeInView delay={200}>
                 <View style={styles.grid}>
-                  <StatCard icon="trending-up" label={t(unit === 'km' ? 'earnings.revenuePerKm' : 'earnings.revenuePerMile')} value={`$${distRpm(d.net / (d.miles || 1), unit)}`} accent={colors.go} colors={colors} styles={styles} />
+                  <StatCard icon="trending-up" label={t(unit === 'km' ? 'earnings.revenuePerKm' : 'earnings.revenuePerMile')} value={rateMiles ? `$${distRpm(d.net / rateMiles, unit)}` : '—'} accent={colors.go} colors={colors} styles={styles} />
                   <StatCard icon="droplet"     label={t('earnings.fuelUsed')}      value={`${num(d.fuelGal)} gal`} sub={money(d.fuelCost)} accent={colors.caution} colors={colors} styles={styles} />
                 </View>
               </FadeInView>
@@ -270,20 +378,22 @@ export default function EarningsScreen() {
           <FadeInView delay={80}>
             <View style={styles.histHead}>
               <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>{t('earnings.loadHistory')}</Text>
-              {history.length > 0 ? (
-                <Text style={[styles.cardHeadSub, { color: colors.textMuted }]}>{t('earnings.loadsCount', { count: history.length })}</Text>
+              {visibleHistory.length > 0 ? (
+                <Text style={[styles.cardHeadSub, { color: colors.textMuted }]}>{t('earnings.loadsCount', { count: visibleHistory.length })}</Text>
               ) : null}
             </View>
           </FadeInView>
-          {history.length === 0 ? (
+          {visibleHistory.length === 0 ? (
             <View style={[styles.histEmpty, { backgroundColor: colors.surface, borderColor: colors.border }]}>
               <Icon name="clock" size={22} color={colors.textMuted} />
               <Text style={[styles.histEmptyText, { color: colors.textSecondary }]}>
-                {t('earnings.historyEmpty')}
+                {hiddenIds.size === 0
+                  ? t('earnings.historyEmpty')
+                  : restorable > 0 ? t('earnings.historyAllHiddenRestore') : t('earnings.historyAllHidden')}
               </Text>
             </View>
           ) : (
-            history.map((l, i) => (
+            visibleHistory.map((l, i) => (
               <FadeInView key={l.id} delay={Math.min(i, 6) * 60}>
                 <HistoryCard
                   load={l}
@@ -291,11 +401,31 @@ export default function EarningsScreen() {
                   styles={styles}
                   unit={unit}
                   onOpen={() => openDetail(l)}
+                  onLongPress={() => openFocus(l)}
                   onOpenPhoto={(idx) => { haptics.tap(); setLightbox({ photos: l.photos || [], index: idx }); }}
                 />
               </FadeInView>
             ))
           )}
+
+          {/* Anything still inside its 3-week window stays recoverable — and
+              says so here, so a hidden load never just silently vanishes.
+              Removals that have gone permanent are deliberately not counted:
+              this link would promise a restore that no longer exists. */}
+          {restorable > 0 ? (
+            <Pressable
+              onPress={() => { haptics.tap(); router.push('/hidden-loads'); }}
+              style={({ pressed }) => [styles.hiddenLink, { borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}
+              accessibilityRole="button"
+              accessibilityLabel={t('earnings.hiddenLoadsA11y')}
+            >
+              <Icon name="eye-off" size={14} color={colors.textMuted} />
+              <Text style={[styles.hiddenLinkText, { color: colors.textSecondary }]}>
+                {t('earnings.hiddenCount', { count: restorable })}
+              </Text>
+              <Text style={[styles.hiddenLinkAction, { color: colors.teal }]}>{t('earnings.restore')}</Text>
+            </Pressable>
+          ) : null}
         </View>
       </Animated.ScrollView>
 
@@ -309,6 +439,24 @@ export default function EarningsScreen() {
           onOpenPhoto={(idx) => setLightbox({ photos: detail.load.photos || [], index: idx })}
         />
       ) : null}
+
+      {focus ? (
+        <HistoryFocusOverlay
+          load={focus}
+          when={fmtWhen(focus.completedAt, t('common.monthsShort'))}
+          miles={milesLabel(focus, unit, t)}
+          unit={unit}
+          onClose={() => setFocus(null)}
+          onDelete={() => removeFromHistory(focus)}
+        />
+      ) : null}
+
+      <UndoToast
+        visible={!!undo}
+        message={t('earnings.removedFromHistory')}
+        onUndo={undoRemove}
+        onHide={() => setUndo(null)}
+      />
 
       {lightbox ? (
         <Lightbox
@@ -442,6 +590,12 @@ function AnimatedChart({ bars, colors, styles, range }) {
   const max = Math.max(...bars.map((b) => b.v), 1);
   const peakIdx = bars.findIndex((b) => b.v === max);
 
+  // The bar heights live in Animated.Values, so they only move when this effect
+  // re-runs — `range` alone isn't enough now that removing a load rewrites the
+  // values in place. Re-run on the values themselves (a string, so the deps
+  // compare by value) or the chart silently keeps the pre-removal heights.
+  const shape = bars.map((b) => b.v).join(',');
+
   useEffect(() => {
     const finals = bars.map((b) => (b.v > 0 ? b.v / max : 0));
     if (reduce) { anims.forEach((a, i) => a.setValue(finals[i])); return; }
@@ -449,7 +603,7 @@ function AnimatedChart({ bars, colors, styles, range }) {
     Animated.parallel(
       bars.map((b, i) => Animated.timing(anims[i], { toValue: finals[i], duration: 560, delay: i * 55, useNativeDriver: false })),
     ).start();
-  }, [range, reduce]);
+  }, [range, reduce, shape]);
 
   return (
     <View style={styles.chart}>
@@ -540,8 +694,9 @@ function BreakdownRow({ label, value, tone, strong, colors, styles }) {
 }
 
 // One completed load in the history list: route + pay + a tappable strip of its
-// proof-of-delivery photos. Tapping a thumbnail opens the fullscreen lightbox.
-function HistoryCard({ load, colors, styles, unit, onOpen, onOpenPhoto }) {
+// proof-of-delivery photos. Tapping a thumbnail opens the fullscreen lightbox;
+// a long press lifts the card into focus mode, where it can be removed.
+function HistoryCard({ load, colors, styles, unit, onOpen, onLongPress, onOpenPhoto }) {
   const t = useT();
   const cancelled = load.status === 'Cancelled';
   const tone = toneOf(colors, cancelled ? 'danger' : 'go');
@@ -549,21 +704,32 @@ function HistoryCard({ load, colors, styles, unit, onOpen, onOpenPhoto }) {
   const shown = photos.slice(0, 4);
   const extra = photos.length - shown.length;
   return (
-    <View style={[styles.histCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+    // The WHOLE card is the pressable — stripe, padding and the no-photos row
+    // included — so tap-to-open and long-press-to-remove work anywhere on it,
+    // not just on the route line. The photo thumbnails below are nested
+    // pressables: they take their own taps and hand the long press back up.
+    <Pressable
+      onPress={onOpen}
+      onLongPress={onLongPress}
+      delayLongPress={400}
+      style={({ pressed }) => [
+        styles.histCard,
+        { backgroundColor: colors.surface, borderColor: colors.border, opacity: pressed ? 0.7 : 1 },
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={t('earnings.viewLoadDetailsA11y', { origin: load.origin, destination: load.destination })}
+      accessibilityHint={t('earnings.longPressRemoveA11y')}
+    >
       <View style={[styles.histStripe, { backgroundColor: tone.solid }]} />
       <View style={{ flex: 1, padding: space[4], gap: space[3] }}>
-        <Pressable
-          onPress={onOpen}
-          style={({ pressed }) => [styles.histTop, { opacity: pressed ? 0.7 : 1 }]}
-          accessibilityRole="button"
-          accessibilityLabel={t('earnings.viewLoadDetailsA11y', { origin: load.origin, destination: load.destination })}
-        >
+        <View style={styles.histTop}>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.histRoute, { color: colors.textPrimary }]} numberOfLines={1}>
               {load.origin} → {load.destination}
             </Text>
             <Text style={[styles.histMeta, { color: colors.textMuted }]} numberOfLines={1}>
-              {fmtWhen(load.completedAt, t('common.monthsShort'))} · {distNum(load.miles, unit)} {unit}{load.broker ? ` · ${load.broker}` : ''}
+              {[fmtWhen(load.completedAt, t('common.monthsShort')), milesLabel(load, unit, t), load.broker]
+                .filter(Boolean).join(' · ')}
             </Text>
           </View>
           <View style={{ alignItems: 'flex-end', gap: 5 }}>
@@ -575,7 +741,7 @@ function HistoryCard({ load, colors, styles, unit, onOpen, onOpenPhoto }) {
           <View style={{ justifyContent: 'center', marginLeft: 4 }}>
             <Icon name="chevron-right" size={18} color={colors.textMuted} />
           </View>
-        </Pressable>
+        </View>
 
         {photos.length > 0 ? (
           <View style={styles.histPhotoRow}>
@@ -583,6 +749,10 @@ function HistoryCard({ load, colors, styles, unit, onOpen, onOpenPhoto }) {
               <Pressable
                 key={p.id ?? i}
                 onPress={() => onOpenPhoto(i)}
+                // a nested pressable swallows the parent's long press, so it
+                // has to forward it — otherwise the photo strip is a dead zone
+                onLongPress={onLongPress}
+                delayLongPress={400}
                 style={({ pressed }) => [styles.histThumb, { opacity: pressed ? 0.8 : 1 }]}
                 accessibilityRole="imagebutton"
                 accessibilityLabel={p.caption || t('earnings.loadPhotoA11y')}
@@ -607,7 +777,7 @@ function HistoryCard({ load, colors, styles, unit, onOpen, onOpenPhoto }) {
           </View>
         )}
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -669,6 +839,12 @@ const makeStyles = (c) => StyleSheet.create({
   heroFigRow: { flexDirection: 'row', alignItems: 'center', gap: space[3] },
   heroValue: { fontSize: 56, fontFamily: FONT.black, color: '#FFFFFF', letterSpacing: -2.2 },
   heroCompare: { fontSize: 13, fontFamily: FONT.medium, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
+  heroNote: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+    marginTop: space[2], paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: radius.pill, backgroundColor: 'rgba(255,255,255,0.14)',
+  },
+  heroNoteText: { flexShrink: 1, fontSize: 11.5, fontFamily: FONT.bold, color: 'rgba(255,255,255,0.85)' },
   deltaBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 5 },
   deltaText: { fontSize: 13, fontFamily: FONT.black },
 
@@ -748,6 +924,13 @@ const makeStyles = (c) => StyleSheet.create({
   histThumbMore: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
   histThumbMoreText: { color: '#FFFFFF', fontSize: 14, fontFamily: FONT.black },
   histNote: { ...type.caption, fontStyle: 'italic' },
+  hiddenLink: {
+    flexDirection: 'row', alignItems: 'center', gap: space[2],
+    borderWidth: 1, borderStyle: 'dashed', borderRadius: radius.md,
+    paddingHorizontal: space[4], minHeight: 48,
+  },
+  hiddenLinkText: { ...type.caption, flex: 1 },
+  hiddenLinkAction: { ...type.caption, fontFamily: FONT.black },
   histNoPhotos: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderStyle: 'dashed', borderRadius: radius.md, paddingHorizontal: space[3], paddingVertical: space[2], alignSelf: 'flex-start' },
   histNoPhotosText: { ...type.caption },
 
