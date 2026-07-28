@@ -318,16 +318,17 @@ builds sharing `expo.version` are treated as interchangeable, so an OTA carrying
 newly-added native module — or assumes a different RN architecture — **will** be served to an older binary
 that lacks it and crash on launch. **So: bump `expo.version` in the same commit as any native change, and
 never publish an OTA across one.** Version history so far: `1.0.0` → `1.0.1` (expo-updates + Sentry landed)
-→ `1.0.2` (added `modules/hitchlink-quicklook`, switched to the New Architecture).
+→ `1.0.2` (added `modules/hitchlink-quicklook`, switched to the New Architecture) → `1.0.3` (TestFlight
+release; **JS-only** — bumped to cut a fresh build, not because anything native changed).
 
 The rule cuts both ways, and the second half is easy to forget: a bump is *mandatory* for a native change
-but **not free otherwise**, because it strands every installed binary on the old runtime version. Work
-that is purely JS should normally ship as an OTA to the existing build rather than as a new version.
-TestFlight `1.0.2 (3)` had 18 installs when the nav-app picker, chat-scroll and odometer work landed —
-all JS — so those shipped as an `eas update` on the `testflight` channel and the version deliberately
-stayed at `1.0.2`. Before bumping, run `git diff --name-only <last-bump>..HEAD` and look for
-`package.json`, `app.json`, `modules/` or `ios/`; if none appear, an OTA reaches drivers already on the
-build instead of asking them to install a new one.
+but **not free otherwise**, because it strands every installed binary on the old runtime version. Every
+commit from `1.0.2` to `1.0.3` is JS, so it could equally have shipped as an `eas update` to TestFlight
+`1.0.2 (3)`. A new build was chosen because that build had a single install — nothing worth preserving —
+and because a fresh binary has the code baked in, where `expo-updates` applies an OTA only on the launch
+*after* it downloads, so a newly-onboarded driver would see stale code once. Neither reason generalises:
+before bumping, run `git diff --name-only <last-bump>..HEAD` and look for `package.json`, `app.json`,
+`modules/` or `ios/`. If none appear and testers are already on the build, an OTA is the better tool.
 
 **Crash reporting is opt-in via `src/lib/observability.js`.** It only activates when `EXPO_PUBLIC_SENTRY_DSN`
 is set, so a checkout without a Sentry project behaves exactly as before. The root `ErrorBoundary`
