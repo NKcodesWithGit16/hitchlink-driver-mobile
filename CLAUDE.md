@@ -234,11 +234,28 @@ moment a photo is zoomed so the `PanResponder` owns every drag. Without that swi
 each gesture. A single tap toggles the chrome but is deferred by `DOUBLE_TAP_MS`, otherwise every
 double-tap zoom would also flash the toolbars.
 
-`src/components/driver/PhotoMarkup.js` is the annotation editor (pen / arrow / text, 5 colours, 3 widths,
-undo, clear), reached from the viewer's ⋯ sheet. It exists for damage claims: a circled dent or an arrowed
-BOL number carries a claim in a way prose doesn't. **The annotated result is sent as a NEW message** —
-`ChatController` has no edit-attachment endpoint, and keeping the original in the thread is the better
-record anyway.
+`src/components/driver/PhotoEditor.js` is the editor, reached from the viewer's ⋯ sheet. It exists for
+damage claims: cropping to the dented corner and circling it carries a claim in a way prose doesn't. **The
+edited result is sent as a NEW message** — `ChatController` has no edit-attachment endpoint, and keeping
+the original in the thread is the better record anyway.
+
+It is **mode-first**: four symbols (crop / draw / arrow / text) and nothing else until one is picked, at
+which point that mode's controls appear in a contextual row. With no mode selected the photo pinches and
+pans. Two things follow from that and are the reason the code looks the way it does:
+
+- **Shapes are stored in the SVG's `viewBox` coordinates, never screen coordinates**, because drawing is
+  allowed while zoomed. The gesture layer sits *inside* the transformed container so RN reports touches
+  already in that space. `src/lib/editorGeom.js` holds the explicit inversion (`screenToBase`) for if that
+  ever stops holding, plus the crop/pan clamping — all pure and covered by `__tests__/editorGeom.test.js`.
+- **The contextual row's height is reserved even when empty.** Letting the canvas resize as modes change
+  would change the viewBox, and every stored shape is in viewBox units — they would all shift the moment a
+  tool was picked.
+
+**Crop and rotate bake the current marks into the photo**: the canvas is flattened with `toDataURL`, the
+result is cropped or rotated by `expo-image-manipulator`, and that becomes the new base image with the
+shape list emptied. Remapping every stroke through a new letterbox is the alternative and it is all
+downside. Undo still crosses those steps because editor state is a history stack of `{ baseUri, shapes }` —
+so `undo` pops a stroke first, then a whole state.
 
 The photo is rendered **inside** the `<Svg>` as an SVG `<Image>`, not behind it, so `svg.toDataURL()`
 rasterizes the picture and the strokes in one pass; the base64 PNG is written to the cache and handed to
@@ -355,7 +372,8 @@ src/
                             standing (driver record from history), chatRows (day separators + grouping),
                             localNotifications (on-device reminders), observability (opt-in Sentry),
                             hiddenLoads (device-local "removed from my history" list),
-                            imageMime (web-safe image allowlist + MIME/extension table)
+                            imageMime (web-safe image allowlist + MIME/extension table),
+                            editorGeom (photo-editor coordinate + crop math)
   theme/tokens.js           dark + day theme tables, resolved through theme/ThemeContext — never hardcode hexes
   i18n/{en,ka}.js + LanguageContext.js   full English + Georgian coverage; new UI strings need both
   components/ui/            generic primitives (PrimaryAction, Card, IconButton, Skeleton, GlassView, …)

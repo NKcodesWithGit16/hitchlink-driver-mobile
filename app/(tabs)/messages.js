@@ -17,7 +17,7 @@ import PeerAvatar from '../../src/components/ui/PeerAvatar';
 import RecordingBar from '../../src/components/driver/RecordingBar';
 import DocumentReviewModal from '../../src/components/driver/DocumentReviewModal';
 import PhotoViewer from '../../src/components/driver/PhotoViewer';
-import PhotoMarkup from '../../src/components/driver/PhotoMarkup';
+import PhotoEditor from '../../src/components/driver/PhotoEditor';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useTheme } from '../../src/theme/ThemeContext';
@@ -1113,7 +1113,7 @@ export default function MessagesScreen() {
       ) : null}
 
       {markup ? (
-        <PhotoMarkup
+        <PhotoEditor
           uri={markup.uri}
           onCancel={() => setMarkup(null)}
           onDone={handleMarkupDone}
