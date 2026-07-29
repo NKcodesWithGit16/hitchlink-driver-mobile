@@ -57,7 +57,8 @@ export default function PhotoMarkup({ uri, onCancel, onDone }) {
   const opts = useRef({ tool, color, strokeWidth });
   opts.current = { tool, color, strokeWidth };
 
-  const canvasHeight = height - insets.top - insets.bottom - TOOLBAR_H - ACTIONS_H;
+  // Commit bar above, two rows of editing controls below.
+  const canvasHeight = height - insets.top - insets.bottom - TOPBAR_H - (TOOL_ROW_H * 2) - space[4];
 
   // The photo's natural size, so the export can be rasterized at full quality
   // instead of at the size it happens to be shown. Capped to match the upload
@@ -181,6 +182,25 @@ export default function PhotoMarkup({ uri, onCancel, onDone }) {
   return (
     <Modal visible transparent={false} animationType="slide" onRequestClose={onCancel} statusBarTranslucent>
       <View style={[styles.root, { paddingTop: insets.top }]}>
+        {/* Commit actions live at the top, away from the drawing hand and out
+            of reach of an accidental swipe while marking near the bottom edge.
+            Editing controls stay at the bottom where the thumb is. */}
+        <View style={styles.topBar}>
+          <Pressable onPress={onCancel} hitSlop={10} style={styles.topAction} accessibilityRole="button">
+            <Text style={styles.cancelText}>{t('common.cancel')}</Text>
+          </Pressable>
+          <Pressable
+            onPress={done}
+            disabled={saving}
+            style={[styles.sendBtn, saving && styles.disabled]}
+            accessibilityRole="button"
+          >
+            {saving
+              ? <ActivityIndicator size="small" color="#0A0E14" />
+              : <Text style={styles.sendText}>{t('common.send')}</Text>}
+          </Pressable>
+        </View>
+
         {/* The photo lives INSIDE the Svg, not behind it, so toDataURL exports
             the picture and the marks together. Only this subtree is exported —
             the toolbars are outside it and can never end up in the image. */}
@@ -221,53 +241,48 @@ export default function PhotoMarkup({ uri, onCancel, onDone }) {
           ) : null}
         </View>
 
-        {/* Tools */}
-        <View style={styles.toolbar}>
-          <ToolButton icon="edit-2" active={tool === TOOLS.PEN} onPress={() => setTool(TOOLS.PEN)} label={t('messages.markupPen')} />
-          <ToolButton icon="arrow-up-right" active={tool === TOOLS.ARROW} onPress={() => setTool(TOOLS.ARROW)} label={t('messages.markupArrow')} />
-          <ToolButton icon="type" active={tool === TOOLS.TEXT} onPress={() => setTool(TOOLS.TEXT)} label={t('messages.markupText')} />
-          <View style={styles.divider} />
-          {COLORS.map((c) => (
-            <Pressable
-              key={c}
-              onPress={() => setColor(c)}
-              style={[styles.swatch, { backgroundColor: c }, color === c && styles.swatchActive]}
-              accessibilityRole="button"
-              accessibilityLabel={t('messages.markupColorA11y')}
-            />
-          ))}
-          <View style={styles.divider} />
-          {WIDTHS.map((w) => (
-            <Pressable
-              key={w}
-              onPress={() => setStrokeWidth(w)}
-              style={styles.widthBtn}
-              accessibilityRole="button"
-              accessibilityLabel={t('messages.markupWidthA11y')}
-            >
-              <View style={{ width: w * 2.2, height: w, borderRadius: w, backgroundColor: strokeWidth === w ? '#FFFFFF' : 'rgba(255,255,255,0.45)' }} />
-            </Pressable>
-          ))}
-        </View>
-
-        {/* Actions */}
-        <View style={[styles.actions, { paddingBottom: insets.bottom + space[2] }]}>
-          <Pressable onPress={onCancel} hitSlop={8} style={styles.actionBtn} accessibilityRole="button">
-            <Text style={styles.actionText}>{t('common.cancel')}</Text>
-          </Pressable>
-          <View style={styles.actionSpacer}>
-            <Pressable onPress={undo} disabled={shapes.length === 0} hitSlop={8} style={[styles.iconAction, shapes.length === 0 && styles.disabled]} accessibilityRole="button" accessibilityLabel={t('messages.markupUndo')}>
-              <Icon name="corner-up-left" size={20} color="#FFFFFF" />
-            </Pressable>
-            <Pressable onPress={clear} disabled={shapes.length === 0} hitSlop={8} style={[styles.iconAction, shapes.length === 0 && styles.disabled]} accessibilityRole="button" accessibilityLabel={t('messages.markupClear')}>
-              <Icon name="trash-2" size={20} color="#FFFFFF" />
-            </Pressable>
+        {/* Editing controls, split across two rows. One row held 13 controls
+            and already overflowed a 414pt screen. */}
+        <View style={[styles.tools, { paddingBottom: insets.bottom + space[2] }]}>
+          <View style={styles.toolRow}>
+            {COLORS.map((c) => (
+              <Pressable
+                key={c}
+                onPress={() => setColor(c)}
+                style={[styles.swatch, { backgroundColor: c }, color === c && styles.swatchActive]}
+                accessibilityRole="button"
+                accessibilityLabel={t('messages.markupColorA11y')}
+              />
+            ))}
+            <View style={styles.divider} />
+            {WIDTHS.map((w) => (
+              <Pressable
+                key={w}
+                onPress={() => setStrokeWidth(w)}
+                style={styles.widthBtn}
+                accessibilityRole="button"
+                accessibilityLabel={t('messages.markupWidthA11y')}
+              >
+                <View style={{ width: w * 2.2, height: w, borderRadius: w, backgroundColor: strokeWidth === w ? '#FFFFFF' : 'rgba(255,255,255,0.45)' }} />
+              </Pressable>
+            ))}
           </View>
-          <Pressable onPress={done} disabled={saving} style={[styles.sendBtn, saving && styles.disabled]} accessibilityRole="button">
-            {saving
-              ? <ActivityIndicator size="small" color="#0A0E14" />
-              : <Text style={styles.sendText}>{t('common.send')}</Text>}
-          </Pressable>
+
+          <View style={styles.toolRowSplit}>
+            <View style={styles.toolGroup}>
+              <ToolButton icon="edit-2" active={tool === TOOLS.PEN} onPress={() => setTool(TOOLS.PEN)} label={t('messages.markupPen')} />
+              <ToolButton icon="arrow-up-right" active={tool === TOOLS.ARROW} onPress={() => setTool(TOOLS.ARROW)} label={t('messages.markupArrow')} />
+              <ToolButton icon="type" active={tool === TOOLS.TEXT} onPress={() => setTool(TOOLS.TEXT)} label={t('messages.markupText')} />
+            </View>
+            <View style={styles.toolGroup}>
+              <Pressable onPress={undo} disabled={shapes.length === 0} hitSlop={8} style={[styles.iconAction, shapes.length === 0 && styles.disabled]} accessibilityRole="button" accessibilityLabel={t('messages.markupUndo')}>
+                <Icon name="corner-up-left" size={20} color="#FFFFFF" />
+              </Pressable>
+              <Pressable onPress={clear} disabled={shapes.length === 0} hitSlop={8} style={[styles.iconAction, shapes.length === 0 && styles.disabled]} accessibilityRole="button" accessibilityLabel={t('messages.markupClear')}>
+                <Icon name="trash-2" size={20} color="#FFFFFF" />
+              </Pressable>
+            </View>
+          </View>
         </View>
       </View>
     </Modal>
@@ -332,38 +347,45 @@ function ToolButton({ icon, active, onPress, label }) {
   );
 }
 
-const TOOLBAR_H = 56;
-const ACTIONS_H = 64;
+const TOPBAR_H = 52;
+const TOOL_ROW_H = 46;
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
   canvas: { width: '100%', backgroundColor: '#000', overflow: 'hidden' },
 
-  toolbar: {
-    height: TOOLBAR_H,
-    flexDirection: 'row', alignItems: 'center', gap: space[2],
-    paddingHorizontal: space[3],
-    backgroundColor: '#0A0E14',
-  },
-  toolBtn: { width: 34, height: 34, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
-  toolBtnActive: { backgroundColor: 'rgba(255,255,255,0.18)' },
-  divider: { width: 1, height: 22, backgroundColor: 'rgba(255,255,255,0.18)', marginHorizontal: 2 },
-  swatch: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: 'transparent' },
-  swatchActive: { borderColor: '#FFFFFF' },
-  widthBtn: { width: 26, height: 30, alignItems: 'center', justifyContent: 'center' },
-
-  actions: {
+  topBar: {
+    height: TOPBAR_H,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: space[4], paddingTop: space[2],
+    paddingHorizontal: space[4],
     backgroundColor: '#0A0E14',
   },
-  actionSpacer: { flexDirection: 'row', alignItems: 'center', gap: space[2] },
-  actionBtn: { paddingVertical: 8 },
-  actionText: { color: '#FFFFFF', ...type.body },
+  topAction: { paddingVertical: 8, paddingRight: space[3] },
+  cancelText: { color: '#FFFFFF', ...type.body },
+
+  tools: { backgroundColor: '#0A0E14', paddingTop: space[2] },
+  toolRow: {
+    height: TOOL_ROW_H,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space[3],
+    paddingHorizontal: space[4],
+  },
+  toolRowSplit: {
+    height: TOOL_ROW_H,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: space[4],
+  },
+  toolGroup: { flexDirection: 'row', alignItems: 'center', gap: space[2] },
+  toolBtn: { width: 38, height: 38, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  toolBtnActive: { backgroundColor: 'rgba(255,255,255,0.18)' },
+  divider: { width: 1, height: 22, backgroundColor: 'rgba(255,255,255,0.18)', marginHorizontal: space[1] },
+  swatch: { width: 26, height: 26, borderRadius: 13, borderWidth: 2, borderColor: 'transparent' },
+  swatchActive: { borderColor: '#FFFFFF' },
+  widthBtn: { width: 28, height: 32, alignItems: 'center', justifyContent: 'center' },
+
   iconAction: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
   disabled: { opacity: 0.4 },
   sendBtn: {
-    paddingHorizontal: space[4], paddingVertical: 10, borderRadius: radius.xl,
+    paddingHorizontal: space[4], paddingVertical: 9, borderRadius: radius.xl,
     backgroundColor: '#FFFFFF', minWidth: 84, alignItems: 'center',
   },
   sendText: { color: '#0A0E14', fontFamily: FONT.semibold, fontSize: 15 },
