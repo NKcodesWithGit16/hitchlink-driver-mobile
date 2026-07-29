@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, Modal, Pressable, ScrollView, Animated, TextInput,
   PanResponder, StyleSheet, useWindowDimensions, Platform,
-  ActivityIndicator, KeyboardAvoidingView,
+  ActivityIndicator, Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -58,7 +58,16 @@ export default function PhotoViewer({
   const [moreOpen, setMoreOpen] = useState(false);
   const [reply, setReply] = useState('');
   const [toast, setToast] = useState(null);      // { text, bad } — in-modal feedback
+  const [kbHeight, setKbHeight] = useState(0);
   const toastTimer = useRef(null);
+
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = Keyboard.addListener(showEvt, (e) => setKbHeight(e.endCoordinates?.height || 0));
+    const onHide = Keyboard.addListener(hideEvt, () => setKbHeight(0));
+    return () => { onShow.remove(); onHide.remove(); };
+  }, []);
   const pagerRef = useRef(null);
   const visible = list.length > 0;
   const currentUri = list[page];
@@ -265,11 +274,13 @@ export default function PhotoViewer({
       ) : null}
 
       {showChrome ? (
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          // The home indicator needs clearance of its own — insets.bottom alone
-          // left the reply pill sitting right on it.
-          style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, space[3]) + space[3] }]}
+        <View
+          // Plain View, not KeyboardAvoidingView: KAV assumes it's a flex
+          // container, and absolutely positioned with `padding` behaviour it
+          // mismeasured and let the reply pill run off the bottom of the
+          // screen. Tracking the keyboard directly and offsetting `bottom` is
+          // both simpler and correct.
+          style={[styles.bottomBar, { bottom: kbHeight, paddingBottom: kbHeight ? space[3] : insets.bottom + space[5] }]}
         >
           <TextInput
             value={reply}
@@ -300,7 +311,7 @@ export default function PhotoViewer({
               <Text style={styles.quickReaction}>{QUICK_REACTION}</Text>
             </Pressable>
           )}
-        </KeyboardAvoidingView>
+        </View>
       ) : null}
 
       {/* An in-modal overlay, NOT a nested <Modal>. Presenting a Modal from
@@ -540,7 +551,7 @@ const styles = StyleSheet.create({
   counterText: { color: '#FFFFFF', fontSize: 13, fontFamily: FONT.medium, ...type.num },
 
   bottomBar: {
-    position: 'absolute', left: 0, right: 0, bottom: 0,
+    position: 'absolute', left: 0, right: 0,
     flexDirection: 'row', alignItems: 'flex-end', gap: space[2],
     paddingHorizontal: space[3], paddingTop: space[2],
   },

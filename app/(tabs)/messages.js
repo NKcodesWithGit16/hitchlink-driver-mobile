@@ -1157,6 +1157,21 @@ function BubbleVisual({ msg, mine, colors, styles, onOpenImage, onBubbleDoubleTa
       onBubbleDoubleTap={onBubbleDoubleTap} onBubbleLongPress={onBubbleLongPress} onBubbleToggleReveal={onBubbleToggleReveal}
     />
   );
+
+  // A photo with nothing else to say needs no bubble — the gradient and its
+  // padding only framed the image in a coloured border. Every chat app renders
+  // a bare photo, and it lets the picture run to the full bubble width instead
+  // of losing 32pt to horizontal padding. A caption, reply quote or failure
+  // state brings the bubble back, because then there is something to hold.
+  const bare = !msg.deleted
+    && msg.kind === 'image'
+    && !msg.text
+    && !msg.replyTo
+    && !msg.failed;
+  if (bare) {
+    return <View style={[styles.bareMedia, msg.uploading && styles.bareMediaSending]}>{body}</View>;
+  }
+
   if (msg.deleted) {
     return <View style={[bubbleStyle, { backgroundColor: colors.surface2, borderColor: colors.border, borderWidth: 1 }]}>{body}</View>;
   }
@@ -2271,21 +2286,26 @@ const makeStyles = (c) => StyleSheet.create({
   // Messenger-style: one uniform pill radius for every bubble — grouping
   // reads from spacing + avatar placement only, never a cut tail corner.
   bubble: { borderRadius: radius.xl, paddingHorizontal: space[4], paddingVertical: space[3], gap: 4, borderWidth: 0 },
+  // A photo sent on its own: no gradient, no padding, just the rounded image.
+  // No radius here on purpose — the photo rounds itself, and clipping twice at
+  // two different radii leaves visible corner artifacts.
+  bareMedia: {},
+  bareMediaSending: { opacity: 0.9 },
   bubbleMine: {},
   bubbleMineGlow: { shadowColor: c.teal, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.28, shadowRadius: 12, elevation: 5 },
   bubbleTheirs: { borderWidth: 1 },
 
   bubbleText: { ...type.body, lineHeight: 22 },
   // Single photo: the box comes from usePhotoSize, so only the chrome is here.
-  photoFrame: { borderRadius: radius.md, overflow: 'hidden', marginBottom: 2, backgroundColor: 'rgba(0,0,0,0.22)' },
+  photoFrame: { borderRadius: radius.lg, overflow: 'hidden', marginBottom: 2, backgroundColor: 'rgba(0,0,0,0.22)' },
   photoLoading: { alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.28)' },
 
   // Multi-photo album. Width matches the single-photo cap so a thread of mixed
   // messages keeps one left/right edge; tiles are square and share the row
   // evenly via flex, so a 3-photo album's last tile spans the full width.
-  album: { width: PHOTO_MAX_W, gap: 2, marginBottom: 2 },
-  albumRow: { flexDirection: 'row', gap: 2 },
-  albumTile: { flex: 1, aspectRatio: 1, borderRadius: radius.sm, overflow: 'hidden' },
+  album: { width: PHOTO_MAX_W, gap: 3, marginBottom: 2, borderRadius: radius.lg, overflow: 'hidden' },
+  albumRow: { flexDirection: 'row', gap: 3 },
+  albumTile: { flex: 1, aspectRatio: 1, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.22)' },
   albumImage: { width: '100%', height: '100%' },
   albumOverflow: {
     ...StyleSheet.absoluteFillObject,
