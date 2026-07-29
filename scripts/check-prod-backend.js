@@ -1,20 +1,21 @@
 #!/usr/bin/env node
 /*
  * Build-time guard: refuse to build the `production` EAS profile while it
- * still points at the staging Railway backends.
+ * still points at a staging backend.
  *
- * Why this exists: all three build profiles in eas.json currently share the
- * same staging URLs, because there is no dedicated production backend yet.
- * That is fine for `development` and `preview`, but a store build wired to
- * staging would write real drivers' GPS traces, chat and delivery paperwork
- * into the staging database — and read their loads back out of it.
+ * Why this exists: a store build wired to staging would write real drivers'
+ * GPS traces, chat and delivery paperwork into the staging database — and
+ * read their loads back out of it. `development`, `preview` and `testflight`
+ * are all meant to run against staging; only `production` must not.
+ *
+ * The check is a substring match on "staging", which is why the hostname
+ * scheme matters: staging is auth-staging/api-staging.gethitchlink.com and
+ * production drops the suffix (auth/api.gethitchlink.com). Renaming the
+ * staging hosts to something without "staging" in them silently disarms this.
  *
  * Runs on EAS Build via the `eas-build-pre-install` npm script. EAS sets
  * EAS_BUILD_PROFILE, so this only ever fails the production profile; local
  * `npm install` and development/preview builds are untouched.
- *
- * To clear this guard, set real production URLs in eas.json's production
- * profile (env.EXPO_PUBLIC_API_BASE_URL / EXPO_PUBLIC_API_MAIN_URL).
  */
 const fs = require('fs');
 const path = require('path');

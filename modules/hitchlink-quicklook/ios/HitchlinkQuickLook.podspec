@@ -9,7 +9,7 @@ Pod::Spec.new do |s|
   s.description    = package['description']
   s.license        = package['license']
   s.author         = 'HitchLink'
-  s.homepage       = 'https://hitchlink.app'
+  s.homepage       = 'https://gethitchlink.com'
   s.platforms      = { :ios => '15.1' }
   s.swift_version  = '5.9'
   s.source         = { git: '' }

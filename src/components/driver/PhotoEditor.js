@@ -207,7 +207,9 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
       const m = opts.current.mode;
       if (m === MODE.CROP) return false;          // the overlay owns the gesture
       if (!m) return true;                        // idle: pan
-      return m === MODE.DRAW;                     // the pen draws
+      // TEXT belongs here as much as DRAW: it drags the label. Leaving it out
+      // meant a text drag was never claimed, so text could not be moved at all.
+      return m === MODE.DRAW || m === MODE.TEXT;
     },
 
     onPanResponderGrant: (e) => {
@@ -269,8 +271,11 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
           return;
         }
 
-        gesture.startX = textDraftRef.current?.x ?? 0;
-        gesture.startY = textDraftRef.current?.y ?? 0;
+        // From the live mirror, not the state draft: state only catches up on
+        // release, so a second drag started quickly would otherwise jump back
+        // to where the first one began.
+        gesture.startX = textPosRef.current.x;
+        gesture.startY = textPosRef.current.y;
         return;
       }
 
@@ -366,16 +371,20 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
   // Entering text mode places the caret in the middle of the photo and raises
   // the keyboard straight away — the driver picked "text", so asking them to
   // tap again before they can type is a step for nothing.
+  // Keyed on `textDraft` rather than its ref so it also re-arms after a commit:
+  // pressing return finishes one label and offers a fresh caret for the next,
+  // instead of leaving text mode with the keyboard up and nothing to type into.
+  // Leaving the mode sets `mode` in the same batch, so this doesn't fight Done.
   useEffect(() => {
     if (mode !== MODE.TEXT) return;
-    if (textDraftRef.current) return;
+    if (textDraft) return;
     if (!(imageRect.width > 0)) return;
     placeText({
       x: imageRect.x + imageRect.width / 2,
       y: imageRect.y + imageRect.height / 2,
       value: '',
     });
-  }, [mode, imageRect, placeText]);
+  }, [mode, textDraft, imageRect, placeText]);
 
   // (x, y) is the CENTRE of the text, not an SVG baseline origin. Centring is
   // what the on-photo editor shows, so storing anything else would mean

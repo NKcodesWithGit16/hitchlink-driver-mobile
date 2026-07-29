@@ -11,8 +11,8 @@
       "autoIncrement": "buildNumber",
       "android": { "buildType": "apk" },
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://dspidentity-staging.up.railway.app",
-        "EXPO_PUBLIC_API_MAIN_URL": "https://dspmain-staging.up.railway.app",
+        "EXPO_PUBLIC_API_BASE_URL": "https://auth-staging.gethitchlink.com",
+        "EXPO_PUBLIC_API_MAIN_URL": "https://api-staging.gethitchlink.com",
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     },
@@ -22,8 +22,8 @@
       "autoIncrement": "buildNumber",
       "android": { "buildType": "apk" },
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://dspidentity-staging.up.railway.app",
-        "EXPO_PUBLIC_API_MAIN_URL": "https://dspmain-staging.up.railway.app",
+        "EXPO_PUBLIC_API_BASE_URL": "https://auth-staging.gethitchlink.com",
+        "EXPO_PUBLIC_API_MAIN_URL": "https://api-staging.gethitchlink.com",
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     },
@@ -31,8 +31,8 @@
       "autoIncrement": true,
       "channel": "testflight",
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://dspidentity-staging.up.railway.app",
-        "EXPO_PUBLIC_API_MAIN_URL": "https://dspmain-staging.up.railway.app",
+        "EXPO_PUBLIC_API_BASE_URL": "https://auth-staging.gethitchlink.com",
+        "EXPO_PUBLIC_API_MAIN_URL": "https://api-staging.gethitchlink.com",
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     },
@@ -40,8 +40,8 @@
       "autoIncrement": true,
       "channel": "production",
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://dspidentity-staging.up.railway.app",
-        "EXPO_PUBLIC_API_MAIN_URL": "https://dspmain-staging.up.railway.app"
+        "EXPO_PUBLIC_API_BASE_URL": "https://auth.gethitchlink.com",
+        "EXPO_PUBLIC_API_MAIN_URL": "https://api.gethitchlink.com"
       }
     }
   },

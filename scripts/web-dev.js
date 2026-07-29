@@ -35,8 +35,8 @@ function loadEnv() {
 
 const env = loadEnv();
 const TARGETS = [
-  { port: 8788, origin: env.EXPO_PUBLIC_API_BASE_URL || 'https://dspidentity-staging.up.railway.app' },
-  { port: 8789, origin: env.EXPO_PUBLIC_API_MAIN_URL || 'https://dspmain-staging.up.railway.app' },
+  { port: 8788, origin: env.EXPO_PUBLIC_API_BASE_URL || 'https://auth-staging.gethitchlink.com' },
+  { port: 8789, origin: env.EXPO_PUBLIC_API_MAIN_URL || 'https://api-staging.gethitchlink.com' },
 ];
 
 function makeProxy(targetOrigin) {
