@@ -7,10 +7,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Line, Polygon, Image as SvgImage, Text as SvgText } from 'react-native-svg';
 import * as LegacyFS from 'expo-file-system/legacy';
 import CropOverlay from './editor/CropOverlay';
+import SizeSlider from './editor/SizeSlider';
+import ColorRow, { EDITOR_COLORS } from './editor/ColorRow';
 import Icon from '../ui/Icon';
 import { useT } from '../../i18n/LanguageContext';
 import haptics from '../../lib/haptics';
-import { fitRect, clampCropRect, cropRectToPixels, clampPan } from '../../lib/editorGeom';
+import {
+  fitRect, cropRectToPixels, clampPan, applyAspect, hitTestShape,
+} from '../../lib/editorGeom';
 import { space, type, radius, FONT } from '../../theme/tokens';
 
 // Photo editor: crop, draw, arrow and text on a photo before sending it.
@@ -49,16 +53,22 @@ import { space, type, radius, FONT } from '../../theme/tokens';
 // its source, and raising that needs an off-screen canvas at the photo's
 // natural size with every coordinate scaled to match.
 
-const COLORS = ['#FF3B30', '#FFCC00', '#34C759', '#0A84FF', '#FFFFFF'];
-const WIDTHS = [3, 6, 10];
 const ARROW_HEAD = 16;
 const MAX_ZOOM = 4;
+const ERASE_TOLERANCE = 20;
 
 const MODE = { CROP: 'crop', DRAW: 'draw', ARROW: 'arrow', TEXT: 'text' };
 
-const TOPBAR_H = 52;
-const CTX_ROW_H = 48;
-const MODE_ROW_H = 58;
+// Free first: a damage photo wants whatever shape the damage is.
+const ASPECTS = [
+  { ratio: null, label: 'messages.editAspectFree' },
+  { ratio: 1, label: 'messages.editAspectSquare' },
+  { ratio: 4 / 3, label: 'messages.editAspect43' },
+  { ratio: 16 / 9, label: 'messages.editAspect169' },
+];
+
+const TOPBAR_H = 56;
+const BOTTOM_H = 76;
 
 const touchDistance = (touches) => {
   const [a, b] = touches;
@@ -71,8 +81,11 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
   const { width, height } = useWindowDimensions();
 
   const [mode, setMode] = useState(null);
-  const [color, setColor] = useState(COLORS[0]);
-  const [strokeWidth, setStrokeWidth] = useState(WIDTHS[1]);
+  const [color, setColor] = useState(EDITOR_COLORS[5]);   // red — the damage-marking colour
+  const [strokeWidth, setStrokeWidth] = useState(6);
+  const [textSize, setTextSize] = useState(28);
+  const [erasing, setErasing] = useState(false);
+  const [aspect, setAspect] = useState(0);
   const [baseUri, setBaseUri] = useState(uri);
   const [shapes, setShapes] = useState([]);
   const [history, setHistory] = useState([]);      // [{ baseUri, shapes }]
@@ -87,7 +100,7 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
   // The contextual row's space is reserved even when empty. Letting the canvas
   // resize as modes change would change the viewBox, and every stored shape is
   // in viewBox units — they'd all shift the moment a tool was picked.
-  const canvasHeight = height - insets.top - insets.bottom - TOPBAR_H - CTX_ROW_H - MODE_ROW_H;
+  const canvasHeight = height - insets.top - insets.bottom - TOPBAR_H - BOTTOM_H;
 
   // ── View transform (idle pinch/pan) ──────────────────────────────────────
   const scale = useRef(new Animated.Value(1)).current;
@@ -149,8 +162,8 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
   const canUndo = shapes.length > 0 || history.length > 0;
 
   // ── Drawing / zoom gestures ──────────────────────────────────────────────
-  const opts = useRef({ mode, color, strokeWidth });
-  opts.current = { mode, color, strokeWidth };
+  const opts = useRef({ mode, color, strokeWidth, textSize, erasing });
+  opts.current = { mode, color, strokeWidth, textSize, erasing };
   const gesture = useRef({ kind: null, startDist: 0, startScale: 1, startX: 0, startY: 0 }).current;
 
   const commitShape = useCallback((shape) => {
@@ -188,6 +201,22 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
         return;
       }
       if (m === MODE.TEXT) { gesture.kind = 'text'; setTextDraft({ x, y, value: '' }); return; }
+
+      // Erase is a tap, not a drag: drop the topmost mark under the finger so
+      // overlapping strokes come off in the order they were laid down.
+      if (opts.current.erasing) {
+        gesture.kind = 'erase';
+        setShapes((prev) => {
+          for (let i = prev.length - 1; i >= 0; i -= 1) {
+            if (hitTestShape(prev[i], { x, y }, ERASE_TOLERANCE)) {
+              haptics.tap();
+              return [...prev.slice(0, i), ...prev.slice(i + 1)];
+            }
+          }
+          return prev;
+        });
+        return;
+      }
 
       gesture.kind = 'draw';
       const { color: c, strokeWidth: w } = opts.current;
@@ -259,7 +288,7 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
       if (value) {
         setShapes((prev) => [...prev, {
           kind: MODE.TEXT, color: opts.current.color, x: d.x, y: d.y, value,
-          size: Math.max(18, opts.current.strokeWidth * 3.5),
+          size: opts.current.textSize,
         }]);
       }
       return null;
@@ -320,9 +349,12 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
 
   const enterCrop = useCallback(() => {
     resetView();
-    setCropRect(clampCropRect(imageRect, imageRect));
+    // Seed through applyAspect, not clampCropRect: a ratio left locked from a
+    // previous crop has to be honoured on the way in, or the first drag would
+    // visibly snap the rect.
+    setCropRect(applyAspect(imageRect, ASPECTS[aspect].ratio, imageRect, 'br'));
     setMode(MODE.CROP);
-  }, [imageRect, resetView]);
+  }, [imageRect, aspect, resetView]);
 
   const applyCrop = useCallback(async () => {
     if (busy || !cropRect) return;
@@ -374,10 +406,41 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
 
   // Crop needs the rect re-seeded once the rotated/cropped image is measured.
   useEffect(() => {
-    if (mode === MODE.CROP && imageRect.width > 0) {
-      setCropRect((r) => (r ? clampCropRect(r, imageRect) : clampCropRect(imageRect, imageRect)));
-    }
-  }, [mode, imageRect]);
+    if (mode !== MODE.CROP || !(imageRect.width > 0)) return;
+    const { ratio } = ASPECTS[aspect];
+    setCropRect((r) => applyAspect(r || imageRect, ratio, imageRect, 'br'));
+  }, [mode, imageRect, aspect]);
+
+  const cycleAspect = useCallback(() => {
+    setAspect((a) => {
+      const next = (a + 1) % ASPECTS.length;
+      const { ratio } = ASPECTS[next];
+      setCropRect((r) => (r ? applyAspect(r, ratio, imageRect, 'br') : r));
+      return next;
+    });
+    haptics.tap();
+  }, [imageRect]);
+
+  // Done commits the mode and returns to idle. Crop is the exception: its work
+  // isn't in `shapes`, it's a pending rect, so Done has to apply it.
+  const doneMode = useCallback(() => {
+    if (textDraft) commitText();
+    setErasing(false);
+    if (mode === MODE.CROP) { applyCrop(); return; }
+    setMode(null);
+  }, [mode, textDraft, commitText, applyCrop]);
+
+  // Cancel backs out of the mode without committing anything it left pending.
+  // It does not undo marks already committed by an earlier Done — that's undo's
+  // job, and losing five good strokes to one stray tap would be worse.
+  const cancelMode = useCallback(() => {
+    setTextDraft(null);
+    setDraft(null);
+    setErasing(false);
+    setCropRect(null);
+    setMode(null);
+    resetView();
+  }, [resetView]);
 
   const send = useCallback(async () => {
     if (busy) return;
@@ -399,27 +462,38 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
   }, [busy, shapes.length, history.length, baseUri, uri, flatten, onDone, onCancel, t]);
 
   const all = draft ? [...shapes, draft] : shapes;
-  const showColors = mode === MODE.DRAW || mode === MODE.ARROW || mode === MODE.TEXT;
-  const showWidths = mode === MODE.DRAW || mode === MODE.ARROW;
+  const inMode = !!mode;
+  const drawing = mode === MODE.DRAW || mode === MODE.ARROW;
 
   return (
     <Modal visible transparent={false} animationType="slide" onRequestClose={onCancel} statusBarTranslucent>
       <View style={[styles.root, { paddingTop: insets.top }]}>
-        {/* Commit bar */}
+        {/* Top chrome swaps entirely with the mode: idle offers the tools,
+            everything else offers Cancel/Done for that mode only. */}
         <View style={styles.topBar}>
-          <Pressable onPress={onCancel} hitSlop={10} style={styles.topAction} accessibilityRole="button">
-            <Text style={styles.cancelText}>{t('common.cancel')}</Text>
-          </Pressable>
-          <Pressable
-            onPress={send}
-            disabled={!!busy}
-            style={[styles.sendBtn, busy && styles.disabled]}
-            accessibilityRole="button"
-          >
-            {busy === 'send'
-              ? <ActivityIndicator size="small" color="#0A0E14" />
-              : <Text style={styles.sendText}>{t('common.send')}</Text>}
-          </Pressable>
+          {inMode ? (
+            <>
+              <Pressable onPress={cancelMode} hitSlop={10} style={styles.topAction} accessibilityRole="button">
+                <Text style={styles.plainAction}>{t('common.cancel')}</Text>
+              </Pressable>
+              <Pressable onPress={doneMode} disabled={!!busy} hitSlop={10} style={[styles.topAction, busy && styles.disabled]} accessibilityRole="button">
+                <Text style={[styles.plainAction, styles.plainActionStrong]}>{t('common.done')}</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Pressable onPress={onCancel} hitSlop={12} style={styles.topAction} accessibilityRole="button" accessibilityLabel={t('common.close')}>
+                <Icon name="x" size={26} color="#FFFFFF" />
+              </Pressable>
+              <View style={styles.toolRow}>
+                <ToolIcon icon="edit-2" label={t('messages.markupPen')} onPress={() => setMode(MODE.DRAW)} />
+                <ToolIcon icon="arrow-up-right" label={t('messages.markupArrow')} onPress={() => setMode(MODE.ARROW)} />
+                <ToolIcon icon="type" label={t('messages.markupText')} onPress={() => setMode(MODE.TEXT)} />
+                <ToolIcon icon="crop" label={t('messages.editCrop')} onPress={enterCrop} />
+                <ToolIcon icon="corner-up-left" label={t('messages.markupUndo')} onPress={undo} disabled={!canUndo} />
+              </View>
+            </>
+          )}
         </View>
 
         {/* Canvas */}
@@ -454,7 +528,19 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
           </Animated.View>
 
           {mode === MODE.CROP && cropRect ? (
-            <CropOverlay rect={cropRect} bounds={imageRect} onChange={setCropRect} />
+            <CropOverlay rect={cropRect} bounds={imageRect} ratio={ASPECTS[aspect].ratio} onChange={setCropRect} />
+          ) : null}
+
+          {/* Size control rides on the left edge of the photo, over it. */}
+          {drawing || mode === MODE.TEXT ? (
+            <SizeSlider
+              value={mode === MODE.TEXT ? textSize : strokeWidth}
+              min={mode === MODE.TEXT ? 14 : 2}
+              max={mode === MODE.TEXT ? 64 : 26}
+              height={Math.min(240, canvasHeight - 80)}
+              onChange={mode === MODE.TEXT ? setTextSize : setStrokeWidth}
+              style={[styles.slider, { top: 40 }]}
+            />
           ) : null}
 
           {textDraft ? (
@@ -480,59 +566,44 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
           ) : null}
         </View>
 
-        {/* Contextual row — height reserved always, see canvasHeight. */}
-        <View style={styles.ctxRow}>
+        {/* Bottom chrome, likewise per-mode. */}
+        <View style={[styles.bottom, { paddingBottom: insets.bottom + space[2] }]}>
           {mode === MODE.CROP ? (
-            <View style={styles.ctxGroup}>
-              <TextAction label={t('messages.editReset')} onPress={() => setCropRect(clampCropRect(imageRect, imageRect))} />
-              <IconAction icon="rotate-cw" label={t('messages.editRotate')} onPress={rotate} disabled={!!busy} />
-              <TextAction label={t('messages.editApply')} strong onPress={applyCrop} disabled={!!busy} />
+            <View style={styles.cropBar}>
+              <Pressable onPress={cycleAspect} hitSlop={10} style={styles.cropAction} accessibilityRole="button" accessibilityLabel={t('messages.editAspect')}>
+                <Icon name="crop" size={20} color="#FFFFFF" />
+                <Text style={styles.cropActionLabel}>{t(ASPECTS[aspect].label)}</Text>
+              </Pressable>
+              <Pressable onPress={rotate} disabled={!!busy} hitSlop={10} style={[styles.cropAction, busy && styles.disabled]} accessibilityRole="button" accessibilityLabel={t('messages.editRotate')}>
+                <Icon name="rotate-cw" size={22} color="#FFFFFF" />
+              </Pressable>
             </View>
-          ) : showColors ? (
-            <View style={styles.ctxGroup}>
-              {COLORS.map((c) => (
-                <Pressable
-                  key={c}
-                  onPress={() => setColor(c)}
-                  style={[styles.swatch, { backgroundColor: c }, color === c && styles.swatchActive]}
-                  accessibilityRole="button"
-                  accessibilityLabel={t('messages.markupColorA11y')}
-                />
-              ))}
-              {showWidths ? <View style={styles.divider} /> : null}
-              {showWidths && WIDTHS.map((w) => (
-                <Pressable
-                  key={w}
-                  onPress={() => setStrokeWidth(w)}
-                  style={styles.widthBtn}
-                  accessibilityRole="button"
-                  accessibilityLabel={t('messages.markupWidthA11y')}
-                >
-                  <View style={{ width: w * 2.2, height: w, borderRadius: w, backgroundColor: strokeWidth === w ? '#FFFFFF' : 'rgba(255,255,255,0.45)' }} />
-                </Pressable>
-              ))}
-            </View>
+          ) : drawing || mode === MODE.TEXT ? (
+            <ColorRow
+              color={color}
+              onPick={(c) => { setColor(c); setErasing(false); }}
+              erasing={erasing}
+              onToggleErase={drawing ? () => setErasing((e) => !e) : undefined}
+            />
           ) : (
-            <Text style={styles.hint}>{t('messages.editHint')}</Text>
+            <View style={styles.idleBar}>
+              <Pressable
+                onPress={send}
+                disabled={!!busy}
+                style={[styles.sendBtn, busy && styles.disabled]}
+                accessibilityRole="button"
+              >
+                {busy === 'send'
+                  ? <ActivityIndicator size="small" color="#0A0E14" />
+                  : (
+                    <>
+                      <Text style={styles.sendText}>{t('common.send')}</Text>
+                      <Icon name="send" size={17} color="#0A0E14" />
+                    </>
+                  )}
+              </Pressable>
+            </View>
           )}
-        </View>
-
-        {/* Mode bar */}
-        <View style={[styles.modeRow, { paddingBottom: insets.bottom + space[2] }]}>
-          <View style={styles.modeGroup}>
-            <ModeButton icon="crop" active={mode === MODE.CROP} label={t('messages.editCrop')}
-              onPress={() => (mode === MODE.CROP ? setMode(null) : enterCrop())} />
-            <ModeButton icon="edit-2" active={mode === MODE.DRAW} label={t('messages.markupPen')}
-              onPress={() => setMode(mode === MODE.DRAW ? null : MODE.DRAW)} />
-            <ModeButton icon="arrow-up-right" active={mode === MODE.ARROW} label={t('messages.markupArrow')}
-              onPress={() => setMode(mode === MODE.ARROW ? null : MODE.ARROW)} />
-            <ModeButton icon="type" active={mode === MODE.TEXT} label={t('messages.markupText')}
-              onPress={() => setMode(mode === MODE.TEXT ? null : MODE.TEXT)} />
-          </View>
-          <View style={styles.modeGroup}>
-            <IconAction icon="corner-up-left" label={t('messages.markupUndo')} onPress={undo} disabled={!canUndo} />
-            <IconAction icon="trash-2" label={t('messages.markupClear')} onPress={clearAll} disabled={!canUndo} />
-          </View>
         </View>
       </View>
     </Modal>
@@ -583,39 +654,17 @@ function Mark({ shape }) {
   );
 }
 
-function ModeButton({ icon, active, onPress, label }) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[styles.modeBtn, active && styles.modeBtnActive]}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ selected: active }}
-    >
-      <Icon name={icon} size={21} color="#FFFFFF" />
-    </Pressable>
-  );
-}
-
-function IconAction({ icon, label, onPress, disabled }) {
+function ToolIcon({ icon, label, onPress, disabled }) {
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
       hitSlop={8}
-      style={[styles.iconAction, disabled && styles.disabled]}
+      style={[styles.toolIcon, disabled && styles.disabled]}
       accessibilityRole="button"
       accessibilityLabel={label}
     >
-      <Icon name={icon} size={20} color="#FFFFFF" />
-    </Pressable>
-  );
-}
-
-function TextAction({ label, onPress, strong, disabled }) {
-  return (
-    <Pressable onPress={onPress} disabled={disabled} hitSlop={8} style={[styles.textAction, disabled && styles.disabled]} accessibilityRole="button">
-      <Text style={[styles.textActionLabel, strong && styles.textActionStrong]}>{label}</Text>
+      <Icon name={icon} size={23} color="#FFFFFF" />
     </Pressable>
   );
 }
@@ -631,43 +680,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: space[4],
     backgroundColor: '#0A0E14',
   },
-  topAction: { paddingVertical: 8, paddingRight: space[3] },
-  cancelText: { color: '#FFFFFF', ...type.body },
+  topAction: { paddingVertical: 8, paddingHorizontal: space[1], minWidth: 44, justifyContent: 'center' },
+  // Plain text, not a button — matches the reference and keeps the photo the
+  // only thing on screen with weight.
+  plainAction: { color: '#FFFFFF', fontSize: 17, fontFamily: FONT.medium },
+  plainActionStrong: { fontFamily: FONT.semibold },
+  toolRow: { flexDirection: 'row', alignItems: 'center', gap: space[4] },
+  toolIcon: { width: 34, height: 40, alignItems: 'center', justifyContent: 'center' },
 
-  ctxRow: {
-    height: CTX_ROW_H,
-    alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: space[4],
-    backgroundColor: '#0A0E14',
-  },
-  ctxGroup: { flexDirection: 'row', alignItems: 'center', gap: space[3] },
-  hint: { color: 'rgba(255,255,255,0.45)', ...type.caption },
+  slider: { position: 'absolute', left: space[2] },
 
-  modeRow: {
+  bottom: { minHeight: BOTTOM_H, justifyContent: 'center', backgroundColor: '#0A0E14' },
+  idleBar: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: space[4] },
+  cropBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: space[4], paddingTop: space[1],
-    backgroundColor: '#0A0E14',
+    paddingHorizontal: space[5],
   },
-  modeGroup: { flexDirection: 'row', alignItems: 'center', gap: space[2] },
-  modeBtn: { width: 42, height: 42, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
-  modeBtnActive: { backgroundColor: 'rgba(255,255,255,0.18)' },
+  cropAction: { flexDirection: 'row', alignItems: 'center', gap: space[2], paddingVertical: 8 },
+  cropActionLabel: { color: '#FFFFFF', ...type.caption },
 
-  divider: { width: 1, height: 22, backgroundColor: 'rgba(255,255,255,0.18)', marginHorizontal: space[1] },
-  swatch: { width: 26, height: 26, borderRadius: 13, borderWidth: 2, borderColor: 'transparent' },
-  swatchActive: { borderColor: '#FFFFFF' },
-  widthBtn: { width: 28, height: 32, alignItems: 'center', justifyContent: 'center' },
-
-  iconAction: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  textAction: { paddingHorizontal: space[3], paddingVertical: 8 },
-  textActionLabel: { color: '#FFFFFF', ...type.body },
-  textActionStrong: { fontFamily: FONT.semibold },
   disabled: { opacity: 0.4 },
 
   sendBtn: {
-    paddingHorizontal: space[4], paddingVertical: 9, borderRadius: radius.xl,
-    backgroundColor: '#FFFFFF', minWidth: 84, alignItems: 'center',
+    flexDirection: 'row', alignItems: 'center', gap: space[2],
+    paddingHorizontal: space[5], paddingVertical: 13, borderRadius: radius.pill,
+    backgroundColor: '#FFFFFF', minWidth: 108, justifyContent: 'center',
   },
-  sendText: { color: '#0A0E14', fontFamily: FONT.semibold, fontSize: 15 },
+  sendText: { color: '#0A0E14', fontFamily: FONT.semibold, fontSize: 16 },
 
   textEntry: { position: 'absolute' },
   textInput: {

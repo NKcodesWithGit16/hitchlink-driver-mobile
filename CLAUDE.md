@@ -239,17 +239,28 @@ damage claims: cropping to the dented corner and circling it carries a claim in 
 edited result is sent as a NEW message** — `ChatController` has no edit-attachment endpoint, and keeping
 the original in the thread is the better record anyway.
 
-It is **mode-first**: four symbols (crop / draw / arrow / text) and nothing else until one is picked, at
-which point that mode's controls appear in a contextual row. With no mode selected the photo pinches and
-pans. Two things follow from that and are the reason the code looks the way it does:
+Its chrome is modelled on Messenger's and **swaps entirely with the mode**, so each screen shows only what
+that mode needs. Idle puts the tools top-right (draw / arrow / text / crop / undo) with an × to close and a
+Send pill bottom-right, and the photo pinches and pans. Every other mode replaces that with plain
+Cancel/Done text, a `SizeSlider` on the left edge of the photo, and either a `ColorRow` along the bottom
+(draw, arrow, text) or the aspect/rotate pair (crop). `Done` commits the mode and returns to idle; `Cancel`
+drops only that mode's *uncommitted* work — marks already committed by an earlier Done are undo's business,
+since losing five good strokes to one stray tap would be worse.
+
+The eraser lives in the colour row rather than being its own mode: it answers the same question ("what does
+my next touch do"), and undo only walks backwards, so fixing the first of five marks without it means
+losing the other four. A tap runs `hitTestShape` over the shapes newest-first and drops the first hit.
+
+Two things follow from the zoom and are the reason the code looks the way it does:
 
 - **Shapes are stored in the SVG's `viewBox` coordinates, never screen coordinates**, because drawing is
   allowed while zoomed. The gesture layer sits *inside* the transformed container so RN reports touches
   already in that space. `src/lib/editorGeom.js` holds the explicit inversion (`screenToBase`) for if that
   ever stops holding, plus the crop/pan clamping — all pure and covered by `__tests__/editorGeom.test.js`.
-- **The contextual row's height is reserved even when empty.** Letting the canvas resize as modes change
-  would change the viewBox, and every stored shape is in viewBox units — they would all shift the moment a
-  tool was picked.
+- **The canvas height is a constant** (`TOPBAR_H` and `BOTTOM_H` are fixed, and the bottom bar's contents
+  must fit inside `BOTTOM_H`). Letting it resize as modes change would change the viewBox, and every stored
+  shape is in viewBox units — they would all shift the moment a tool was picked. Any new bottom-bar content
+  has to respect that height rather than grow past it.
 
 **Crop and rotate bake the current marks into the photo**: the canvas is flattened with `toDataURL`, the
 result is cropped or rotated by `expo-image-manipulator`, and that becomes the new base image with the

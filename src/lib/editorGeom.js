@@ -91,6 +91,98 @@ export function cropRectToPixels(rect, canvasWidth, exportWidth, exportHeight) {
   };
 }
 
+/**
+ * Locks a crop rect to an aspect ratio (width / height), growing from the
+ * corner opposite the one being dragged so that corner stays put — resizing
+ * from the top-left shouldn't slide the bottom-right around.
+ *
+ * `ratio` of 0 or null means free, and the rect passes through untouched.
+ */
+export function applyAspect(rect, ratio, bounds, anchor = 'br') {
+  if (!ratio) return clampCropRect(rect, bounds);
+
+  // Take whichever edge the drag made larger as the lead, so the rect follows
+  // the finger instead of fighting it.
+  let width = rect.width;
+  let height = width / ratio;
+  if (height > rect.height * 1.0001 && rect.height > 0) {
+    height = rect.height;
+    width = height * ratio;
+  }
+
+  // Never exceed the image, keeping the ratio while shrinking to fit.
+  if (width > bounds.width) { width = bounds.width; height = width / ratio; }
+  if (height > bounds.height) { height = bounds.height; width = height * ratio; }
+
+  // Anchor names the corner that must not move.
+  const right = rect.x + rect.width;
+  const bottom = rect.y + rect.height;
+  let x = rect.x;
+  let y = rect.y;
+  if (anchor === 'tl' || anchor === 'tr') y = bottom - height;
+  if (anchor === 'tl' || anchor === 'bl') x = right - width;
+
+  return clampCropRect({ x, y, width, height }, bounds);
+}
+
+/** Shortest distance from point `p` to the segment `a`→`b`. */
+export function pointToSegmentDistance(p, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  // Degenerate segment (a tap-length stroke) is just a point.
+  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  let tt = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+  tt = Math.max(0, Math.min(1, tt));
+  return Math.hypot(p.x - (a.x + tt * dx), p.y - (a.y + tt * dy));
+}
+
+/** Points out of an SVG path built as "Mx,y Lx,y Lx,y …" (all this app emits). */
+export function parsePathPoints(d) {
+  if (!d) return [];
+  const out = [];
+  const re = /[ML]\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/g;
+  let m = re.exec(d);
+  while (m) {
+    out.push({ x: parseFloat(m[1]), y: parseFloat(m[2]) });
+    m = re.exec(d);
+  }
+  return out;
+}
+
+/**
+ * Is `point` close enough to `shape` to count as touching it? Used by the
+ * eraser, where the tolerance is what makes it usable — a driver taps at a
+ * stroke, not exactly on its centre line.
+ */
+export function hitTestShape(shape, point, tolerance = 18) {
+  if (!shape) return false;
+
+  if (shape.kind === 'arrow') {
+    const reach = tolerance + (shape.width || 0) / 2;
+    return pointToSegmentDistance(point, { x: shape.x1, y: shape.y1 }, { x: shape.x2, y: shape.y2 }) <= reach;
+  }
+
+  if (shape.kind === 'text') {
+    const size = shape.size || 20;
+    // SVG text sits on its baseline, so the box runs upward from the origin.
+    const w = Math.max(size, (shape.value?.length || 1) * size * 0.6);
+    return point.x >= shape.x - tolerance
+      && point.x <= shape.x + w + tolerance
+      && point.y >= shape.y - size - tolerance
+      && point.y <= shape.y + tolerance;
+  }
+
+  const pts = parsePathPoints(shape.d);
+  if (pts.length === 0) return false;
+  const reach = tolerance + (shape.width || 0) / 2;
+  if (pts.length === 1) return Math.hypot(point.x - pts[0].x, point.y - pts[0].y) <= reach;
+  for (let i = 1; i < pts.length; i += 1) {
+    if (pointToSegmentDistance(point, pts[i - 1], pts[i]) <= reach) return true;
+  }
+  return false;
+}
+
 /** Clamps a pan offset so a zoomed image can't be dragged off screen. */
 export function clampPan(translate, scale, width, height) {
   const maxX = Math.max(0, (width * scale - width) / 2);

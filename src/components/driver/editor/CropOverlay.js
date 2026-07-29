@@ -1,6 +1,12 @@
 import { useMemo, useRef } from 'react';
 import { View, PanResponder, StyleSheet } from 'react-native';
-import { clampCropRect } from '../../../lib/editorGeom';
+import { clampCropRect, applyAspect } from '../../../lib/editorGeom';
+
+// Which corner must stay put while a given handle is dragged.
+const ANCHOR = {
+  tl: 'br', tr: 'bl', bl: 'tr', br: 'tl',
+  top: 'br', bottom: 'tr', left: 'br', right: 'bl',
+};
 
 // The crop rectangle: dimmed exterior, rule-of-thirds grid, eight drag targets
 // (four corners, four edges) plus a draggable interior.
@@ -14,15 +20,15 @@ import { clampCropRect } from '../../../lib/editorGeom';
 // reaches the native cropper as a negative width and fails with an error that
 // says nothing useful.
 
-const HANDLE_HIT = 32;      // touch target
-const BRACKET = 22;         // drawn corner length
-const BRACKET_W = 3;
+const HANDLE_HIT = 36;      // touch target
+const BRACKET = 26;         // drawn corner length
+const BRACKET_W = 4;
 
-export default function CropOverlay({ rect, bounds, onChange }) {
+export default function CropOverlay({ rect, bounds, ratio, onChange }) {
   // The PanResponder is built once; these mirror the props it needs so it never
   // reads a stale rect from its first render.
-  const live = useRef({ rect, bounds });
-  live.current = { rect, bounds };
+  const live = useRef({ rect, bounds, ratio });
+  live.current = { rect, bounds, ratio };
   const start = useRef(null);
 
   const makeResponder = (corner) => PanResponder.create({
@@ -53,7 +59,11 @@ export default function CropOverlay({ rect, bounds, onChange }) {
       if (next.width < 0) { next.x += next.width; next.width = Math.abs(next.width); }
       if (next.height < 0) { next.y += next.height; next.height = Math.abs(next.height); }
 
-      onChange(clampCropRect(next, live.current.bounds));
+      // Moving the whole rect never reshapes it, so it skips the aspect lock.
+      const { bounds: b, ratio: r } = live.current;
+      onChange(corner === 'move' || !r
+        ? clampCropRect(next, b)
+        : applyAspect(next, r, b, ANCHOR[corner] || 'br'));
     },
     onPanResponderRelease: () => { start.current = null; },
     onPanResponderTerminationRequest: () => false,
