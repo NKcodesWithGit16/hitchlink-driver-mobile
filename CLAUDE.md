@@ -261,14 +261,19 @@ The photo is rendered **inside** the `<Svg>` as an SVG `<Image>`, not behind it,
 rasterizes the picture and the strokes in one pass; the base64 PNG is written to the cache and handed to
 the normal upload path (which transcodes and downscales it).
 
-`react-native-view-shot` is the conventional tool for this and was used first, then removed. Two reasons to
-leave it out: `react-native-svg` is already a dependency and covers the whole job, and `toDataURL` takes an
-**output size**, so the export is rasterized at the photo's own resolution rather than at whatever size it
-happened to be displayed — `captureRef` snapshots the rendered view, which capped annotated copies at
-roughly screen resolution. (It was originally dropped after an `RNViewShot could not be found` crash that
-looked like a New Architecture incompatibility. That diagnosis was wrong — the device was running an older
-dev client that predated the dependency. The rewrite was kept on the merits above, not because view-shot
-is broken.)
+**`toDataURL`'s `{width, height}` sets the output BOUNDS and renders the canvas at 1:1 into the corner of
+them — it pads, it does not scale.** Passing a larger size to get a higher-resolution export produced a
+photo in the top-left of a mostly blank image. Call it with no size, then measure the file that comes back
+(the rasterizer may work at the device pixel scale) and map the crop rect in those units. Export
+resolution is therefore the canvas's, not the photo's; raising it needs an off-screen canvas at the
+photo's natural size with every coordinate scaled to match.
+
+`react-native-view-shot` is the conventional tool for this and was used first, then removed — mainly
+because `react-native-svg` is already a dependency and covers the whole job, so it's one native module
+fewer. Note the resolution characteristics are the same either way: `captureRef` also snapshots the
+rendered view. (It was originally dropped after an `RNViewShot could not be found` crash that looked like
+a New Architecture incompatibility. That diagnosis was wrong — the device was running an older dev client
+that predated the dependency. Nothing was ever shown to be wrong with view-shot itself.)
 
 `saveToPhotoLibrary` (`src/api/main.js`) returns `'saved' | 'denied'` rather than throwing on a refused
 permission — a denial is a normal outcome that deserves a route to Settings, not a generic error. Like

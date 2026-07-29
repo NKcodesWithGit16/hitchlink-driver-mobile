@@ -41,11 +41,17 @@ import { space, type, radius, FONT } from '../../theme/tokens';
 // The photo is rendered INSIDE the <Svg> as an SVG <Image> so toDataURL
 // rasterizes picture and marks in one pass — see the note in CLAUDE.md about
 // why this doesn't use react-native-view-shot.
+//
+// Export resolution is the canvas's, not the photo's. toDataURL takes a
+// {width,height} but it sets the output BOUNDS and renders at 1:1 into the
+// corner of them — it pads rather than scales — so it cannot be used to
+// upscale. Fine for marking damage; an edited copy is lower-resolution than
+// its source, and raising that needs an off-screen canvas at the photo's
+// natural size with every coordinate scaled to match.
 
 const COLORS = ['#FF3B30', '#FFCC00', '#34C759', '#0A84FF', '#FFFFFF'];
 const WIDTHS = [3, 6, 10];
 const ARROW_HEAD = 16;
-const MAX_EXPORT_EDGE = 2560;
 const MAX_ZOOM = 4;
 
 const MODE = { CROP: 'crop', DRAW: 'draw', ARROW: 'arrow', TEXT: 'text' };
@@ -112,15 +118,6 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
     () => fitRect(natural?.width, natural?.height, width, canvasHeight),
     [natural, width, canvasHeight],
   );
-
-  const exportSize = useMemo(() => {
-    const ratio = canvasHeight > 0 ? width / canvasHeight : 1;
-    const longEdge = Math.min(MAX_EXPORT_EDGE, Math.max(natural?.width || 0, natural?.height || 0) || 0);
-    if (!longEdge) return { width: Math.round(width), height: Math.round(canvasHeight) };
-    return ratio >= 1
-      ? { width: Math.round(longEdge), height: Math.round(longEdge / ratio) }
-      : { width: Math.round(longEdge * ratio), height: Math.round(longEdge) };
-  }, [natural, width, canvasHeight]);
 
   // ── History ──────────────────────────────────────────────────────────────
   const pushHistory = useCallback(() => {
@@ -284,29 +281,42 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
    * waiting on Image.getSize.
    */
   const flatten = useCallback(async (rect) => {
+    // No size argument. toDataURL's {width,height} sets the bitmap's BOUNDS and
+    // renders the canvas into the corner of it at 1:1 — it pads, it does not
+    // scale. Asking for a bigger image produced exactly that: the photo in the
+    // top-left of a mostly blank one. Let it use its own bounds instead.
     const base64 = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('toDataURL timed out')), 10000);
       svgRef.current?.toDataURL((data) => {
         clearTimeout(timer);
         if (data) resolve(data); else reject(new Error('toDataURL returned nothing'));
-      }, exportSize);
+      });
     });
     const raw = `${LegacyFS.cacheDirectory}edit-raw-${Date.now()}.png`;
     await LegacyFS.writeAsStringAsync(raw, base64, { encoding: LegacyFS.EncodingType.Base64 });
+
+    // Measure what actually came back rather than assuming: the rasterizer may
+    // work at the device pixel scale, and the crop rect has to be mapped in the
+    // same units or it lands somewhere else entirely.
+    const measured = await new Promise((resolve) => {
+      Image.getSize(raw, (w, h) => resolve({ width: w, height: h }), () => resolve(null));
+    });
+    const outW = measured?.width || width;
+    const outH = measured?.height || canvasHeight;
 
     const trim = rect || imageRect;
     // Nothing sane to trim to if the image hasn't been measured yet — better a
     // letterboxed export than a failed one.
     if (!(trim?.width > 0 && trim?.height > 0)) {
-      return { uri: raw, width: exportSize.width, height: exportSize.height };
+      return { uri: raw, width: outW, height: outH };
     }
 
     const { ImageManipulator, SaveFormat } = require('expo-image-manipulator');
-    const px = cropRectToPixels(trim, width, exportSize.width, exportSize.height);
+    const px = cropRectToPixels(trim, width, outW, outH);
     const rendered = await ImageManipulator.manipulate(raw).crop(px).renderAsync();
     const out = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.92 });
     return { uri: out.uri, width: rendered.width, height: rendered.height };
-  }, [exportSize, imageRect, width]);
+  }, [imageRect, width, canvasHeight]);
 
   const enterCrop = useCallback(() => {
     resetView();
