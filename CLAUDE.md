@@ -242,13 +242,16 @@ record anyway.
 
 The photo is rendered **inside** the `<Svg>` as an SVG `<Image>`, not behind it, so `svg.toDataURL()`
 rasterizes the picture and the strokes in one pass; the base64 PNG is written to the cache and handed to
-the normal upload path (which transcodes and downscales it). **Do not reintroduce
-`react-native-view-shot`.** It is the obvious tool for this and it was tried: it installs and autolinks
-cleanly, but its native module never registers under the New Architecture in this app — the app boots
-straight into `Invariant Violation: TurboModuleRegistry.getEnforcing(...): 'RNViewShot' could not be
-found`. `react-native-svg` (which does link) covers the whole job, and going through `toDataURL` is better
-regardless: one fewer native dependency, and because it takes an output size the export is rasterized at
-the photo's own resolution instead of at whatever size it was displayed.
+the normal upload path (which transcodes and downscales it).
+
+`react-native-view-shot` is the conventional tool for this and was used first, then removed. Two reasons to
+leave it out: `react-native-svg` is already a dependency and covers the whole job, and `toDataURL` takes an
+**output size**, so the export is rasterized at the photo's own resolution rather than at whatever size it
+happened to be displayed — `captureRef` snapshots the rendered view, which capped annotated copies at
+roughly screen resolution. (It was originally dropped after an `RNViewShot could not be found` crash that
+looked like a New Architecture incompatibility. That diagnosis was wrong — the device was running an older
+dev client that predated the dependency. The rewrite was kept on the merits above, not because view-shot
+is broken.)
 
 `saveToPhotoLibrary` (`src/api/main.js`) returns `'saved' | 'denied'` rather than throwing on a refused
 permission — a denial is a normal outcome that deserves a route to Settings, not a generic error. Like
