@@ -598,11 +598,18 @@ export default function MessagesScreen() {
   // An annotated copy is sent as a NEW message: the backend has no
   // edit-attachment endpoint, and keeping the original in the thread is the
   // right record anyway — the markup is a comment on it, not a correction.
-  const handleMarkupDone = useCallback(async (annotatedUri) => {
+  const handleMarkupDone = useCallback(async (edited) => {
     setMarkup(null);
     setViewer(null);
-    if (!annotatedUri) return;
-    await uploadPhotos({ photos: [{ uri: annotatedUri }], caption: '', rid: null, replyPreview: null });
+    if (!edited?.uri) return;
+    // The editor reports the output's real size, so the optimistic bubble gets
+    // the right shape straight away rather than measuring the file first.
+    await uploadPhotos({
+      photos: [{ uri: edited.uri, width: edited.width, height: edited.height }],
+      caption: '',
+      rid: null,
+      replyPreview: null,
+    });
   }, [uploadPhotos]);
 
   // The shared upload path for both a first send and a retry. Posts the whole

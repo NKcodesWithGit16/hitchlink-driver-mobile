@@ -270,8 +270,20 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
   }, []);
 
   // ── Flatten ──────────────────────────────────────────────────────────────
-  // Rasterizes photo + marks to a cache file. Shared by crop, rotate and send.
-  const flatten = useCallback(async () => {
+  /**
+   * Rasterizes photo + marks and trims the result to `rect`, defaulting to the
+   * photo itself. Shared by crop, rotate and send.
+   *
+   * The trim is not optional. The SVG canvas is screen-shaped and the photo is
+   * `meet`-fitted inside it, so a raw toDataURL comes back in the CANVAS's
+   * aspect ratio with transparent letterbox bars around the picture — sending
+   * that put a screen-shaped image with bars into the thread. Everything that
+   * leaves this screen goes through here.
+   *
+   * Returns the real output dimensions so the caller can size a bubble without
+   * waiting on Image.getSize.
+   */
+  const flatten = useCallback(async (rect) => {
     const base64 = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('toDataURL timed out')), 10000);
       svgRef.current?.toDataURL((data) => {
@@ -279,10 +291,22 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
         if (data) resolve(data); else reject(new Error('toDataURL returned nothing'));
       }, exportSize);
     });
-    const dest = `${LegacyFS.cacheDirectory}edit-${Date.now()}.png`;
-    await LegacyFS.writeAsStringAsync(dest, base64, { encoding: LegacyFS.EncodingType.Base64 });
-    return dest;
-  }, [exportSize]);
+    const raw = `${LegacyFS.cacheDirectory}edit-raw-${Date.now()}.png`;
+    await LegacyFS.writeAsStringAsync(raw, base64, { encoding: LegacyFS.EncodingType.Base64 });
+
+    const trim = rect || imageRect;
+    // Nothing sane to trim to if the image hasn't been measured yet — better a
+    // letterboxed export than a failed one.
+    if (!(trim?.width > 0 && trim?.height > 0)) {
+      return { uri: raw, width: exportSize.width, height: exportSize.height };
+    }
+
+    const { ImageManipulator, SaveFormat } = require('expo-image-manipulator');
+    const px = cropRectToPixels(trim, width, exportSize.width, exportSize.height);
+    const rendered = await ImageManipulator.manipulate(raw).crop(px).renderAsync();
+    const out = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.92 });
+    return { uri: out.uri, width: rendered.width, height: rendered.height };
+  }, [exportSize, imageRect, width]);
 
   const enterCrop = useCallback(() => {
     resetView();
@@ -294,11 +318,8 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
     if (busy || !cropRect) return;
     setBusy('crop');
     try {
-      const flat = await flatten();
-      const { ImageManipulator, SaveFormat } = require('expo-image-manipulator');
-      const rect = cropRectToPixels(cropRect, width, exportSize.width, exportSize.height);
-      const ctx = ImageManipulator.manipulate(flat).crop(rect);
-      const out = await (await ctx.renderAsync()).saveAsync({ format: SaveFormat.JPEG, compress: 0.92 });
+      // flatten already crops — pass the user's rect instead of the photo's.
+      const out = await flatten(cropRect);
 
       pushHistory();
       setBaseUri(out.uri);
@@ -314,16 +335,17 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
     } finally {
       setBusy(null);
     }
-  }, [busy, cropRect, flatten, width, exportSize, pushHistory, resetView, t]);
+  }, [busy, cropRect, flatten, pushHistory, resetView, t]);
 
   const rotate = useCallback(async () => {
     if (busy) return;
     setBusy('rotate');
     try {
+      // Trim to the photo first, or the rotation would spin the letterbox too.
       const flat = await flatten();
       const { ImageManipulator, SaveFormat } = require('expo-image-manipulator');
-      const ctx = ImageManipulator.manipulate(flat).rotate(90);
-      const out = await (await ctx.renderAsync()).saveAsync({ format: SaveFormat.JPEG, compress: 0.92 });
+      const rendered = await ImageManipulator.manipulate(flat.uri).rotate(90).renderAsync();
+      const out = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.92 });
 
       pushHistory();
       setBaseUri(out.uri);
@@ -353,6 +375,8 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
     if (untouched) { onCancel?.(); return; }
     setBusy('send');
     try {
+      // Dimensions travel with it so the chat bubble takes the right shape
+      // immediately instead of waiting on Image.getSize.
       const out = await flatten();
       haptics.success();
       onDone?.(out);
