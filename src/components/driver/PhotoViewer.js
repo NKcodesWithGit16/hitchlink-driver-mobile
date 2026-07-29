@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, Modal, Image, Pressable, ScrollView, Animated, TextInput,
-  PanResponder, StyleSheet, useWindowDimensions, Alert, Platform,
+  View, Text, Modal, Pressable, ScrollView, Animated, TextInput,
+  PanResponder, StyleSheet, useWindowDimensions, Platform,
   ActivityIndicator, KeyboardAvoidingView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Sharing from 'expo-sharing';
 import Icon from '../ui/Icon';
 import { useT } from '../../i18n/LanguageContext';
@@ -56,6 +57,8 @@ export default function PhotoViewer({
   const [busy, setBusy] = useState(null);        // 'save' | 'share' — disables its button
   const [moreOpen, setMoreOpen] = useState(false);
   const [reply, setReply] = useState('');
+  const [toast, setToast] = useState(null);      // { text, bad } — in-modal feedback
+  const toastTimer = useRef(null);
   const pagerRef = useRef(null);
   const visible = list.length > 0;
   const currentUri = list[page];
@@ -94,6 +97,13 @@ export default function PhotoViewer({
     onClose?.();
   }, [dismissY, onClose]);
 
+  const showToast = useCallback((text, bad = false) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ text, bad });
+    toastTimer.current = setTimeout(() => setToast(null), 2400);
+  }, []);
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+
   const save = useCallback(async () => {
     if (busy || !currentUri) return;
     setBusy('save');
@@ -101,19 +111,19 @@ export default function PhotoViewer({
       const outcome = await saveToPhotoLibrary(currentUri, filename || 'photo.jpg');
       if (outcome === 'denied') {
         haptics.error();
-        Alert.alert(t('messages.savePhotoDeniedTitle'), t('messages.savePhotoDeniedBody'));
+        showToast(t('messages.savePhotoDeniedBody'), true);
       } else {
         haptics.success();
-        Alert.alert(t('messages.savedToPhotosTitle'), t('messages.savedToPhotosBody'));
+        showToast(t('messages.savedToPhotosBody'));
       }
     } catch (err) {
       console.error('[Viewer] Save to photos failed:', err);
       haptics.error();
-      Alert.alert(t('messages.savePhotoFailedTitle'), t('messages.savePhotoFailedBody'));
+      showToast(t('messages.savePhotoFailedBody'), true);
     } finally {
       setBusy(null);
     }
-  }, [busy, currentUri, filename, t]);
+  }, [busy, currentUri, filename, t, showToast]);
 
   const share = useCallback(async () => {
     if (busy || !currentUri) return;
@@ -128,11 +138,11 @@ export default function PhotoViewer({
     } catch (err) {
       console.error('[Viewer] Share failed:', err);
       haptics.error();
-      Alert.alert(t('messages.sharePhotoFailedTitle'), t('messages.sharePhotoFailedBody'));
+      showToast(t('messages.sharePhotoFailedBody'), true);
     } finally {
       setBusy(null);
     }
-  }, [busy, currentUri, filename, t]);
+  }, [busy, currentUri, filename, t, showToast]);
 
   const sendReply = useCallback(() => {
     const value = reply.trim();
@@ -177,7 +187,19 @@ export default function PhotoViewer({
         ))}
       </ScrollView>
 
-      {/* Chrome sits above the pager so it stays put while photos move. */}
+      {/* Chrome sits above the pager so it stays put while photos move.
+          A flat translucent bar isn't enough behind it: a 4:3 photo letterboxes
+          and the controls land on black, but a screenshot fills the screen and
+          the controls land on the picture, where they're barely readable. The
+          scrim is a gradient rather than a band so there's no visible seam. */}
+      {showChrome ? (
+        <LinearGradient
+          colors={['rgba(0,0,0,0.75)', 'rgba(0,0,0,0.35)', 'transparent']}
+          style={[styles.scrimTop, { height: insets.top + 96 }]}
+          pointerEvents="none"
+        />
+      ) : null}
+
       {showChrome ? (
         <View style={[styles.topBar, { paddingTop: insets.top + space[2] }]}>
           <Pressable
@@ -235,9 +257,19 @@ export default function PhotoViewer({
       ) : null}
 
       {showChrome ? (
+        <LinearGradient
+          colors={['transparent', 'rgba(0,0,0,0.4)', 'rgba(0,0,0,0.8)']}
+          style={[styles.scrimBottom, { height: insets.bottom + 130 }]}
+          pointerEvents="none"
+        />
+      ) : null}
+
+      {showChrome ? (
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={[styles.bottomBar, { paddingBottom: insets.bottom + space[2] }]}
+          // The home indicator needs clearance of its own — insets.bottom alone
+          // left the reply pill sitting right on it.
+          style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, space[3]) + space[3] }]}
         >
           <TextInput
             value={reply}
@@ -271,34 +303,40 @@ export default function PhotoViewer({
         </KeyboardAvoidingView>
       ) : null}
 
-      <MoreSheet
-        visible={moreOpen}
-        msg={msg}
-        onClose={() => setMoreOpen(false)}
-        onEdit={onEdit ? () => { setMoreOpen(false); onEdit(currentUri); } : null}
-        onSaveToDocs={onSaveToDocs ? () => { setMoreOpen(false); onSaveToDocs(); } : null}
-        onDelete={onDelete ? () => { setMoreOpen(false); close(); onDelete(); } : null}
-      />
-    </Modal>
-  );
-}
-
-// Reuses the viewer's own dark palette rather than the theme's sheet styling —
-// this sits over a fullscreen black backdrop where a light surface would glare.
-function MoreSheet({ visible, msg, onClose, onEdit, onSaveToDocs, onDelete }) {
-  const t = useT();
-  const insets = useSafeAreaInsets();
-  if (!visible) return null;
-  const mine = msg?.from === 'driver';
-  return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.sheetOverlay} onPress={onClose}>
-        <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + space[3] }]} onPress={() => {}}>
-          {onEdit ? <SheetRow icon="edit-2" label={t('messages.editPhoto')} onPress={onEdit} /> : null}
-          {onSaveToDocs ? <SheetRow icon="folder-plus" label={t('messages.saveToDocuments')} onPress={onSaveToDocs} /> : null}
-          {onDelete && mine ? <SheetRow icon="trash-2" label={t('common.delete')} danger onPress={onDelete} /> : null}
+      {/* An in-modal overlay, NOT a nested <Modal>. Presenting a Modal from
+          inside a Modal — and then a third one for markup or the Documents
+          review sheet — is the iOS presentation collision this codebase already
+          hit once (see the note above ConfirmDelete in messages.js): the screen
+          simply freezes. Actions that need another modal close this one first
+          and are re-raised by the parent once it's gone. */}
+      {moreOpen ? (
+        <Pressable style={styles.sheetOverlay} onPress={() => setMoreOpen(false)}>
+          <Pressable
+            style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, space[3]) + space[2] }]}
+            onPress={() => {}}
+          >
+            <View style={styles.sheetGrabber} />
+            {onEdit ? (
+              <SheetRow icon="edit-2" label={t('messages.editPhoto')} onPress={() => { setMoreOpen(false); onEdit(currentUri); }} />
+            ) : null}
+            {onSaveToDocs ? (
+              <SheetRow icon="folder-plus" label={t('messages.saveToDocuments')} onPress={() => { setMoreOpen(false); onSaveToDocs(); }} />
+            ) : null}
+            {onDelete && msg?.from === 'driver' ? (
+              <SheetRow icon="trash-2" label={t('common.delete')} danger onPress={() => { setMoreOpen(false); onDelete(); }} />
+            ) : null}
+          </Pressable>
         </Pressable>
-      </Pressable>
+      ) : null}
+
+      {/* Success/failure feedback lives inside the modal. Alert.alert raised
+          from here hits the same presentation collision and never appears. */}
+      {toast ? (
+        <View style={[styles.toast, { bottom: insets.bottom + 110 }]} pointerEvents="none">
+          <Icon name={toast.bad ? 'alert-circle' : 'check-circle'} size={16} color="#FFFFFF" />
+          <Text style={styles.toastText}>{toast.text}</Text>
+        </View>
+      ) : null}
     </Modal>
   );
 }
@@ -486,11 +524,15 @@ function ZoomablePage({ uri, width, height, active, dismissY, onZoomChange, onDi
 const styles = StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: '#000' },
 
+  // Gradients rather than solid bars: controls stay readable over a full-bleed
+  // screenshot without stamping a hard-edged band across the photo.
+  scrimTop: { position: 'absolute', top: 0, left: 0, right: 0 },
+  scrimBottom: { position: 'absolute', bottom: 0, left: 0, right: 0 },
+
   topBar: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: space[3], paddingBottom: space[2],
-    backgroundColor: 'rgba(0,0,0,0.35)',
   },
   topActions: { flexDirection: 'row', alignItems: 'center', gap: space[1] },
   iconBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
@@ -501,7 +543,6 @@ const styles = StyleSheet.create({
     position: 'absolute', left: 0, right: 0, bottom: 0,
     flexDirection: 'row', alignItems: 'flex-end', gap: space[2],
     paddingHorizontal: space[3], paddingTop: space[2],
-    backgroundColor: 'rgba(0,0,0,0.35)',
   },
   replyInput: {
     flex: 1, minHeight: 40, maxHeight: 110,
@@ -517,12 +558,27 @@ const styles = StyleSheet.create({
   },
   quickReaction: { fontSize: 24 },
 
-  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  sheetOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: '#14181F',
     borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,
-    paddingTop: space[3], paddingHorizontal: space[2],
+    paddingTop: space[2], paddingHorizontal: space[2],
+  },
+  sheetGrabber: {
+    width: 36, height: 4, borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    alignSelf: 'center', marginBottom: space[2],
   },
   sheetRow: { flexDirection: 'row', alignItems: 'center', gap: space[3], paddingVertical: 14, paddingHorizontal: space[3] },
   sheetLabel: { ...type.body },
+
+  toast: {
+    position: 'absolute', alignSelf: 'center',
+    flexDirection: 'row', alignItems: 'center', gap: space[2],
+    paddingHorizontal: space[3], paddingVertical: 10,
+    borderRadius: radius.xl,
+    backgroundColor: 'rgba(20,24,31,0.95)',
+    maxWidth: '86%',
+  },
+  toastText: { color: '#FFFFFF', ...type.caption, flexShrink: 1 },
 });

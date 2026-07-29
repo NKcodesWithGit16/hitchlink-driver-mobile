@@ -18,7 +18,6 @@ import RecordingBar from '../../src/components/driver/RecordingBar';
 import DocumentReviewModal from '../../src/components/driver/DocumentReviewModal';
 import PhotoViewer from '../../src/components/driver/PhotoViewer';
 import PhotoMarkup from '../../src/components/driver/PhotoMarkup';
-import Skeleton from '../../src/components/ui/Skeleton';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useTheme } from '../../src/theme/ThemeContext';
@@ -77,6 +76,10 @@ const TRAY_THUMB = 64;
 const PHOTO_MAX_W = Math.min(260, Math.round(Dimensions.get('window').width * 0.66));
 const PHOTO_MAX_H = 340;
 const PHOTO_MIN_EDGE = 96;
+// Gap between dismissing one Modal and presenting the next. iOS will not
+// present while a dismissal is in flight — it freezes instead — and a Modal's
+// fade/slide runs ~250ms. See the collision note above ConfirmDelete.
+const MODAL_HANDOFF_MS = 320;
 
 // "kind" describes an attachment message's payload type; used both for the
 // reply-quote preview and the composer's edit/reply context bar.
@@ -586,6 +589,12 @@ export default function MessagesScreen() {
     setViewer({ msg, uris: list, index: Math.max(0, Math.min(index, list.length - 1)) });
   }, []);
 
+  // Delete confirmation is a Modal too, so it takes the same handoff.
+  const setConfirmDelAfterViewer = useCallback((pending) => {
+    setViewer(null);
+    setTimeout(() => setConfirmDel(pending), MODAL_HANDOFF_MS);
+  }, []);
+
   // An annotated copy is sent as a NEW message: the backend has no
   // edit-attachment endpoint, and keeping the original in the thread is the
   // right record anyway — the markup is a comment on it, not a correction.
@@ -1079,15 +1088,27 @@ export default function MessagesScreen() {
               .catch(() => haptics.error());
           }}
           onReact={(emoji) => viewer.msg && react(viewer.msg, emoji)}
-          onSaveToDocs={() => viewer.msg && saveToDocuments(viewer.msg)}
-          onDelete={() => viewer.msg && setConfirmDel({
+          // Both of these open another Modal. Presenting one while the viewer
+          // is still up is the iOS collision that freezes the screen, so the
+          // viewer closes first and the action is re-raised on the next tick,
+          // once its dismissal has actually run.
+          onSaveToDocs={() => {
+            const m = viewer.msg;
+            setViewer(null);
+            if (m) setTimeout(() => saveToDocuments(m), MODAL_HANDOFF_MS);
+          }}
+          onDelete={() => viewer.msg && setConfirmDelAfterViewer({
             msg: viewer.msg,
             // Same rule the long-press menu applies (messages.js:1712) — own
             // message, still inside the backend's delete-for-everyone window.
             // Omitting it would silently downgrade every delete to "for me".
             canEveryone: viewer.msg.from === 'driver' && ageMin(viewer.msg.ts) < DELETE_WINDOW_MIN,
           })}
-          onEdit={(uri) => setMarkup({ uri, msg: viewer.msg })}
+          onEdit={(uri) => {
+            const m = viewer.msg;
+            setViewer(null);
+            setTimeout(() => setMarkup({ uri, msg: m }), MODAL_HANDOFF_MS);
+          }}
         />
       ) : null}
 
@@ -1462,8 +1483,10 @@ function usePhotoSize(uri, width, height) {
 
 // A single photo, sized to its own shape, with a shimmer standing in until both
 // the dimensions and the bytes have arrived.
-function SinglePhoto({ uri, width, height, styles, onPress, onLongPress, label }) {
-  const size = usePhotoSize(uri, width, height);
+function SinglePhoto({ uri, sizeFrom, width, height, styles, onPress, onLongPress, label }) {
+  // Measured off the full-size URL, not the thumbnail: both share an aspect
+  // ratio, and the full one is what the cache is keyed on elsewhere.
+  const size = usePhotoSize(sizeFrom || uri, width, height);
   const [loaded, setLoaded] = useState(false);
   const box = size || { width: PHOTO_MAX_W, height: Math.round(PHOTO_MAX_W * 0.75) };
 
@@ -1476,9 +1499,12 @@ function SinglePhoto({ uri, width, height, styles, onPress, onLongPress, label }
       accessibilityLabel={label}
       style={[styles.photoFrame, box]}
     >
+      {/* A neutral scrim, not the theme Skeleton: inside a teal sent-bubble the
+          shimmer read as a big empty coloured panel rather than a photo on its
+          way. A dim overlay plus a spinner says "loading" unambiguously. */}
       {!loaded ? (
-        <View style={StyleSheet.absoluteFill}>
-          <Skeleton width="100%" height="100%" radius={radius.md} />
+        <View style={[StyleSheet.absoluteFill, styles.photoLoading]}>
+          <ActivityIndicator size="small" color="rgba(255,255,255,0.85)" />
         </View>
       ) : null}
       <Image
@@ -1499,11 +1525,13 @@ function SinglePhoto({ uri, width, height, styles, onPress, onLongPress, label }
 //
 // Multi-photo tiles stay square on purpose — a grid of mixed aspect ratios
 // reads as broken, and the viewer shows each photo whole anyway.
-function PhotoAlbum({ uris, width, height, msg, styles, onOpen, onBubbleDoubleTap, onBubbleLongPress, onBubbleToggleReveal }) {
+function PhotoAlbum({ uris, thumbUris, width, height, msg, styles, onOpen, onBubbleDoubleTap, onBubbleLongPress, onBubbleToggleReveal }) {
   const t = useT();
   const list = uris || [];
   if (list.length === 0) return null;
 
+  // Bubbles show the small companion image; the viewer always gets the full one.
+  const thumbs = thumbUris?.length === list.length ? thumbUris : list;
   const shown = list.slice(0, 4);
   const overflow = list.length - shown.length;
 
@@ -1517,7 +1545,8 @@ function PhotoAlbum({ uris, width, height, msg, styles, onOpen, onBubbleDoubleTa
   if (list.length === 1) {
     return (
       <SinglePhoto
-        uri={list[0]}
+        uri={thumbs[0]}
+        sizeFrom={list[0]}
         width={width}
         height={height}
         styles={styles}
@@ -1557,7 +1586,7 @@ function PhotoAlbum({ uris, width, height, msg, styles, onOpen, onBubbleDoubleTa
                 accessibilityRole="button"
                 accessibilityLabel={t('messages.openPhotoA11y')}
               >
-                <Image source={{ uri }} style={styles.albumImage} resizeMode="cover" />
+                <Image source={{ uri: thumbs[index] || uri }} style={styles.albumImage} resizeMode="cover" />
                 {isLastShown && overflow > 0 ? (
                   <View style={styles.albumOverflow}>
                     <Text style={styles.albumOverflowText}>{`+${overflow}`}</Text>
@@ -1607,6 +1636,7 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage, onBubbleDoubleTap,
         <View>
           <PhotoAlbum
             uris={msg.uris?.length ? msg.uris : [msg.uri].filter(Boolean)}
+            thumbUris={msg.thumbUris}
             width={msg.width}
             height={msg.height}
             msg={msg}
@@ -2247,7 +2277,8 @@ const makeStyles = (c) => StyleSheet.create({
 
   bubbleText: { ...type.body, lineHeight: 22 },
   // Single photo: the box comes from usePhotoSize, so only the chrome is here.
-  photoFrame: { borderRadius: radius.md, overflow: 'hidden', marginBottom: 2 },
+  photoFrame: { borderRadius: radius.md, overflow: 'hidden', marginBottom: 2, backgroundColor: 'rgba(0,0,0,0.22)' },
+  photoLoading: { alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.28)' },
 
   // Multi-photo album. Width matches the single-photo cap so a thread of mixed
   // messages keeps one left/right edge; tiles are square and share the row

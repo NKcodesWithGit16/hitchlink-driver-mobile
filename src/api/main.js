@@ -56,6 +56,9 @@ function normalizeMessage(m) {
     // the single-photo path (and save-to-docs, reply previews, the viewer) is
     // untouched; bubbles read this to render the rest.
     uris: deleted || !isImage ? undefined : atts.map((a) => a?.url).filter(Boolean),
+    // Small companion images for the bubble. Falls back to the full URL per
+    // photo, so messages sent before thumbnails existed still render.
+    thumbUris: deleted || !isImage ? undefined : atts.map((a) => a?.thumbnailUrl || a?.url).filter(Boolean),
     // Natural pixel size of the first photo, when the sender recorded it. The
     // bubble uses it to reserve the right shape before the image downloads;
     // older messages have nulls here and fall back to measuring the loaded
@@ -437,6 +440,42 @@ async function normalizePhoto(uri) {
 
 // Normalizes, signs and PUTs one photo, returning the attachment ref the
 // message endpoint wants. Split out so a batch can run these concurrently.
+// Chat bubbles show a photo about 260pt wide. Downloading a 2560px original to
+// fill that is why photos took seconds to appear in the thread, so a small
+// companion image goes up alongside and the bubble reads that instead; the full
+// one is only fetched when the viewer opens. MessageAttachment.ThumbnailKey and
+// the API's `thumbnailUrl` already existed for videos — this reuses both.
+const PHOTO_THUMB_EDGE = 480;
+const PHOTO_THUMB_QUALITY = 0.7;
+
+async function uploadPhotoThumbnail(driverId, uri) {
+  try {
+    const { ImageManipulator, SaveFormat } = loadImageManipulator();
+    const ctx = ImageManipulator.manipulate(uri);
+    let rendered = await ctx.renderAsync();
+    if (Math.max(rendered.width, rendered.height) > PHOTO_THUMB_EDGE) {
+      ctx.resize(rendered.width >= rendered.height
+        ? { width: PHOTO_THUMB_EDGE }
+        : { height: PHOTO_THUMB_EDGE });
+      rendered = await ctx.renderAsync();
+    }
+    const out = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: PHOTO_THUMB_QUALITY });
+    const stat = await statLocalFile(out.uri, 'image/jpeg');
+
+    const signed = await apiFetch(`/chat/${driverId}/attachments/sign`, {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'photo', mimeType: 'image/jpeg', sizeBytes: stat.sizeBytes }),
+    });
+    await putSignedFile(signed.uploadUrl, out.uri, 'image/jpeg', stat.blob, 'Thumbnail');
+    return signed.storageKey;
+  } catch (err) {
+    // A thumbnail is an optimization. Losing it costs a slower bubble, not the
+    // message — never fail a send over it.
+    console.warn('[Chat] Thumbnail generation failed, sending without one:', err?.message || err);
+    return null;
+  }
+}
+
 async function uploadPhotoAttachment(driverId, photo, onProgress) {
   const { uri, width: pickedW, height: pickedH } = typeof photo === 'string' ? { uri: photo } : photo;
   const norm = await normalizePhoto(uri);
@@ -449,8 +488,13 @@ async function uploadPhotoAttachment(driverId, photo, onProgress) {
 
   await putSignedFile(signed.uploadUrl, sendUri, mimeType, blob, 'Photo', onProgress);
 
+  // After the full image, so progress still reaches 100% on the thing the
+  // driver is actually waiting for.
+  const thumbnailKey = await uploadPhotoThumbnail(driverId, sendUri);
+
   return {
     storageKey: signed.storageKey,
+    thumbnailKey,
     kind: 'photo',
     mimeType,
     sizeBytes,
