@@ -29,10 +29,10 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/splash-icon.png",
-          "imageWidth": 180,
+          "image": "./assets/wordmark-white.png",
+          "imageWidth": 250,
           "resizeMode": "contain",
-          "backgroundColor": "#04285A"
+          "backgroundColor": "#0A0E14"
         }
       ],
       "expo-secure-store",
