@@ -132,7 +132,15 @@ export default function EditProfileScreen() {
         return;
       }
       const launch = source === 'camera' ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
-      const res = await launch({ allowsEditing: true, aspect: [1, 1], quality: 0.7 });
+      const res = await launch({
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.7,
+        // allowsEditing already forces a re-encode on iOS, so this is belt and
+        // braces — but it keeps every library picker in the app consistent.
+        preferredAssetRepresentationMode:
+          ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      });
       if (res.canceled) return;
       const uri = res.assets?.[0]?.uri;
       if (uri) await savePhoto(uri);

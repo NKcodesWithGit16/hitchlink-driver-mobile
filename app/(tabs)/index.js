@@ -226,7 +226,14 @@ export default function LoadScreen() {
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
       const launch = perm.granted ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
-      const res = await launch({ quality: 0.6 });
+      // The library fallback (camera denied) would otherwise return the camera
+      // roll's original HEIC, which no desktop browser renders — Compatible
+      // makes iOS transcode on export. Ignored by the camera path and Android.
+      const res = await launch({
+        quality: 0.6,
+        preferredAssetRepresentationMode:
+          ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      });
       if (res.canceled) return null;
       return res.assets?.[0]?.uri ?? null;
     } catch {

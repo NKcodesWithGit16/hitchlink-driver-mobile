@@ -149,6 +149,104 @@ loaded buckets (phase from `loadPhase` in `src/lib/load.js`), persists them in A
 and freezes a record on delivery; `src/lib/loadStats.js` merges planned + actual into the numbers shown on
 the delivery card and the Pay-history detail sheet.
 
+## Photos are normalized before they leave the device
+
+Every photo this app uploads is eventually rendered **in a browser** — the dispatcher's web chat sidebar,
+the Drivers-list avatar, the Completed Loads paperwork gallery. The format the OS picker hands back is not
+good enough for that: on iOS a camera-shot photo picked out of the library comes back as **HEIC**, which
+Chrome, Edge and Firefox cannot decode. Uploading it verbatim produced a permanently broken `<img>` in the
+dispatcher's chat that they couldn't even rescue by downloading it, because the filename was hardcoded to
+`photo.jpg` while the bytes were HEIC. Screenshots (PNG) worked fine, which is what made it look
+intermittent rather than systematic.
+
+Two layers, and both matter:
+
+- **Prevention (iOS):** every `launchImageLibraryAsync` call passes
+  `preferredAssetRepresentationMode: Compatible`, which makes iOS transcode to JPEG on export. Ignored on
+  Android and by the camera path. Three call sites: `app/(tabs)/messages.js` (chat attach),
+  `app/(tabs)/index.js` (POD capture's library fallback), `app/edit-profile.js` (avatar).
+- **Guarantee (all platforms):** `normalizePhoto()` in `src/api/main.js` re-encodes to JPEG via
+  `expo-image-manipulator` whenever `isWebSafeImage()` (`src/lib/imageMime.js`) rejects the MIME, and
+  downscales anything over 2560px on the long edge. Files under 1.5 MB that are already web-safe skip the
+  manipulator entirely — measuring an image means decoding it, and that is slow on the cheap Android phones
+  plenty of drivers carry. When a non-web-safe photo can't be transcoded it **throws** rather than
+  uploading: a failed bubble the driver can retry beats a broken image the dispatcher finds hours later.
+
+All three upload paths — `sendPhotoMessage`, `uploadLoadPhoto`, `uploadDriverPhoto` — go through it. Don't
+add a fourth that calls `statLocalFile` directly for an image.
+
+`src/lib/imageMime.js` also owns `MIME_EXT` / `baseMime`, shared with the *download* half of `main.js`
+(`cacheFileName`, `utiForContentType`) — one table, so upload and download can't drift.
+
+Note `expo-image-manipulator` is a **native module**: changes here ship as a new EAS build, not an EAS
+Update. It is deliberately `require()`d lazily inside `normalizePhoto` rather than imported at the top of
+`src/api/main.js` — that file is pulled in by `AuthContext` at the root of the tree, so a top-level import
+throws at boot on any binary predating the dependency and takes the entire app down, sign-in screen
+included. (That is not hypothetical; it happened on the first run against a stale dev client.) Keep it
+lazy, and rebuild the dev client after `npx expo install` of anything native:
+`eas build --profile development --platform ios`.
+
+Photos uploaded before this landed are still HEIC bytes sitting in R2 under a `.jpg` key and stay broken in
+chat history; only a server-side backfill would recover them.
+
+## Chat photos: albums and the fullscreen viewer
+
+A chat message carries a **list** of attachments, not one — the dispatcher portal always bundled a
+multi-file pick into a single message, and the driver app now does too (attach button →
+`allowsMultipleSelection`, capped at `MAX_PHOTOS_PER_MESSAGE`). Picking stages photos in a removable tray
+above the composer rather than sending on pick, so a mis-tap is undoable and the text box becomes the
+album's caption. `sendPhotosMessage` (`src/api/main.js`) uploads them concurrently and posts one message;
+if any upload fails the whole send fails, because a silently-missing photo is worse than a bubble the
+driver can retry.
+
+`normalizeMessage` used to read `attachments[0]` and drop the rest, so a 4-photo message from dispatch
+showed the driver one photo. It now also exposes `uris`; `uri` stays the first attachment so save-to-docs,
+reply previews and the single-photo path are unchanged. **Don't reintroduce a `[0]` shortcut.**
+
+`PhotoAlbum` (in `app/(tabs)/messages.js`) tiles 1 / 2 / 3 / 4+ photos, with `+N` over the fourth. It lays
+out **explicit rows** rather than a wrapping grid on purpose: percentage widths plus a `gap` overflow the
+container, and three photos in a 2×2 leave a hole.
+
+A **single** photo sizes to its own aspect ratio via `usePhotoSize` (bounded by `PHOTO_MAX_W` /
+`PHOTO_MAX_H`), not a fixed box — the old fixed `200×150` + `cover` cropped every portrait photo to a
+landscape letterbox, which is most phone photos and exactly the shape a driver uses for a trailer door or a
+page of paperwork. Dimensions come from the attachment's `width`/`height` when the sender recorded them
+(the API has always returned these; the driver app now sends them too), otherwise from `Image.getSize`,
+cached module-level because FlatList recycles chat rows. Multi-photo tiles stay **square** deliberately — a
+grid of mixed aspect ratios reads as broken, and the viewer shows each photo whole.
+
+In-flight sends show real byte progress: `putSignedFile` uses `LegacyFS.createUploadTask` when a progress
+callback is passed (plain `uploadAsync` reports nothing), and `sendPhotosMessage` averages the batch so one
+bar covers a whole album. A failed send keeps its uris on the bubble as `retry`, so `retrySend` re-runs it
+without the driver re-picking every photo.
+`HitchLink_frontend/src/components/Drivers/MessageAttachments.jsx` mirrors the same rules so both ends
+agree.
+
+`src/components/driver/PhotoViewer.js` is the fullscreen viewer: pinch-zoom, pan, double-tap zoom, swipe
+between an album's photos, swipe-down to dismiss, an "n of m" counter, and a Messenger-style toolbar —
+save to camera roll, share, a ⋯ sheet (mark up / save to Documents / delete), plus an inline reply box and
+quick reaction that **do not close the viewer**, which is the entire point of that layout. It is built on
+RN's own `Animated` + `PanResponder` + a paging `ScrollView` **deliberately** — neither
+`react-native-gesture-handler` nor `react-native-reanimated` is in this project, and adding either would
+force an extra EAS build for one self-contained screen. The gesture split is the part to understand before
+editing: the pager owns horizontal swipes while a photo is un-zoomed, and `scrollEnabled` flips off the
+moment a photo is zoomed so the `PanResponder` owns every drag. Without that switch the two fight over
+each gesture. A single tap toggles the chrome but is deferred by `DOUBLE_TAP_MS`, otherwise every
+double-tap zoom would also flash the toolbars.
+
+`src/components/driver/PhotoMarkup.js` is the annotation editor (pen / arrow / text, 5 colours, 3 widths,
+undo, clear), reached from the viewer's ⋯ sheet. It exists for damage claims: a circled dent or an arrowed
+BOL number carries a claim in a way prose doesn't. Strokes are `react-native-svg` over the image;
+`captureRef` (`react-native-view-shot`) flattens the two into a JPEG. **The annotated result is sent as a
+NEW message** — `ChatController` has no edit-attachment endpoint, and keeping the original in the thread is
+the better record anyway. Two things to know: only the `canvasRef` subtree is captured, so toolbars must
+stay outside it; and `captureRef` snapshots at *display* resolution, so an annotated copy is lower-res than
+its source (raising that needs off-screen rendering at natural width with scaled coordinates — deferred).
+
+`saveToPhotoLibrary` (`src/api/main.js`) returns `'saved' | 'denied'` rather than throwing on a refused
+permission — a denial is a normal outcome that deserves a route to Settings, not a generic error. Like
+`expo-image-manipulator`, `expo-media-library` is **required lazily**; see the boot-crash note above.
+
 ## Session, tokens, and offline queue
 
 `src/lib/session.js` does single-flight token refresh (proactive before expiry, reactive on a 401 via
@@ -246,7 +344,8 @@ src/
   lib/                      pure logic: geo, load, loadStats, odometer, offlineQueue, session, format, sound,
                             standing (driver record from history), chatRows (day separators + grouping),
                             localNotifications (on-device reminders), observability (opt-in Sentry),
-                            hiddenLoads (device-local "removed from my history" list)
+                            hiddenLoads (device-local "removed from my history" list),
+                            imageMime (web-safe image allowlist + MIME/extension table)
   theme/tokens.js           dark + day theme tables, resolved through theme/ThemeContext — never hardcode hexes
   i18n/{en,ka}.js + LanguageContext.js   full English + Georgian coverage; new UI strings need both
   components/ui/            generic primitives (PrimaryAction, Card, IconButton, Skeleton, GlassView, …)

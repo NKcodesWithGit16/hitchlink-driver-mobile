@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import * as LegacyFS from 'expo-file-system/legacy';
 import { apiFetch, apiUpload, apiFetchRaw, USE_MOCK, BASE } from './client';
+import { baseMime, extForMime, isWebSafeImage, photoFilename } from '../lib/imageMime';
 import * as mock from '../data/mock';
 
 const wait = (ms = 350) => new Promise((r) => setTimeout(r, ms));
@@ -23,7 +24,13 @@ function replyKind(type) {
 }
 
 function normalizeMessage(m) {
-  const att = Array.isArray(m.attachments) ? m.attachments[0] : null;
+  // One message can carry several attachments — the dispatcher portal bundles a
+  // multi-file pick into a single message. Everything below still reads `att`
+  // (the first) for the scalar fields a bubble needs, but photos also get the
+  // full list as `uris`; this used to stop at attachments[0] and silently drop
+  // the rest, so a 4-photo message from dispatch showed the driver one photo.
+  const atts = Array.isArray(m.attachments) ? m.attachments : [];
+  const att = atts[0] || null;
   const isVoice = m.type === 'voice';
   const isImage = !isVoice && (m.type === 'photo' || ['photo', 'image', 'gif', 'sticker'].includes(att?.kind));
   const isDocument = !isVoice && !isImage && (m.type === 'document' || att?.kind === 'document');
@@ -45,6 +52,16 @@ function normalizeMessage(m) {
     kind: deleted ? undefined : (isMissedCall ? 'missed_call' : isVoice ? 'voice' : isImage ? 'image' : isDocument ? 'document' : isVideo ? 'video' : undefined),
     // audioUrl is a relative path on the main API; photo/document/video come back as signed URLs.
     uri: deleted ? undefined : (isVoice ? (m.audioUrl ? `${BASE}${m.audioUrl}` : undefined) : ((isImage || isDocument || isVideo) ? att?.url : undefined)),
+    // Every photo in the message, in order. `uri` above stays the first one so
+    // the single-photo path (and save-to-docs, reply previews, the viewer) is
+    // untouched; bubbles read this to render the rest.
+    uris: deleted || !isImage ? undefined : atts.map((a) => a?.url).filter(Boolean),
+    // Natural pixel size of the first photo, when the sender recorded it. The
+    // bubble uses it to reserve the right shape before the image downloads;
+    // older messages have nulls here and fall back to measuring the loaded
+    // image, so this is an optimization, not a requirement.
+    width: deleted ? undefined : (att?.width ?? undefined),
+    height: deleted ? undefined : (att?.height ?? undefined),
     thumbnailUri: deleted ? undefined : (isVideo ? att?.thumbnailUrl : undefined),
     filename: deleted ? undefined : (isDocument ? (att?.caption || 'Document') : undefined),
     mimeType: deleted ? undefined : att?.mimeType,
@@ -87,20 +104,18 @@ export async function uploadDriverPhoto(driverId, uri) {
   if (USE_MOCK) { await wait(300); return { photoUrl: uri }; }
   if (!driverId || !uri) return null;
 
-  const blob = await (await fetch(uri)).blob();
-  const mimeType = blob.type || 'image/jpeg';
+  // Goes through normalizePhoto (and so statLocalFile) rather than reading the
+  // file with `fetch(uri)` as it used to — see the note above statLocalFile:
+  // fetching a file:// URI throws on Android, so the avatar upload could never
+  // have worked there.
+  const { uri: sendUri, sizeBytes, mimeType, blob } = await normalizePhoto(uri);
 
   const signed = await apiFetch(`/drivers/${driverId}/photo/sign`, {
     method: 'POST',
-    body: JSON.stringify({ mimeType, sizeBytes: blob.size }),
+    body: JSON.stringify({ mimeType, sizeBytes }),
   });
 
-  const put = await fetch(signed.uploadUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': mimeType },
-    body: blob,
-  });
-  if (!put.ok) throw new Error(`Profile photo upload failed (${put.status})`);
+  await putSignedFile(signed.uploadUrl, sendUri, mimeType, blob, 'Profile photo');
 
   return apiFetch(`/drivers/${driverId}/photo`, {
     method: 'PATCH',
@@ -296,7 +311,7 @@ async function statLocalFile(uri, fallbackMime) {
  * carries its own — but the Content-Type must match what was signed, because
  * R2 folds it into the signature.
  */
-async function putSignedFile(uploadUrl, uri, mimeType, blob, label) {
+async function putSignedFile(uploadUrl, uri, mimeType, blob, label, onProgress) {
   if (Platform.OS === 'web') {
     const put = await fetch(uploadUrl, {
       method: 'PUT',
@@ -304,32 +319,175 @@ async function putSignedFile(uploadUrl, uri, mimeType, blob, label) {
       body: blob,
     });
     if (!put.ok) throw new Error(`${label} upload failed (${put.status})`);
+    onProgress?.(1);
     return;
   }
-  const put = await LegacyFS.uploadAsync(uploadUrl, uri, {
+  const options = {
     httpMethod: 'PUT',
     uploadType: LegacyFS.FileSystemUploadType.BINARY_CONTENT,
     headers: { 'Content-Type': mimeType },
-  });
+  };
+  // createUploadTask is the only path that reports bytes as they go. Worth the
+  // extra branch: a driver on cab LTE sending four photos otherwise stares at a
+  // finished-looking bubble for a long time with no sign anything is happening.
+  if (onProgress) {
+    const task = LegacyFS.createUploadTask(uploadUrl, uri, options, (p) => {
+      const total = p?.totalBytesExpectedToSend;
+      if (total > 0) onProgress(Math.min(1, p.totalBytesSent / total));
+    });
+    const res = await task.uploadAsync();
+    if (!res || res.status < 200 || res.status >= 300) {
+      throw new Error(`${label} upload failed (${res?.status ?? 'no response'})`);
+    }
+    onProgress(1);
+    return;
+  }
+  const put = await LegacyFS.uploadAsync(uploadUrl, uri, options);
   if (put.status < 200 || put.status >= 300) {
     throw new Error(`${label} upload failed (${put.status})`);
   }
 }
 
-// Sends a photo into the dispatcher chat. Used by the Messages attach button
-// and the proof-of-delivery capture on the load screen.
-export async function sendPhotoMessage(driverId, { uri, text = null, replyToMessageId = null } = {}) {
-  if (USE_MOCK) { await wait(200); return { ok: true }; }
-  if (!driverId || !uri) return null;
+// Every photo we upload is eventually rendered in a browser — the dispatcher's
+// web chat, the Drivers list avatar, the Completed Loads paperwork gallery — so
+// the format the picker happened to hand us is not good enough. iOS returns the
+// camera roll's original HEIC, which no mainstream desktop browser can decode,
+// and the result was a permanently broken image the dispatcher couldn't even
+// rescue by downloading it.
+const MAX_PHOTO_EDGE = 2560;
+const PHOTO_JPEG_QUALITY = 0.8;
 
-  const { sizeBytes, mimeType, blob } = await statLocalFile(uri, 'image/jpeg');
+// Measuring an image means decoding it, which is slow on the cheap Android
+// phones plenty of drivers carry. A file this small can't be a wasteful camera
+// frame, so skip the decode entirely and send it as-is.
+const PHOTO_INSPECT_BYTES = 1.5 * 1024 * 1024;
+
+// `expo-image-manipulator` is required lazily, NOT imported at the top of this
+// file. This module is pulled in by AuthContext at the root of the tree, and a
+// top-level import of a native module throws at boot on any binary that predates
+// the dependency — a dev client built before it was added takes down the whole
+// app, sign-in screen included, rather than just failing to normalize a photo.
+// Deferring it to first use turns that into a per-upload failure the catch below
+// already handles. Rebuilding the client is still the actual fix.
+function loadImageManipulator() {
+  // eslint-disable-next-line global-require
+  const mod = require('expo-image-manipulator');
+  return { ImageManipulator: mod.ImageManipulator, SaveFormat: mod.SaveFormat };
+}
+
+/**
+ * Resolves a picked image to something a browser is guaranteed to render,
+ * transcoding to JPEG when the format isn't web-safe and downscaling frames
+ * larger than MAX_PHOTO_EDGE. Returns the same shape as statLocalFile plus the
+ * (possibly rewritten) uri, ready for putSignedFile.
+ */
+async function normalizePhoto(uri) {
+  const stat = await statLocalFile(uri, 'image/jpeg');
+  const mimeType = baseMime(stat.mimeType);
+  const webSafe = isWebSafeImage(mimeType);
+  const original = { uri, mimeType, sizeBytes: stat.sizeBytes, blob: stat.blob };
+
+  if (webSafe && stat.sizeBytes <= PHOTO_INSPECT_BYTES) return original;
+
+  try {
+    const { ImageManipulator, SaveFormat } = loadImageManipulator();
+    const ctx = ImageManipulator.manipulate(uri);
+    let rendered = await ctx.renderAsync();
+    const longEdge = Math.max(rendered.width, rendered.height);
+
+    if (longEdge > MAX_PHOTO_EDGE) {
+      // Constrain the long edge and let the module derive the other side, so
+      // the aspect ratio survives regardless of orientation.
+      ctx.resize(rendered.width >= rendered.height
+        ? { width: MAX_PHOTO_EDGE }
+        : { height: MAX_PHOTO_EDGE });
+      rendered = await ctx.renderAsync();
+    } else if (webSafe) {
+      // A big file, but the pixels are already modest and the format renders
+      // fine — re-encoding would only throw away quality for nothing.
+      return original;
+    }
+
+    const out = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: PHOTO_JPEG_QUALITY });
+    // Re-stat rather than reusing the original size: the sign endpoint 400s when
+    // sizeBytes doesn't match the bytes we actually PUT.
+    const outStat = await statLocalFile(out.uri, 'image/jpeg');
+    return {
+      uri: out.uri,
+      mimeType: 'image/jpeg',
+      sizeBytes: outStat.sizeBytes,
+      blob: outStat.blob,
+      // Post-resize dimensions — the chat bubble sizes itself from these, so
+      // they have to describe the bytes actually uploaded.
+      width: rendered.width,
+      height: rendered.height,
+    };
+  } catch (err) {
+    // Only the downscale failed and the format was already fine — send the
+    // original rather than blocking the driver over an optimization.
+    if (webSafe) return original;
+    // Otherwise these bytes would land in chat as a broken image nobody can
+    // open. Failing here marks the bubble failed and names the format in the
+    // log, which beats a silent upload the dispatcher discovers hours later.
+    // The cause is carried through so a missing native module reads as exactly
+    // that rather than as an unsupported format.
+    throw new Error(`This photo is in a format we can't send (${mimeType || 'unknown'}): ${err?.message || err}`);
+  }
+}
+
+// Normalizes, signs and PUTs one photo, returning the attachment ref the
+// message endpoint wants. Split out so a batch can run these concurrently.
+async function uploadPhotoAttachment(driverId, photo, onProgress) {
+  const { uri, width: pickedW, height: pickedH } = typeof photo === 'string' ? { uri: photo } : photo;
+  const norm = await normalizePhoto(uri);
+  const { uri: sendUri, sizeBytes, mimeType, blob } = norm;
 
   const signed = await apiFetch(`/chat/${driverId}/attachments/sign`, {
     method: 'POST',
     body: JSON.stringify({ kind: 'photo', mimeType, sizeBytes }),
   });
 
-  await putSignedFile(signed.uploadUrl, uri, mimeType, blob, 'Photo');
+  await putSignedFile(signed.uploadUrl, sendUri, mimeType, blob, 'Photo', onProgress);
+
+  return {
+    storageKey: signed.storageKey,
+    kind: 'photo',
+    mimeType,
+    sizeBytes,
+    filename: photoFilename(mimeType),
+    // Sent so the receiving bubble can size itself before the image downloads.
+    // normalizePhoto's dimensions win when it re-encoded; otherwise the picker's
+    // are still accurate because the bytes went up untouched.
+    width: norm.width ?? pickedW ?? null,
+    height: norm.height ?? pickedH ?? null,
+  };
+}
+
+/**
+ * Sends several photos as ONE message, the way the dispatcher portal already
+ * does — `attachments` is a list server-side, so N photos in one bubble needs
+ * no backend change. Uploads run concurrently; if any one fails the whole send
+ * fails rather than posting a partial album, because a silently-missing photo
+ * is worse than a bubble the driver can retry.
+ */
+export async function sendPhotosMessage(driverId, { uris, text = null, replyToMessageId = null, onProgress } = {}) {
+  if (USE_MOCK) { await wait(200); return { ok: true }; }
+  const list = (uris || []).filter(Boolean);
+  if (!driverId || list.length === 0) return null;
+
+  // Progress is the mean across the batch, so one bar covers the whole album
+  // rather than the last photo's bar overwriting the others'.
+  const shares = new Array(list.length).fill(0);
+  const report = onProgress
+    ? (i) => (fraction) => {
+      shares[i] = fraction;
+      onProgress(shares.reduce((a, b) => a + b, 0) / list.length);
+    }
+    : () => undefined;
+
+  const attachments = await Promise.all(
+    list.map((photo, i) => uploadPhotoAttachment(driverId, photo, report(i))),
+  );
 
   return apiFetch(`/chat/${driverId}/message`, {
     method: 'POST',
@@ -338,15 +496,17 @@ export async function sendPhotoMessage(driverId, { uri, text = null, replyToMess
       senderId: driverId,
       senderRole: 'driver',
       replyToMessageId,
-      attachments: [{
-        storageKey: signed.storageKey,
-        kind: 'photo',
-        mimeType,
-        sizeBytes,
-        filename: 'photo.jpg',
-      }],
+      attachments,
     }),
   });
+}
+
+// Single-photo send. Kept as its own entry point because the proof-of-delivery
+// capture on the load screen sends exactly one and reads better this way.
+export async function sendPhotoMessage(driverId, { uri, text = null, replyToMessageId = null } = {}) {
+  if (USE_MOCK) { await wait(200); return { ok: true }; }
+  if (!driverId || !uri) return null;
+  return sendPhotosMessage(driverId, { uris: [uri], text, replyToMessageId });
 }
 
 // Sends a document into the dispatcher chat from the driver's device. Same
@@ -398,23 +558,6 @@ export async function sendDocumentMessage(driverId, { uri, name, mimeType, reply
 // type); iOS reads `UTI`. Passing only mimeType, as both callers did, means iOS
 // got no type hint whatsoever on top of the missing extension.
 
-const MIME_EXT = {
-  'application/pdf': 'pdf',
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/heic': 'heic',
-  'image/webp': 'webp',
-  'image/gif': 'gif',
-  'text/plain': 'txt',
-  'text/csv': 'csv',
-  'application/msword': 'doc',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-  'application/vnd.ms-excel': 'xls',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
-  'video/mp4': 'mp4',
-  'video/quicktime': 'mov',
-};
-
 const MIME_UTI = {
   'application/pdf': 'com.adobe.pdf',
   'image/jpeg': 'public.jpeg',
@@ -431,8 +574,6 @@ const MIME_UTI = {
   'video/quicktime': 'com.apple.quicktime-movie',
 };
 
-const baseMime = (ct) => (ct || '').split(';')[0].trim().toLowerCase();
-
 /** iOS Uniform Type Identifier for a Content-Type, for Sharing.shareAsync. */
 export const utiForContentType = (ct) => MIME_UTI[baseMime(ct)] || null;
 
@@ -446,9 +587,43 @@ function cacheFileName(name, contentType) {
     .trim()
     .slice(0, 80) || 'file';
 
-  const ext = MIME_EXT[baseMime(contentType)];
+  const ext = extForMime(contentType);
   if (!ext) return cleaned;
   return cleaned.toLowerCase().endsWith(`.${ext}`) ? cleaned : `${cleaned}.${ext}`;
+}
+
+// Required lazily for the same reason as expo-image-manipulator above: this
+// module is pulled in by AuthContext at the root of the tree, so a top-level
+// import of a native module takes the whole app down at boot on a binary that
+// predates the dependency.
+function loadMediaLibrary() {
+  // eslint-disable-next-line global-require
+  return require('expo-media-library');
+}
+
+/**
+ * Saves a chat photo into the phone's camera roll.
+ *
+ * Returns 'saved' | 'denied'; throws only on a real failure. A refused
+ * permission is a normal outcome the caller should explain (with a route to
+ * Settings), not an error to surface as "something went wrong".
+ */
+export async function saveToPhotoLibrary(url, fileName = 'photo.jpg') {
+  if (USE_MOCK) { await wait(200); return 'saved'; }
+  if (Platform.OS === 'web') throw new Error('Saving to the photo library is a native-only action');
+
+  const MediaLibrary = loadMediaLibrary();
+  // writeOnly: the app only ever adds photos — asking for full library read
+  // access would prompt for far more than we need.
+  const perm = await MediaLibrary.requestPermissionsAsync(true);
+  if (!perm.granted) return 'denied';
+
+  // Reuses the same download path as sharing, so the file lands in the cache
+  // with a correct extension — the library rejects a file it can't type.
+  const file = await downloadChatAttachment(url, fileName);
+  if (!file?.uri) throw new Error('Photo download returned nothing');
+  await MediaLibrary.saveToLibraryAsync(file.uri);
+  return 'saved';
 }
 
 // Downloads a chat attachment (document/video) for local viewing/sharing.
@@ -484,14 +659,14 @@ export async function uploadLoadPhoto(loadId, { uri, caption = 'Delivery paperwo
   if (USE_MOCK) { await wait(200); return { ok: true }; }
   if (!loadId || !uri) return null;
 
-  const { sizeBytes, mimeType, blob } = await statLocalFile(uri, 'image/jpeg');
+  const { uri: sendUri, sizeBytes, mimeType, blob } = await normalizePhoto(uri);
 
   const signed = await apiFetch(`/loads/${loadId}/photos/sign`, {
     method: 'POST',
     body: JSON.stringify({ mimeType, sizeBytes }),
   });
 
-  await putSignedFile(signed.uploadUrl, uri, mimeType, blob, 'Load photo');
+  await putSignedFile(signed.uploadUrl, sendUri, mimeType, blob, 'Load photo');
 
   return apiFetch(`/loads/${loadId}/photos`, {
     method: 'POST',

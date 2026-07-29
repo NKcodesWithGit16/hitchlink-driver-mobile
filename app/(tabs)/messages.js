@@ -16,6 +16,9 @@ import Icon from '../../src/components/ui/Icon';
 import PeerAvatar from '../../src/components/ui/PeerAvatar';
 import RecordingBar from '../../src/components/driver/RecordingBar';
 import DocumentReviewModal from '../../src/components/driver/DocumentReviewModal';
+import PhotoViewer from '../../src/components/driver/PhotoViewer';
+import PhotoMarkup from '../../src/components/driver/PhotoMarkup';
+import Skeleton from '../../src/components/ui/Skeleton';
 import { useReduceMotion } from '../../src/lib/useReduceMotion';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useTheme } from '../../src/theme/ThemeContext';
@@ -23,7 +26,7 @@ import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { useCall } from '../../src/context/CallContext';
 import {
-  fetchMessages, sendMessage, sendVoiceMessage, sendPhotoMessage, sendDocumentMessage,
+  fetchMessages, sendMessage, sendVoiceMessage, sendPhotosMessage, sendDocumentMessage,
   downloadChatAttachment, fetchActiveLoad,
   editMessage, deleteMessage, reactToMessage, removeReaction, markChatRead,
 } from '../../src/api/main';
@@ -35,7 +38,7 @@ import { buildChatRows, dayLabel } from '../../src/lib/chatRows';
 import { getValidToken } from '../../src/lib/session';
 import { parsePeaksString, resamplePeaks } from '../../src/lib/waveform';
 import haptics from '../../src/lib/haptics';
-import { space, type, radius, FONT, shadow } from '../../src/theme/tokens';
+import { space, type, radius, FONT, shadow, elevation } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 import { useCallBannerInset } from '../../src/components/call/CallOverlay';
 
@@ -61,6 +64,19 @@ const BOTTOM_PIN_SLOP = 120;
 // as the driver's own. FlatList measures rows in batches, so the real bottom
 // moves several times after the first paint.
 const SETTLE_MS = 800;
+// Cap on one album. The backend takes any number of attachments, but each is
+// uploaded on cab wifi or LTE and they all have to land before the message
+// posts, so this keeps a fat-fingered "select all" from stalling the thread.
+const MAX_PHOTOS_PER_MESSAGE = 10;
+// Staging-tray thumbnail edge.
+const TRAY_THUMB = 64;
+// Photo bubbles size to the image's own aspect ratio inside these bounds, so a
+// portrait shot stays portrait instead of being cropped to a landscape box.
+// Width tracks the screen so the bubble looks right on a small phone and a
+// tablet alike; the height cap stops one tall photo owning the whole thread.
+const PHOTO_MAX_W = Math.min(260, Math.round(Dimensions.get('window').width * 0.66));
+const PHOTO_MAX_H = 340;
+const PHOTO_MIN_EDGE = 96;
 
 // "kind" describes an attachment message's payload type; used both for the
 // reply-quote preview and the composer's edit/reply context bar.
@@ -105,9 +121,21 @@ export default function MessagesScreen() {
   const [focus,       setFocus]       = useState(null);   // { msg, anchor, mine } — long-pressed message, floating menu open
   const [revealedId,  setRevealedId]  = useState(null);   // Messenger-style: id of the message currently showing its timestamp
   const [confirmDel,  setConfirmDel]  = useState(null);   // message pending delete confirmation
-  const [viewerUri,   setViewerUri]   = useState(null);   // photo open in the fullscreen viewer
+  const [viewer,      setViewer]      = useState(null);   // { msg, uris, index } open in the fullscreen viewer
+  const [markup,      setMarkup]      = useState(null);   // { uri, msg } open in the markup editor
   const [kbOpen,      setKbOpen]      = useState(false);  // keyboard visibility
   const [attachMenuOpen, setAttachMenuOpen] = useState(false); // paperclip's Photo/Document sheet
+  // Photos picked but not yet sent, shown as a removable strip above the input.
+  // Staging them rather than firing on pick is what lets a driver drop a wrong
+  // photo, reorder their mind, or add a caption before it reaches dispatch.
+  const [pendingPhotos, setPendingPhotos] = useState([]);  // [{ id, uri }]
+  const [sendingPhotos, setSendingPhotos] = useState(false);
+  // `send` is defined above sendPhotos in this file and has to hand off to it.
+  // Refs keep that one-way handoff without reordering the composer block, and
+  // sidestep the stale closure a direct dependency would create.
+  const pendingPhotosRef = useRef(pendingPhotos);
+  pendingPhotosRef.current = pendingPhotos;
+  const sendPhotosRef = useRef(null);
   // "Save to Documents": the picked attachment is downloaded first, then handed
   // to the same review sheet the Documents tab uses, so the driver tags the
   // type/label/expiry rather than filing everything as an untyped "Other" with
@@ -340,6 +368,9 @@ export default function MessagesScreen() {
   }, [pinToBottom]);
 
   const send = useCallback((body) => {
+    // Staged photos win: the text box is the album's caption, not a separate
+    // message. sendPhotos consumes both and clears them.
+    if (pendingPhotosRef.current.length > 0) { sendPhotosRef.current?.(); return; }
     const value = (body ?? text).trim();
     if (!value) return;
     stopTypingSignal();
@@ -488,32 +519,51 @@ export default function MessagesScreen() {
     }
   }, [docSaveBusy, t]);
 
+  // Picks photos into the staging tray. Nothing uploads here — sendPhotos()
+  // does that when the driver actually hits send.
   const pickAttachment = useCallback(async () => {
     if (!user?.id) return;
     try {
-      const res = await ImagePicker.launchImageLibraryAsync({ quality: 0.6 });
+      // Compatible mode makes iOS transcode HEIC to JPEG on export. Without it
+      // the picker hands back the camera roll's original HEIC, which the
+      // dispatcher's web chat can't render at all (src/lib/imageMime.js).
+      const res = await ImagePicker.launchImageLibraryAsync({
+        quality: 0.6,
+        allowsMultipleSelection: true,
+        selectionLimit: MAX_PHOTOS_PER_MESSAGE,
+        preferredAssetRepresentationMode:
+          ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      });
       if (res.canceled) return;
-      const uri = res.assets?.[0]?.uri;
-      if (!uri) return;
-      // Show the photo immediately, then upload. On success we drop the
-      // optimistic copy and let the next poll bring the server's version (real
-      // id + signed URL); on failure it stays visible marked failed instead of
-      // silently vanishing — same reconcile dance as sendVoice.
-      const rid = replyTo?.id || null;
-      const localId = `local-${Date.now()}`;
-      setItems((prev) => [...prev, { id: localId, from: 'driver', at: nowStr(), kind: 'image', uri, ...(replyTo ? { replyTo: replyPreviewOf(replyTo) } : {}) }]);
-      setReplyTo(null);
-      pinToBottom();
-      try {
-        await sendPhotoMessage(user.id, { uri, replyToMessageId: rid });
-        setItems((prev) => prev.filter((m) => m.id !== localId));
-        load();
-        haptics.success();
-      } catch (err) {
-        console.error('[Chat] Photo upload failed:', err);
-        setItems((prev) => prev.map((m) => (m.id === localId ? { ...m, failed: true } : m)));
-        haptics.error();
-      }
+      // Dimensions travel with the pick so the optimistic bubble gets the right
+      // shape immediately and the receiver can size before downloading.
+      const picked = (res.assets || [])
+        .filter((a) => a?.uri)
+        .map((a) => ({ uri: a.uri, width: a.width, height: a.height }));
+      if (picked.length === 0) return;
+      setPendingPhotos((prev) => {
+        // The tray can already hold photos from an earlier pick, and
+        // selectionLimit only caps a single trip through the picker.
+        const room = MAX_PHOTOS_PER_MESSAGE - prev.length;
+        if (room <= 0) {
+          Alert.alert(
+            t('messages.photoLimitTitle'),
+            t('messages.photoLimitBody', { count: MAX_PHOTOS_PER_MESSAGE }),
+          );
+          return prev;
+        }
+        if (picked.length > room) {
+          Alert.alert(
+            t('messages.photoLimitTitle'),
+            t('messages.photoLimitBody', { count: MAX_PHOTOS_PER_MESSAGE }),
+          );
+        }
+        return [
+          ...prev,
+          ...picked.slice(0, room).map((p, i) => ({ id: `p-${Date.now()}-${i}`, ...p })),
+        ];
+      });
+      haptics.success();
     } catch (err) {
       // The picker itself failed to open or read the pick — there's no bubble
       // on screen to mark failed, so say so out loud rather than looking like
@@ -522,7 +572,103 @@ export default function MessagesScreen() {
       haptics.error();
       Alert.alert(t('messages.attachFailedTitle'), t('messages.attachFailedBody'));
     }
-  }, [user?.id, replyTo, pinToBottom, load, t]);
+  }, [user?.id, t]);
+
+  const removePendingPhoto = useCallback((id) => {
+    setPendingPhotos((prev) => prev.filter((p) => p.id !== id));
+  }, []);
+
+  // Opens the viewer on a whole album at the tapped photo. The message comes
+  // along because the viewer's actions (reply, react, delete, save) all need it.
+  const openViewer = useCallback((uris, index = 0, msg = null) => {
+    const list = (Array.isArray(uris) ? uris : [uris]).filter(Boolean);
+    if (list.length === 0) return;
+    setViewer({ msg, uris: list, index: Math.max(0, Math.min(index, list.length - 1)) });
+  }, []);
+
+  // An annotated copy is sent as a NEW message: the backend has no
+  // edit-attachment endpoint, and keeping the original in the thread is the
+  // right record anyway — the markup is a comment on it, not a correction.
+  const handleMarkupDone = useCallback(async (annotatedUri) => {
+    setMarkup(null);
+    setViewer(null);
+    if (!annotatedUri) return;
+    await uploadPhotos({ photos: [{ uri: annotatedUri }], caption: '', rid: null, replyPreview: null });
+  }, [uploadPhotos]);
+
+  // The shared upload path for both a first send and a retry. Posts the whole
+  // batch as ONE message. Same optimistic-then-reconcile dance as sendVoice:
+  // the bubble appears instantly, tracks real upload progress, and on failure
+  // stays on screen marked failed — carrying everything a retry needs — rather
+  // than vanishing as if the driver never sent it.
+  const uploadPhotos = useCallback(async ({ photos, caption, rid, replyPreview }) => {
+    if (!user?.id || !photos?.length) return;
+    const localId = `local-${Date.now()}`;
+    const uris = photos.map((p) => p.uri);
+
+    setSendingPhotos(true);
+    setItems((prev) => [...prev, {
+      id: localId,
+      from: 'driver',
+      at: nowStr(),
+      kind: 'image',
+      uri: uris[0],
+      uris,
+      width: photos[0]?.width,
+      height: photos[0]?.height,
+      text: caption || undefined,
+      uploading: true,
+      progress: 0,
+      ...(replyPreview ? { replyTo: replyPreview } : {}),
+    }]);
+    pinToBottom();
+
+    try {
+      await sendPhotosMessage(user.id, {
+        uris: photos,
+        text: caption || null,
+        replyToMessageId: rid,
+        onProgress: (fraction) => {
+          setItems((prev) => prev.map((m) => (m.id === localId ? { ...m, progress: fraction } : m)));
+        },
+      });
+      setItems((prev) => prev.filter((m) => m.id !== localId));
+      load();
+      haptics.success();
+    } catch (err) {
+      console.error('[Chat] Photo upload failed:', err);
+      setItems((prev) => prev.map((m) => (m.id === localId
+        ? { ...m, uploading: false, failed: true, retry: { photos, caption, rid, replyPreview } }
+        : m)));
+      haptics.error();
+    } finally {
+      setSendingPhotos(false);
+    }
+  }, [user?.id, pinToBottom, load]);
+
+  // Sends whatever is staged in the tray, with the text box as the caption.
+  const sendPhotos = useCallback(async () => {
+    if (!user?.id || pendingPhotos.length === 0 || sendingPhotos) return;
+    const photos = pendingPhotos.map((p) => ({ uri: p.uri, width: p.width, height: p.height }));
+    const caption = text.trim();
+    const rid = replyTo?.id || null;
+
+    setPendingPhotos([]);
+    setText('');
+    setReplyTo(null);
+    stopTypingSignal();
+    await uploadPhotos({ photos, caption, rid, replyPreview: replyTo ? replyPreviewOf(replyTo) : null });
+  }, [user?.id, pendingPhotos, sendingPhotos, text, replyTo, stopTypingSignal, uploadPhotos]);
+  sendPhotosRef.current = sendPhotos;
+
+  // Re-runs a send whose uploads failed. The uris are still on the failed
+  // bubble, so this costs the driver one tap instead of re-picking every photo
+  // out of the library.
+  const retrySend = useCallback((m) => {
+    if (!m?.retry) return;
+    setItems((prev) => prev.filter((x) => x.id !== m.id));
+    uploadPhotos(m.retry);
+  }, [uploadPhotos]);
 
   const pickDocument = useCallback(async () => {
     if (!user?.id) return;
@@ -600,8 +746,9 @@ export default function MessagesScreen() {
         onAction={(anchor, mine) => !m.deleted && !isLocal && setFocus({ msg: m, anchor, mine })}
         onReactQuick={(emoji) => !isLocal && react(m, emoji)}
         onDoubleTap={() => !m.deleted && !isLocal && react(m, HEART_EMOJI)}
-        onOpenImage={setViewerUri}
+        onOpenImage={openViewer}
         onCallBack={onCallPress}
+        onRetry={retrySend}
         revealed={revealedId === m.id}
         onToggleReveal={() => toggleReveal(m.id)}
         showSeen={m.id === lastReadMineId}
@@ -770,6 +917,37 @@ export default function MessagesScreen() {
             </View>
           ) : null}
 
+          {/* Staged photos, newest to the right. Each carries its own × so a
+              mis-tap is undoable before anything reaches dispatch. */}
+          {pendingPhotos.length > 0 && !voice.recording ? (
+            <View style={styles.trayWrap}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.trayRow}
+                keyboardShouldPersistTaps="handled"
+              >
+                {pendingPhotos.map((p) => (
+                  <View key={p.id} style={styles.trayItem}>
+                    <Image source={{ uri: p.uri }} style={styles.trayThumb} resizeMode="cover" />
+                    <Pressable
+                      onPress={() => removePendingPhoto(p.id)}
+                      hitSlop={8}
+                      style={[styles.trayRemove, { backgroundColor: colors.surface }]}
+                      accessibilityRole="button"
+                      accessibilityLabel={t('messages.removePhotoA11y')}
+                    >
+                      <Icon name="x" size={12} color={colors.textPrimary} />
+                    </Pressable>
+                  </View>
+                ))}
+              </ScrollView>
+              <Text style={[styles.trayCount, { color: colors.textMuted }]}>
+                {t('messages.photosSelected', { count: pendingPhotos.length })}
+              </Text>
+            </View>
+          ) : null}
+
           {voice.recording ? (
             <RecordingBar elapsed={voice.elapsed} onCancel={voice.cancel} onSend={voice.stop} />
           ) : (
@@ -786,17 +964,24 @@ export default function MessagesScreen() {
               <TextInput
                 value={text}
                 onChangeText={handleTextChange}
-                placeholder={editing ? t('messages.editPlaceholder') : t('messages.messagePlaceholder')}
+                placeholder={
+                  editing ? t('messages.editPlaceholder')
+                    : pendingPhotos.length > 0 ? t('messages.captionPlaceholder')
+                      : t('messages.messagePlaceholder')
+                }
                 placeholderTextColor={colors.textMuted}
                 style={[styles.input, { color: colors.textPrimary }]}
                 multiline
                 numberOfLines={1}
                 onSubmitEditing={() => send()}
               />
-              {text.trim() ? (
+              {/* Staged photos make send available on their own — an album with
+                  no caption is a perfectly normal message. */}
+              {text.trim() || pendingPhotos.length > 0 ? (
                 <Pressable
                   onPress={() => send()}
-                  style={[styles.sendBtn, { backgroundColor: colors.teal }, shadow.glow(colors.teal)]}
+                  disabled={sendingPhotos}
+                  style={[styles.sendBtn, { backgroundColor: colors.teal, opacity: sendingPhotos ? 0.5 : 1 }, shadow.glow(colors.teal)]}
                   accessibilityLabel={editing ? t('messages.saveEditA11y') : t('messages.sendA11y')}
                 >
                   <Icon name={editing ? 'check' : 'arrow-up'} size={19} color={colors.onAccent} />
@@ -880,7 +1065,39 @@ export default function MessagesScreen() {
       />
 
       {/* ── Fullscreen photo viewer ── */}
-      <ImageViewer uri={viewerUri} colors={colors} styles={styles} onClose={() => setViewerUri(null)} />
+      {viewer ? (
+        <PhotoViewer
+          uris={viewer.uris}
+          index={viewer.index}
+          msg={viewer.msg}
+          filename={viewer.msg?.filename || 'photo.jpg'}
+          onClose={() => setViewer(null)}
+          onSendReply={(body) => {
+            // Replies to the photo quote its message and leave the viewer open.
+            sendMessage(user?.id, body, viewer.msg?.id || null)
+              .then(load)
+              .catch(() => haptics.error());
+          }}
+          onReact={(emoji) => viewer.msg && react(viewer.msg, emoji)}
+          onSaveToDocs={() => viewer.msg && saveToDocuments(viewer.msg)}
+          onDelete={() => viewer.msg && setConfirmDel({
+            msg: viewer.msg,
+            // Same rule the long-press menu applies (messages.js:1712) — own
+            // message, still inside the backend's delete-for-everyone window.
+            // Omitting it would silently downgrade every delete to "for me".
+            canEveryone: viewer.msg.from === 'driver' && ageMin(viewer.msg.ts) < DELETE_WINDOW_MIN,
+          })}
+          onEdit={(uri) => setMarkup({ uri, msg: viewer.msg })}
+        />
+      ) : null}
+
+      {markup ? (
+        <PhotoMarkup
+          uri={markup.uri}
+          onCancel={() => setMarkup(null)}
+          onDone={handleMarkupDone}
+        />
+      ) : null}
     </ScreenFade>
   );
 }
@@ -937,7 +1154,7 @@ function BubbleVisual({ msg, mine, colors, styles, onOpenImage, onBubbleDoubleTa
 // prevFrom/nextFrom are the senders of the neighbouring messages WITHIN the
 // same day, resolved upstream by buildChatRows — a virtualized row can't reach
 // its siblings, and grouping must not span a date separator.
-function Bubble({ msg, prevFrom, nextFrom, colors, styles, onAction, onReactQuick, onDoubleTap, onOpenImage, onCallBack, revealed, onToggleReveal, showSeen, dispatcher }) {
+function Bubble({ msg, prevFrom, nextFrom, colors, styles, onAction, onReactQuick, onDoubleTap, onOpenImage, onCallBack, onRetry, revealed, onToggleReveal, showSeen, dispatcher }) {
   const t = useT();
   const mine = msg.from === 'driver';
   const prevSame = prevFrom === msg.from;
@@ -1110,6 +1327,13 @@ function Bubble({ msg, prevFrom, nextFrom, colors, styles, onAction, onReactQuic
             <View style={[styles.failedRow, mine ? { justifyContent: 'flex-end' } : null]}>
               <Icon name="alert-circle" size={11} color={colors.danger} />
               <Text style={[styles.failedText, { color: colors.danger }]}>{t('messages.notSent')}</Text>
+              {/* Without this a failed album meant re-picking every photo from
+                  the library again — the uris are still in hand, so offer them. */}
+              {msg.retry ? (
+                <Pressable onPress={() => onRetry?.(msg)} hitSlop={8} accessibilityRole="button">
+                  <Text style={[styles.retryText, { color: colors.teal }]}>{t('common.retry')}</Text>
+                </Pressable>
+              ) : null}
             </View>
           ) : null}
 
@@ -1189,6 +1413,165 @@ function MissedCallCard({ msg, mine, colors, styles, enter, onCallBack }) {
 // anymore — Bubble renders the reveal-on-tap timestamp and the "seen" avatar
 // outside of this, so BubbleBody only ever renders the message's actual
 // content (reply quote + the kind-specific body).
+// Natural pixel sizes keyed by uri. A module-level cache because FlatList
+// recycles chat rows: without it, every scroll past a photo re-measures it and
+// the bubble visibly snaps from placeholder to final shape again.
+const imageSizeCache = new Map();
+
+/**
+ * Resolves a photo's display size, preserving its real aspect ratio.
+ *
+ * A single fixed box was the old behaviour and it cropped every portrait photo
+ * to a landscape letterbox — which is most phone photos, and exactly the shape
+ * a driver uses for a trailer door or a full page of paperwork.
+ *
+ * Dimensions come from the message when the sender recorded them (no flicker),
+ * otherwise from Image.getSize once the URL resolves. Until either lands the
+ * caller renders a placeholder at `null`.
+ */
+function usePhotoSize(uri, width, height) {
+  const known = width > 0 && height > 0 ? { width, height } : imageSizeCache.get(uri) || null;
+  const [measured, setMeasured] = useState(known);
+
+  useEffect(() => {
+    if (known) { setMeasured(known); return; }
+    if (!uri) return;
+    let alive = true;
+    Image.getSize(
+      uri,
+      (w, h) => {
+        if (!(w > 0 && h > 0)) return;
+        imageSizeCache.set(uri, { width: w, height: h });
+        if (alive) setMeasured({ width: w, height: h });
+      },
+      // A failure here is not fatal — the bubble falls back to a default box
+      // and the <Image> shows whatever it can.
+      () => {},
+    );
+    return () => { alive = false; };
+  }, [uri, known?.width, known?.height]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!measured) return null;
+  const ratio = measured.width / measured.height;
+  let w = PHOTO_MAX_W;
+  let h = w / ratio;
+  if (h > PHOTO_MAX_H) { h = PHOTO_MAX_H; w = h * ratio; }
+  // Panoramas and very tall shots would otherwise become slivers.
+  return { width: Math.max(PHOTO_MIN_EDGE, Math.round(w)), height: Math.max(PHOTO_MIN_EDGE, Math.round(h)) };
+}
+
+// A single photo, sized to its own shape, with a shimmer standing in until both
+// the dimensions and the bytes have arrived.
+function SinglePhoto({ uri, width, height, styles, onPress, onLongPress, label }) {
+  const size = usePhotoSize(uri, width, height);
+  const [loaded, setLoaded] = useState(false);
+  const box = size || { width: PHOTO_MAX_W, height: Math.round(PHOTO_MAX_W * 0.75) };
+
+  return (
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={280}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={[styles.photoFrame, box]}
+    >
+      {!loaded ? (
+        <View style={StyleSheet.absoluteFill}>
+          <Skeleton width="100%" height="100%" radius={radius.md} />
+        </View>
+      ) : null}
+      <Image
+        source={{ uri }}
+        style={[box, { opacity: loaded ? 1 : 0 }]}
+        resizeMode="cover"
+        onLoad={() => setLoaded(true)}
+        onError={() => setLoaded(true)}
+      />
+    </Pressable>
+  );
+}
+
+// Messenger-style album. One photo takes its own aspect ratio; two sit side by
+// side; three puts the odd one across the row beneath; four tile 2×2; beyond
+// four we show the first four with a "+N" over the last, because a bubble that
+// grows without bound pushes the rest of the thread off screen.
+//
+// Multi-photo tiles stay square on purpose — a grid of mixed aspect ratios
+// reads as broken, and the viewer shows each photo whole anyway.
+function PhotoAlbum({ uris, width, height, msg, styles, onOpen, onBubbleDoubleTap, onBubbleLongPress, onBubbleToggleReveal }) {
+  const t = useT();
+  const list = uris || [];
+  if (list.length === 0) return null;
+
+  const shown = list.slice(0, 4);
+  const overflow = list.length - shown.length;
+
+  // The viewer opens on the whole album at the tapped photo, so the driver can
+  // swipe through the rest instead of closing and reopening for each one.
+  const press = (i) => () => {
+    const isDouble = onBubbleDoubleTap?.();
+    if (!isDouble) { onOpen?.(list, i, msg); onBubbleToggleReveal?.(); }
+  };
+
+  if (list.length === 1) {
+    return (
+      <SinglePhoto
+        uri={list[0]}
+        width={width}
+        height={height}
+        styles={styles}
+        onPress={press(0)}
+        onLongPress={onBubbleLongPress}
+        label={t('messages.openPhotoA11y')}
+      />
+    );
+  }
+
+  // Explicit rows rather than a wrapping grid: percentage widths plus a gap
+  // overflow the container, and three photos in a 2×2 would leave a hole. Two
+  // per row, with an odd third spanning the full width underneath.
+  const rows = shown.length === 3
+    ? [shown.slice(0, 2), shown.slice(2)]
+    : shown.length === 2 ? [shown]
+      : [shown.slice(0, 2), shown.slice(2)].filter((r) => r.length > 0);
+
+  let index = -1;
+  return (
+    <View
+      style={styles.album}
+      accessibilityLabel={t('messages.photoAlbumA11y', { count: list.length })}
+    >
+      {rows.map((row, r) => (
+        <View key={r} style={styles.albumRow}>
+          {row.map((uri) => {
+            index += 1;
+            const isLastShown = index === shown.length - 1;
+            return (
+              <Pressable
+                key={uri || index}
+                onPress={press(index)}
+                onLongPress={onBubbleLongPress}
+                delayLongPress={280}
+                style={styles.albumTile}
+                accessibilityRole="button"
+                accessibilityLabel={t('messages.openPhotoA11y')}
+              >
+                <Image source={{ uri }} style={styles.albumImage} resizeMode="cover" />
+                {isLastShown && overflow > 0 ? (
+                  <View style={styles.albumOverflow}>
+                    <Text style={styles.albumOverflowText}>{`+${overflow}`}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+            );
+          })}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 function BubbleBody({ msg, mine, colors, styles, onOpenImage, onBubbleDoubleTap, onBubbleLongPress, onBubbleToggleReveal }) {
   const t = useT();
   const ink = mine ? '#FFFFFF' : colors.textPrimary;
@@ -1221,18 +1604,29 @@ function BubbleBody({ msg, mine, colors, styles, onOpenImage, onBubbleDoubleTap,
       ) : null}
 
       {isImage ? (
-        <Pressable
-          onPress={() => {
-            const isDouble = onBubbleDoubleTap?.();
-            if (!isDouble) { msg.uri && onOpenImage?.(msg.uri); onBubbleToggleReveal?.(); }
-          }}
-          onLongPress={onBubbleLongPress}
-          delayLongPress={280}
-          accessibilityRole="button"
-          accessibilityLabel={t('messages.openPhotoA11y')}
-        >
-          <Image source={{ uri: msg.uri }} style={styles.bubbleImage} resizeMode="cover" />
-        </Pressable>
+        <View>
+          <PhotoAlbum
+            uris={msg.uris?.length ? msg.uris : [msg.uri].filter(Boolean)}
+            width={msg.width}
+            height={msg.height}
+            msg={msg}
+            styles={styles}
+            onOpen={onOpenImage}
+            onBubbleDoubleTap={onBubbleDoubleTap}
+            onBubbleLongPress={onBubbleLongPress}
+            onBubbleToggleReveal={onBubbleToggleReveal}
+          />
+          {/* While the bytes are still going up. Without it a driver on weak LTE
+              sees a finished-looking bubble and taps send again. */}
+          {msg.uploading ? (
+            <View style={styles.uploadVeil} pointerEvents="none">
+              <Text style={styles.uploadPct}>{`${Math.round((msg.progress || 0) * 100)}%`}</Text>
+              <View style={styles.uploadTrack}>
+                <View style={[styles.uploadFill, { width: `${Math.round((msg.progress || 0) * 100)}%` }]} />
+              </View>
+            </View>
+          ) : null}
+        </View>
       ) : isVoice ? (
         msg.uri
           ? <VoicePlayable uri={msg.uri} durationSec={msg.durationSec} waveformPeaks={msg.waveformPeaks} mine={mine} colors={colors} styles={styles} onBubbleDoubleTap={onBubbleDoubleTap} onBubbleLongPress={onBubbleLongPress} onBubbleToggleReveal={onBubbleToggleReveal} />
@@ -1539,29 +1933,6 @@ function ConfirmDelete({ pending, colors, styles, onCancel, onConfirm }) {
           </Pressable>
         </View>
       </View>
-    </Modal>
-  );
-}
-
-function ImageViewer({ uri, colors, styles, onClose }) {
-  const insets = useSafeAreaInsets();
-  const t = useT();
-  return (
-    <Modal visible={!!uri} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.viewerOverlay} onPress={onClose}>
-        {uri ? (
-          <Image source={{ uri }} style={styles.viewerImage} resizeMode="contain" accessibilityLabel={t('messages.photo')} />
-        ) : null}
-        <Pressable
-          onPress={onClose}
-          style={[styles.viewerClose, { top: insets.top + space[3] }]}
-          hitSlop={10}
-          accessibilityRole="button"
-          accessibilityLabel={t('messages.closePhotoA11y')}
-        >
-          <Icon name="x" size={24} color="#FFFFFF" />
-        </Pressable>
-      </Pressable>
     </Modal>
   );
 }
@@ -1875,7 +2246,22 @@ const makeStyles = (c) => StyleSheet.create({
   bubbleTheirs: { borderWidth: 1 },
 
   bubbleText: { ...type.body, lineHeight: 22 },
-  bubbleImage: { width: 200, height: 150, borderRadius: radius.md, marginBottom: 2 },
+  // Single photo: the box comes from usePhotoSize, so only the chrome is here.
+  photoFrame: { borderRadius: radius.md, overflow: 'hidden', marginBottom: 2 },
+
+  // Multi-photo album. Width matches the single-photo cap so a thread of mixed
+  // messages keeps one left/right edge; tiles are square and share the row
+  // evenly via flex, so a 3-photo album's last tile spans the full width.
+  album: { width: PHOTO_MAX_W, gap: 2, marginBottom: 2 },
+  albumRow: { flexDirection: 'row', gap: 2 },
+  albumTile: { flex: 1, aspectRatio: 1, borderRadius: radius.sm, overflow: 'hidden' },
+  albumImage: { width: '100%', height: '100%' },
+  albumOverflow: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  albumOverflowText: { color: '#FFFFFF', fontSize: 20, fontFamily: FONT.bold, ...type.num },
   deletedText: { ...type.body, fontStyle: 'italic' },
 
   // Messenger-style: collapsed to 0 height by default, animates open downward
@@ -1899,6 +2285,18 @@ const makeStyles = (c) => StyleSheet.create({
 
   /* Failed-to-send indicator */
   failedRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3, marginHorizontal: 4 },
+  retryText: { fontSize: 12, fontFamily: FONT.semibold, textDecorationLine: 'underline' },
+
+  // Upload progress over an in-flight photo bubble.
+  uploadVeil: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.42)',
+    alignItems: 'center', justifyContent: 'center', gap: 8,
+    borderRadius: radius.md,
+  },
+  uploadPct: { color: '#FFFFFF', fontSize: 15, fontFamily: FONT.bold, ...type.num },
+  uploadTrack: { width: '62%', height: 3, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.3)', overflow: 'hidden' },
+  uploadFill: { height: '100%', backgroundColor: '#FFFFFF' },
   failedText: { fontSize: 11, fontFamily: FONT.medium },
 
   missedCallCardRow: { alignItems: 'center', marginVertical: space[2] },
@@ -1980,9 +2378,6 @@ const makeStyles = (c) => StyleSheet.create({
   docSaveBusyText: { ...type.bodyStrong },
 
   /* Fullscreen photo viewer */
-  viewerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.94)', alignItems: 'center', justifyContent: 'center' },
-  viewerImage: { width: '100%', height: '100%' },
-  viewerClose: { position: 'absolute', right: space[4], width: 40, height: 40, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
 
   /* Reply / edit context bar */
   contextBar: { flexDirection: 'row', alignItems: 'center', gap: space[2], borderWidth: 1, borderRadius: radius.lg, paddingVertical: 8, paddingRight: 8, paddingLeft: 0, marginBottom: space[2], overflow: 'hidden' },
@@ -2016,6 +2411,20 @@ const makeStyles = (c) => StyleSheet.create({
     paddingLeft: 5, paddingRight: 5, paddingVertical: 5,
   },
   attachBtn: { width: 40, height: 38, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+
+  // Staging tray: photos picked but not yet sent.
+  trayWrap: { marginBottom: space[2] },
+  trayRow: { flexDirection: 'row', gap: space[2], paddingRight: space[2], paddingTop: 6 },
+  // Room at the top-right for the × badge, which sits half outside the thumb.
+  trayItem: { width: TRAY_THUMB, height: TRAY_THUMB },
+  trayThumb: { width: TRAY_THUMB, height: TRAY_THUMB, borderRadius: radius.md },
+  trayRemove: {
+    position: 'absolute', top: -6, right: -6,
+    width: 20, height: 20, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
+    ...elevation.e1,
+  },
+  trayCount: { ...type.caption, marginTop: 6 },
   input: { flex: 1, minHeight: 38, maxHeight: 110, paddingVertical: 8, lineHeight: 22, textAlignVertical: 'center', ...type.body },
   sendBtn: { width: 38, height: 38, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   micBtn: { width: 38, height: 38, flexShrink: 0 },
