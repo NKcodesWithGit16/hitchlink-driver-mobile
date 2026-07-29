@@ -302,7 +302,6 @@ export const en = {
     sharePhotoFailedBody: 'The photo could not be shared. Please try again.',
     editPhoto: 'Edit photo',
     markupPen: 'Draw',
-    markupArrow: 'Arrow',
     markupText: 'Add text',
     markupUndo: 'Undo last change',
     markupClear: 'Clear all changes',

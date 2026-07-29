@@ -190,12 +190,6 @@ describe('hitTestShape', () => {
     expect(hitTestShape(thick, p)).toBe(true);
   });
 
-  test('arrows hit along the shaft', () => {
-    const arrow = { kind: 'arrow', width: 6, x1: 0, y1: 0, x2: 100, y2: 100 };
-    expect(hitTestShape(arrow, { x: 50, y: 52 })).toBe(true);
-    expect(hitTestShape(arrow, { x: 0, y: 100 })).toBe(false);
-  });
-
   // Text sits on its baseline, so its box runs upward from the origin.
   test('text hits the box above its baseline', () => {
     const text = { kind: 'text', x: 100, y: 100, size: 24, value: 'DENT' };

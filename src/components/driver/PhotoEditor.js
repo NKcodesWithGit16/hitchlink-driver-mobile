@@ -4,7 +4,7 @@ import {
   StyleSheet, useWindowDimensions, ActivityIndicator, Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path, Line, Polygon, Image as SvgImage, Text as SvgText } from 'react-native-svg';
+import Svg, { Path, Image as SvgImage, Text as SvgText } from 'react-native-svg';
 import * as LegacyFS from 'expo-file-system/legacy';
 import CropOverlay from './editor/CropOverlay';
 import SizeSlider from './editor/SizeSlider';
@@ -17,7 +17,7 @@ import {
 } from '../../lib/editorGeom';
 import { space, type, radius, FONT } from '../../theme/tokens';
 
-// Photo editor: crop, draw, arrow and text on a photo before sending it.
+// Photo editor: crop, draw and text on a photo before sending it.
 //
 // This exists for damage claims. A driver cropping to the dented corner and
 // circling it communicates more than a paragraph, and the dispatcher gets
@@ -53,11 +53,11 @@ import { space, type, radius, FONT } from '../../theme/tokens';
 // its source, and raising that needs an off-screen canvas at the photo's
 // natural size with every coordinate scaled to match.
 
-const ARROW_HEAD = 16;
 const MAX_ZOOM = 4;
 const ERASE_TOLERANCE = 20;
 
-const MODE = { CROP: 'crop', DRAW: 'draw', ARROW: 'arrow', TEXT: 'text' };
+// No arrow tool: freehand covers it, and it never earned its place in the bar.
+const MODE = { CROP: 'crop', DRAW: 'draw', TEXT: 'text' };
 
 // Free first: a damage photo wants whatever shape the damage is.
 const ASPECTS = [
@@ -180,7 +180,7 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
       const m = opts.current.mode;
       if (m === MODE.CROP) return false;          // the overlay owns the gesture
       if (!m) return true;                        // idle: pan
-      return m === MODE.DRAW || m === MODE.ARROW; // tools draw
+      return m === MODE.DRAW;                     // the pen draws
     },
 
     onPanResponderGrant: (e) => {
@@ -220,9 +220,7 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
 
       gesture.kind = 'draw';
       const { color: c, strokeWidth: w } = opts.current;
-      setDraft(m === MODE.DRAW
-        ? { kind: MODE.DRAW, color: c, width: w, d: `M${x.toFixed(1)},${y.toFixed(1)}` }
-        : { kind: MODE.ARROW, color: c, width: w, x1: x, y1: y, x2: x, y2: y });
+      setDraft({ kind: MODE.DRAW, color: c, width: w, d: `M${x.toFixed(1)},${y.toFixed(1)}` });
     },
 
     onPanResponderMove: (e, g) => {
@@ -255,20 +253,13 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
 
       if (gesture.kind === 'draw') {
         const { locationX: x, locationY: y } = e.nativeEvent;
-        setDraft((d) => {
-          if (!d) return d;
-          if (d.kind === MODE.DRAW) return { ...d, d: `${d.d} L${x.toFixed(1)},${y.toFixed(1)}` };
-          return { ...d, x2: x, y2: y };
-        });
+        setDraft((d) => (d ? { ...d, d: `${d.d} L${x.toFixed(1)},${y.toFixed(1)}` } : d));
       }
     },
 
     onPanResponderRelease: () => {
       if (gesture.kind === 'draw') {
         setDraft((d) => {
-          // A tap with no drag leaves a dot or a zero-length arrow — drop it
-          // rather than littering the photo with accidental marks.
-          if (d?.kind === MODE.ARROW && Math.hypot(d.x2 - d.x1, d.y2 - d.y1) < 12) return null;
           if (d) commitShape(d);
           return null;
         });
@@ -463,7 +454,7 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
 
   const all = draft ? [...shapes, draft] : shapes;
   const inMode = !!mode;
-  const drawing = mode === MODE.DRAW || mode === MODE.ARROW;
+  const drawing = mode === MODE.DRAW;
 
   return (
     <Modal visible transparent={false} animationType="slide" onRequestClose={onCancel} statusBarTranslucent>
@@ -487,7 +478,6 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
               </Pressable>
               <View style={styles.toolRow}>
                 <ToolIcon icon="edit-2" label={t('messages.markupPen')} onPress={() => setMode(MODE.DRAW)} />
-                <ToolIcon icon="arrow-up-right" label={t('messages.markupArrow')} onPress={() => setMode(MODE.ARROW)} />
                 <ToolIcon icon="type" label={t('messages.markupText')} onPress={() => setMode(MODE.TEXT)} />
                 <ToolIcon icon="crop" label={t('messages.editCrop')} onPress={enterCrop} />
                 <ToolIcon icon="corner-up-left" label={t('messages.markupUndo')} onPress={undo} disabled={!canUndo} />
@@ -621,21 +611,6 @@ function Mark({ shape }) {
         strokeLinejoin="round"
         fill="none"
       />
-    );
-  }
-
-  if (shape.kind === MODE.ARROW) {
-    const { x1, y1, x2, y2, color, width } = shape;
-    const angle = Math.atan2(y2 - y1, x2 - x1);
-    const head = ARROW_HEAD + width * 1.2;
-    // Two barbs rotated off the shaft angle, as a filled triangle.
-    const left = [x2 - head * Math.cos(angle - Math.PI / 7), y2 - head * Math.sin(angle - Math.PI / 7)];
-    const right = [x2 - head * Math.cos(angle + Math.PI / 7), y2 - head * Math.sin(angle + Math.PI / 7)];
-    return (
-      <>
-        <Line x1={x1} y1={y1} x2={x2} y2={y2} stroke={color} strokeWidth={width} strokeLinecap="round" />
-        <Polygon points={`${x2},${y2} ${left[0]},${left[1]} ${right[0]},${right[1]}`} fill={color} />
-      </>
     );
   }
 

@@ -158,11 +158,6 @@ export function parsePathPoints(d) {
 export function hitTestShape(shape, point, tolerance = 18) {
   if (!shape) return false;
 
-  if (shape.kind === 'arrow') {
-    const reach = tolerance + (shape.width || 0) / 2;
-    return pointToSegmentDistance(point, { x: shape.x1, y: shape.y1 }, { x: shape.x2, y: shape.y2 }) <= reach;
-  }
-
   if (shape.kind === 'text') {
     const size = shape.size || 20;
     // SVG text sits on its baseline, so the box runs upward from the origin.

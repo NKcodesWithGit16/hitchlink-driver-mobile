@@ -304,7 +304,6 @@ export const ka = {
     sharePhotoFailedBody: 'ფოტო ვერ გაზიარდა. სცადეთ ხელახლა.',
     editPhoto: 'ფოტოს რედაქტირება',
     markupPen: 'ხატვა',
-    markupArrow: 'ისარი',
     markupText: 'ტექსტის დამატება',
     markupUndo: 'ბოლო ცვლილების გაუქმება',
     markupClear: 'ყველა ცვლილების წაშლა',

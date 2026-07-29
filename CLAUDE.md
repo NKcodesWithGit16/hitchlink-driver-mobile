@@ -240,10 +240,11 @@ edited result is sent as a NEW message** — `ChatController` has no edit-attach
 the original in the thread is the better record anyway.
 
 Its chrome is modelled on Messenger's and **swaps entirely with the mode**, so each screen shows only what
-that mode needs. Idle puts the tools top-right (draw / arrow / text / crop / undo) with an × to close and a
-Send pill bottom-right, and the photo pinches and pans. Every other mode replaces that with plain
-Cancel/Done text, a `SizeSlider` on the left edge of the photo, and either a `ColorRow` along the bottom
-(draw, arrow, text) or the aspect/rotate pair (crop). `Done` commits the mode and returns to idle; `Cancel`
+that mode needs. Idle puts the tools top-right (draw / text / crop / undo) with an × to close and a Send
+pill bottom-right, and the photo pinches and pans. Every other mode replaces that with plain Cancel/Done
+text, a `SizeSlider` on the left edge of the photo, and either a `ColorRow` along the bottom (draw, text)
+or the aspect/rotate pair (crop). There is **no arrow tool** — it was built and then removed as unused;
+freehand covers it. `Done` commits the mode and returns to idle; `Cancel`
 drops only that mode's *uncommitted* work — marks already committed by an earlier Done are undo's business,
 since losing five good strokes to one stray tap would be worse.
 
