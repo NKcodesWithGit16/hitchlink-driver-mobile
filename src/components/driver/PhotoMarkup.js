@@ -1,11 +1,11 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, Modal, Image, Pressable, TextInput, PanResponder,
   StyleSheet, useWindowDimensions, ActivityIndicator, Alert, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path, Line, Polygon, Text as SvgText } from 'react-native-svg';
-import { captureRef } from 'react-native-view-shot';
+import Svg, { Path, Line, Polygon, Image as SvgImage, Text as SvgText } from 'react-native-svg';
+import * as LegacyFS from 'expo-file-system/legacy';
 import Icon from '../ui/Icon';
 import { useT } from '../../i18n/LanguageContext';
 import haptics from '../../lib/haptics';
@@ -17,20 +17,24 @@ import { space, type, radius, FONT } from '../../theme/tokens';
 // arrowing an unreadable BOL number communicates more than a paragraph of text,
 // and the dispatcher gets something that stands up in a claim.
 //
-// Strokes are SVG over the image, then `captureRef` flattens the two into a
-// JPEG. Freehand uses a PanResponder collecting points into a path — the same
-// gesture idiom as PhotoViewer, so there's one way of doing this in the app
-// rather than two.
+// The photo is rendered INSIDE the <Svg> (as an SVG <Image>) rather than behind
+// it, so `svg.toDataURL()` rasterizes the photo and the strokes together in one
+// pass. This replaced react-native-view-shot, which is the obvious tool for the
+// job but whose native module would not register under the New Architecture in
+// this app ('RNViewShot' could not be found) — and going through SVG turns out
+// to be better anyway: one fewer native dependency, and because toDataURL takes
+// an output size, the export is rasterized at the photo's own resolution rather
+// than at whatever size it happened to be displayed.
 //
-// Known limitation: captureRef snapshots the *rendered view*, so the output is
-// display resolution (~1080px wide), not the original's full megapixels. Fine
-// for marking damage; it is a downgrade from the source. Raising it means
-// rendering off-screen at the photo's natural width and scaling every stroke
-// coordinate — deliberately deferred.
+// Freehand uses a PanResponder collecting points into a path — the same gesture
+// idiom as PhotoViewer, so there's one way of doing this in the app.
 
 const COLORS = ['#FF3B30', '#FFCC00', '#34C759', '#0A84FF', '#FFFFFF'];
 const WIDTHS = [3, 6, 10];
 const ARROW_HEAD = 16;
+// Matches normalizePhoto's own ceiling — exporting bigger just gets downscaled
+// again on upload.
+const MAX_EXPORT_EDGE = 2560;
 
 const TOOLS = { PEN: 'pen', ARROW: 'arrow', TEXT: 'text' };
 
@@ -47,13 +51,35 @@ export default function PhotoMarkup({ uri, onCancel, onDone }) {
   const [textDraft, setTextDraft] = useState(null); // { x, y, value }
   const [saving, setSaving] = useState(false);
 
-  const canvasRef = useRef(null);
+  const svgRef = useRef(null);
   // Mirrors `tool`/`color`/`strokeWidth` for the PanResponder, which is built
   // once and would otherwise capture the values from its first render.
   const opts = useRef({ tool, color, strokeWidth });
   opts.current = { tool, color, strokeWidth };
 
   const canvasHeight = height - insets.top - insets.bottom - TOOLBAR_H - ACTIONS_H;
+
+  // The photo's natural size, so the export can be rasterized at full quality
+  // instead of at the size it happens to be shown. Capped to match the upload
+  // path's own ceiling (normalizePhoto downscales past 2560 anyway).
+  const [natural, setNatural] = useState(null);
+  useEffect(() => {
+    if (!uri) return;
+    let alive = true;
+    Image.getSize(uri, (w, h) => { if (alive && w > 0 && h > 0) setNatural({ width: w, height: h }); }, () => {});
+    return () => { alive = false; };
+  }, [uri]);
+
+  const exportSize = useMemo(() => {
+    const ratio = canvasHeight > 0 ? width / canvasHeight : 1;
+    const longEdge = Math.min(MAX_EXPORT_EDGE, Math.max(natural?.width || 0, natural?.height || 0) || 0);
+    if (!longEdge) return { width: Math.round(width), height: Math.round(canvasHeight) };
+    // The canvas aspect drives the output, not the photo's — the SVG viewBox is
+    // the canvas, and `contain` letterboxing is part of what gets exported.
+    return ratio >= 1
+      ? { width: Math.round(longEdge), height: Math.round(longEdge / ratio) }
+      : { width: Math.round(longEdge * ratio), height: Math.round(longEdge) };
+  }, [natural, width, canvasHeight]);
 
   const commit = useCallback((shape) => {
     if (shape) setShapes((prev) => [...prev, shape]);
@@ -124,29 +150,56 @@ export default function PhotoMarkup({ uri, onCancel, onDone }) {
     if (shapes.length === 0) { onCancel?.(); return; }
     setSaving(true);
     try {
-      const out = await captureRef(canvasRef, { format: 'jpg', quality: 0.9, result: 'tmpfile' });
-      // Android hands back a bare path; the upload path needs a file:// URI.
-      const normalized = out.startsWith('file://') || out.startsWith('content://') ? out : `file://${out}`;
+      // toDataURL is callback-based and can hand back an empty result if the
+      // layer isn't ready; promisify it so a miss becomes a real rejection
+      // rather than a send that silently never happens.
+      const base64 = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('toDataURL timed out')), 10000);
+        svgRef.current?.toDataURL((data) => {
+          clearTimeout(timer);
+          if (data) resolve(data); else reject(new Error('toDataURL returned nothing'));
+        }, exportSize);
+      });
+
+      // PNG, because that's what react-native-svg rasterizes to. The upload
+      // path transcodes and downscales it (normalizePhoto), so it doesn't need
+      // to be JPEG here.
+      const dest = `${LegacyFS.cacheDirectory}markup-${Date.now()}.png`;
+      await LegacyFS.writeAsStringAsync(dest, base64, { encoding: LegacyFS.EncodingType.Base64 });
       haptics.success();
-      onDone?.(normalized);
+      onDone?.(dest);
     } catch (err) {
-      console.error('[Markup] Capture failed:', err);
+      console.error('[Markup] Export failed:', err);
       haptics.error();
       Alert.alert(t('messages.markupFailedTitle'), t('messages.markupFailedBody'));
       setSaving(false);
     }
-  }, [saving, shapes.length, onDone, onCancel, t]);
+  }, [saving, shapes.length, exportSize, onDone, onCancel, t]);
 
   const all = draft ? [...shapes, draft] : shapes;
 
   return (
     <Modal visible transparent={false} animationType="slide" onRequestClose={onCancel} statusBarTranslucent>
       <View style={[styles.root, { paddingTop: insets.top }]}>
-        {/* Only this subtree is captured, so the toolbars never end up in the
-            exported image. */}
-        <View ref={canvasRef} collapsable={false} style={[styles.canvas, { height: canvasHeight }]}>
-          <Image source={{ uri }} style={StyleSheet.absoluteFill} resizeMode="contain" />
-          <Svg style={StyleSheet.absoluteFill} width={width} height={canvasHeight}>
+        {/* The photo lives INSIDE the Svg, not behind it, so toDataURL exports
+            the picture and the marks together. Only this subtree is exported —
+            the toolbars are outside it and can never end up in the image. */}
+        <View style={[styles.canvas, { height: canvasHeight }]}>
+          <Svg
+            ref={svgRef}
+            style={StyleSheet.absoluteFill}
+            width={width}
+            height={canvasHeight}
+            viewBox={`0 0 ${width} ${canvasHeight}`}
+          >
+            <SvgImage
+              href={{ uri }}
+              x="0"
+              y="0"
+              width={width}
+              height={canvasHeight}
+              preserveAspectRatio="xMidYMid meet"
+            />
             {all.map((s, i) => <Mark key={i} shape={s} />)}
           </Svg>
           <View style={StyleSheet.absoluteFill} {...responder.panHandlers} />

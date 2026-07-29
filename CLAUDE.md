@@ -236,12 +236,19 @@ double-tap zoom would also flash the toolbars.
 
 `src/components/driver/PhotoMarkup.js` is the annotation editor (pen / arrow / text, 5 colours, 3 widths,
 undo, clear), reached from the viewer's ⋯ sheet. It exists for damage claims: a circled dent or an arrowed
-BOL number carries a claim in a way prose doesn't. Strokes are `react-native-svg` over the image;
-`captureRef` (`react-native-view-shot`) flattens the two into a JPEG. **The annotated result is sent as a
-NEW message** — `ChatController` has no edit-attachment endpoint, and keeping the original in the thread is
-the better record anyway. Two things to know: only the `canvasRef` subtree is captured, so toolbars must
-stay outside it; and `captureRef` snapshots at *display* resolution, so an annotated copy is lower-res than
-its source (raising that needs off-screen rendering at natural width with scaled coordinates — deferred).
+BOL number carries a claim in a way prose doesn't. **The annotated result is sent as a NEW message** —
+`ChatController` has no edit-attachment endpoint, and keeping the original in the thread is the better
+record anyway.
+
+The photo is rendered **inside** the `<Svg>` as an SVG `<Image>`, not behind it, so `svg.toDataURL()`
+rasterizes the picture and the strokes in one pass; the base64 PNG is written to the cache and handed to
+the normal upload path (which transcodes and downscales it). **Do not reintroduce
+`react-native-view-shot`.** It is the obvious tool for this and it was tried: it installs and autolinks
+cleanly, but its native module never registers under the New Architecture in this app — the app boots
+straight into `Invariant Violation: TurboModuleRegistry.getEnforcing(...): 'RNViewShot' could not be
+found`. `react-native-svg` (which does link) covers the whole job, and going through `toDataURL` is better
+regardless: one fewer native dependency, and because it takes an output size the export is rasterized at
+the photo's own resolution instead of at whatever size it was displayed.
 
 `saveToPhotoLibrary` (`src/api/main.js`) returns `'saved' | 'denied'` rather than throwing on a refused
 permission — a denial is a normal outcome that deserves a route to Settings, not a generic error. Like
