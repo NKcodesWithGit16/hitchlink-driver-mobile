@@ -252,8 +252,16 @@ since losing five good strokes to one stray tap would be worse.
 immediately — the driver already said "text", so a tap-to-place step buys nothing. The field renders with
 no frame, styled to match the SVG output, and is `pointerEvents="none"` so every touch falls through to the
 gesture layer: one finger drags the text, **two fingers pinch to resize it**. That pinch is the only size
-control in text mode, which is why text has no `SizeSlider` where draw does. A text shape's `(x, y)` is its
-**centre**, not an SVG baseline origin — `Mark` and `hitTestShape` both assume that.
+control in text mode, which is why text has no `SizeSlider` where draw does. Tapping a label committed by
+an earlier Done **picks it back up** for editing — without that, Done was one-way and a label could never
+be moved again.
+
+Two things about how the draft is positioned. Its `(x, y)` is the text's **centre**, not an SVG baseline
+origin (`Mark` and `hitTestShape` both assume that). And it moves by **transform on an `Animated.ValueXY`,
+never by `top`/`left` and never through state** — a per-frame `setState` made dragging feel heavy, and an
+earlier version pinned `left`/`right` to 0 so only the vertical axis ever moved on screen while the stored
+x drifted, making the text jump sideways on commit. `textPosRef` mirrors the animated value in plain JS
+because commit has to know the final position even if a drag is terminated rather than released.
 
 The eraser lives in the colour row rather than being its own mode: it answers the same question ("what does
 my next touch do"), and undo only walks backwards, so fixing the first of five marks without it means

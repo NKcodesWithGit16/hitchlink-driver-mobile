@@ -97,6 +97,25 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
   // from whatever position the draft had on its first render.
   const textDraftRef = useRef(null);
   textDraftRef.current = textDraft;
+  const shapesRef = useRef(shapes);
+  shapesRef.current = shapes;
+
+  // The draft's live position. Animated rather than state so a drag doesn't
+  // re-render the editor on every frame — that's what made moving text feel
+  // heavy. State catches up on release, which is the only time it matters.
+  const textPos = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  // Plain mirror of the same position. An Animated.Value can't be read back
+  // without a private API, and commit has to know where the text ended up even
+  // if the drag was terminated rather than released.
+  const textPosRef = useRef({ x: 0, y: 0 });
+  const moveText = useCallback((x, y) => {
+    textPosRef.current = { x, y };
+    textPos.setValue({ x, y });
+  }, [textPos]);
+  const placeText = useCallback((p) => {
+    moveText(p.x, p.y);
+    setTextDraft(p);
+  }, [moveText]);
   const [cropRect, setCropRect] = useState(null);
   const [natural, setNatural] = useState(null);
   const [busy, setBusy] = useState(null);          // 'crop' | 'rotate' | 'send'
@@ -212,9 +231,44 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
         return;
       }
       // Text is already placed and focused by the time the mode opens, so a
-      // touch here moves it rather than creating it.
+      // touch moves it rather than creating it — unless it lands on a label
+      // committed earlier, in which case that one is picked back up. Without
+      // this, Done was one-way: a label could never be moved again.
       if (m === MODE.TEXT) {
         gesture.kind = 'text-move';
+        const list = shapesRef.current;
+        let picked = null;
+        for (let i = list.length - 1; i >= 0; i -= 1) {
+          if (list[i].kind === MODE.TEXT && hitTestShape(list[i], { x, y }, ERASE_TOLERANCE)) {
+            picked = list[i];
+            break;
+          }
+        }
+
+        if (picked) {
+          const cur = textDraftRef.current;
+          const curValue = (cur?.value || '').trim();
+          setShapes((prev) => {
+            const next = prev.filter((s) => s !== picked);
+            // Whatever was being typed isn't lost by grabbing another label.
+            if (curValue) {
+              const { x: cx, y: cy } = textPosRef.current;
+              next.push({
+                kind: MODE.TEXT, color: opts.current.color, x: cx, y: cy,
+                value: curValue, size: opts.current.textSize,
+              });
+            }
+            return next;
+          });
+          setColor(picked.color);
+          setTextSize(picked.size);
+          placeText({ x: picked.x, y: picked.y, value: picked.value });
+          gesture.startX = picked.x;
+          gesture.startY = picked.y;
+          haptics.tap();
+          return;
+        }
+
         gesture.startX = textDraftRef.current?.x ?? 0;
         gesture.startY = textDraftRef.current?.y ?? 0;
         return;
@@ -265,7 +319,9 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
       }
 
       if (gesture.kind === 'text-move') {
-        setTextDraft((d) => (d ? { ...d, x: gesture.startX + g.dx, y: gesture.startY + g.dy } : d));
+        // Animated only — no setState per frame. That per-frame re-render is
+        // what made dragging text feel heavy.
+        moveText(gesture.startX + g.dx, gesture.startY + g.dy);
         return;
       }
 
@@ -295,12 +351,16 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
         });
         haptics.tap();
       }
+      if (gesture.kind === 'text-move') {
+        const { x, y } = textPosRef.current;
+        setTextDraft((d) => (d ? { ...d, x, y } : d));
+      }
       if (gesture.kind === 'pinch' && view.scale <= 1.02) resetView();
       gesture.kind = null;
     },
 
     onPanResponderTerminationRequest: () => false,
-  }), [gesture, view, scale, translateX, translateY, width, canvasHeight, commitShape, resetView]);
+  }), [gesture, view, scale, translateX, translateY, moveText, placeText, width, canvasHeight, commitShape, resetView]);
 
   // ── Text ─────────────────────────────────────────────────────────────────
   // Entering text mode places the caret in the middle of the photo and raises
@@ -310,12 +370,12 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
     if (mode !== MODE.TEXT) return;
     if (textDraftRef.current) return;
     if (!(imageRect.width > 0)) return;
-    setTextDraft({
+    placeText({
       x: imageRect.x + imageRect.width / 2,
       y: imageRect.y + imageRect.height / 2,
       value: '',
     });
-  }, [mode, imageRect]);
+  }, [mode, imageRect, placeText]);
 
   // (x, y) is the CENTRE of the text, not an SVG baseline origin. Centring is
   // what the on-photo editor shows, so storing anything else would mean
@@ -324,8 +384,11 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
     setTextDraft((d) => {
       const value = (d?.value || '').trim();
       if (value) {
+        // Position comes from the live mirror, not the draft: a drag only
+        // writes back to state on release, and this can run before that.
+        const { x, y } = textPosRef.current;
         setShapes((prev) => [...prev, {
-          kind: MODE.TEXT, color: opts.current.color, x: d.x, y: d.y, value,
+          kind: MODE.TEXT, color: opts.current.color, x, y, value,
           size: opts.current.textSize,
         }]);
       }
@@ -587,8 +650,17 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
               the gesture layer beneath, so a drag moves the text and a pinch
               resizes it while the field quietly keeps focus and the keyboard. */}
           {textDraft ? (
-            <View
-              style={[styles.textEntry, { top: textDraft.y - textSize, left: 0, right: 0 }]}
+            <Animated.View
+              // Driven by transform, not `top`/`left`. The previous version
+              // pinned left/right to 0 so only `top` ever moved — horizontal
+              // drags changed the stored x but nothing on screen, and the text
+              // jumped sideways the moment it was committed.
+              style={[styles.textEntry, {
+                transform: [
+                  { translateX: Animated.subtract(textPos.x, width / 2) },
+                  { translateY: Animated.subtract(textPos.y, textSize * 0.6) },
+                ],
+              }]}
               pointerEvents="none"
             >
               <TextInput
@@ -603,7 +675,7 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
                 onSubmitEditing={commitText}
                 returnKeyType="done"
               />
-            </View>
+            </Animated.View>
           ) : null}
 
           {busy && busy !== 'send' ? (
@@ -743,7 +815,9 @@ const styles = StyleSheet.create({
   },
   sendText: { color: '#0A0E14', fontFamily: FONT.semibold, fontSize: 16 },
 
-  textEntry: { position: 'absolute', alignItems: 'center' },
+  // Anchored at the canvas origin and moved purely by transform, so the drag
+  // can run on Animated values without a re-render per frame.
+  textEntry: { position: 'absolute', top: 0, left: 0, right: 0, alignItems: 'center' },
   textInput: {
     width: '100%',
     paddingHorizontal: space[4],
