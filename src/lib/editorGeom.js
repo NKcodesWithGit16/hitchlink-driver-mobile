@@ -160,12 +160,11 @@ export function hitTestShape(shape, point, tolerance = 18) {
 
   if (shape.kind === 'text') {
     const size = shape.size || 20;
-    // SVG text sits on its baseline, so the box runs upward from the origin.
-    const w = Math.max(size, (shape.value?.length || 1) * size * 0.6);
-    return point.x >= shape.x - tolerance
-      && point.x <= shape.x + w + tolerance
-      && point.y >= shape.y - size - tolerance
-      && point.y <= shape.y + tolerance;
+    // (x, y) is the text's centre, so the box is centred on it too.
+    const halfW = Math.max(size, (shape.value?.length || 1) * size * 0.6) / 2;
+    const halfH = size * 0.6;
+    return Math.abs(point.x - shape.x) <= halfW + tolerance
+      && Math.abs(point.y - shape.y) <= halfH + tolerance;
   }
 
   const pts = parsePathPoints(shape.d);

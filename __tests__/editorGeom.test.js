@@ -190,11 +190,22 @@ describe('hitTestShape', () => {
     expect(hitTestShape(thick, p)).toBe(true);
   });
 
-  // Text sits on its baseline, so its box runs upward from the origin.
-  test('text hits the box above its baseline', () => {
+  // (x, y) is the text's centre, so the hit box is centred on it — not hanging
+  // off a baseline origin, which is what SVG would otherwise imply.
+  test('text hits a box centred on its origin', () => {
     const text = { kind: 'text', x: 100, y: 100, size: 24, value: 'DENT' };
-    expect(hitTestShape(text, { x: 110, y: 90 })).toBe(true);
-    expect(hitTestShape(text, { x: 110, y: 300 })).toBe(false);
+    expect(hitTestShape(text, { x: 100, y: 100 })).toBe(true);
+    expect(hitTestShape(text, { x: 100, y: 90 })).toBe(true);
+    expect(hitTestShape(text, { x: 100, y: 110 })).toBe(true);
+    expect(hitTestShape(text, { x: 100, y: 300 })).toBe(false);
+    expect(hitTestShape(text, { x: 400, y: 100 })).toBe(false);
+  });
+  test('a longer label is wider to hit', () => {
+    const short = { kind: 'text', x: 100, y: 100, size: 20, value: 'A' };
+    const long = { kind: 'text', x: 100, y: 100, size: 20, value: 'REAR BUMPER DENT' };
+    const p = { x: 180, y: 100 };
+    expect(hitTestShape(short, p)).toBe(false);
+    expect(hitTestShape(long, p)).toBe(true);
   });
 
   test('a missing shape is not a hit', () => {

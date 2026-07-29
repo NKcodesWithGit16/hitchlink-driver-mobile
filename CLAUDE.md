@@ -248,6 +248,13 @@ freehand covers it. `Done` commits the mode and returns to idle; `Cancel`
 drops only that mode's *uncommitted* work — marks already committed by an earlier Done are undo's business,
 since losing five good strokes to one stray tap would be worse.
 
+**Text opens ready to type.** Picking it drops a caret in the middle of the photo and raises the keyboard
+immediately — the driver already said "text", so a tap-to-place step buys nothing. The field renders with
+no frame, styled to match the SVG output, and is `pointerEvents="none"` so every touch falls through to the
+gesture layer: one finger drags the text, **two fingers pinch to resize it**. That pinch is the only size
+control in text mode, which is why text has no `SizeSlider` where draw does. A text shape's `(x, y)` is its
+**centre**, not an SVG baseline origin — `Mark` and `hitTestShape` both assume that.
+
 The eraser lives in the colour row rather than being its own mode: it answers the same question ("what does
 my next touch do"), and undo only walks backwards, so fixing the first of five marks without it means
 losing the other four. A tap runs `hitTestShape` over the shapes newest-first and drops the first hit.

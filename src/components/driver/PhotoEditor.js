@@ -55,6 +55,8 @@ import { space, type, radius, FONT } from '../../theme/tokens';
 
 const MAX_ZOOM = 4;
 const ERASE_TOLERANCE = 20;
+const TEXT_MIN = 14;
+const TEXT_MAX = 96;
 
 // No arrow tool: freehand covers it, and it never earned its place in the bar.
 const MODE = { CROP: 'crop', DRAW: 'draw', TEXT: 'text' };
@@ -91,6 +93,10 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
   const [history, setHistory] = useState([]);      // [{ baseUri, shapes }]
   const [draft, setDraft] = useState(null);
   const [textDraft, setTextDraft] = useState(null);
+  // Mirrored for the PanResponder, which is built once and would otherwise drag
+  // from whatever position the draft had on its first render.
+  const textDraftRef = useRef(null);
+  textDraftRef.current = textDraft;
   const [cropRect, setCropRect] = useState(null);
   const [natural, setNatural] = useState(null);
   const [busy, setBusy] = useState(null);          // 'crop' | 'rotate' | 'send'
@@ -164,7 +170,9 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
   // ── Drawing / zoom gestures ──────────────────────────────────────────────
   const opts = useRef({ mode, color, strokeWidth, textSize, erasing });
   opts.current = { mode, color, strokeWidth, textSize, erasing };
-  const gesture = useRef({ kind: null, startDist: 0, startScale: 1, startX: 0, startY: 0 }).current;
+  const gesture = useRef({
+    kind: null, startDist: 0, startScale: 1, startSize: 0, startX: 0, startY: 0,
+  }).current;
 
   const commitShape = useCallback((shape) => {
     if (shape) setShapes((prev) => [...prev, shape]);
@@ -189,9 +197,12 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
       const m = opts.current.mode;
 
       if (touches.length === 2) {
-        gesture.kind = 'pinch';
+        // In text mode two fingers resize the type, not the photo — that's the
+        // whole size control, which is why text has no slider.
+        gesture.kind = m === MODE.TEXT ? 'text-size' : 'pinch';
         gesture.startDist = touchDistance(touches);
         gesture.startScale = view.scale;
+        gesture.startSize = opts.current.textSize;
         return;
       }
       if (!m) {
@@ -200,7 +211,14 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
         gesture.startY = view.translateY;
         return;
       }
-      if (m === MODE.TEXT) { gesture.kind = 'text'; setTextDraft({ x, y, value: '' }); return; }
+      // Text is already placed and focused by the time the mode opens, so a
+      // touch here moves it rather than creating it.
+      if (m === MODE.TEXT) {
+        gesture.kind = 'text-move';
+        gesture.startX = textDraftRef.current?.x ?? 0;
+        gesture.startY = textDraftRef.current?.y ?? 0;
+        return;
+      }
 
       // Erase is a tap, not a drag: drop the topmost mark under the finger so
       // overlapping strokes come off in the order they were laid down.
@@ -227,15 +245,27 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
       const touches = e.nativeEvent.touches;
 
       if (touches.length === 2) {
-        if (gesture.kind !== 'pinch') {
-          gesture.kind = 'pinch';
+        const textMode = opts.current.mode === MODE.TEXT;
+        if (gesture.kind !== 'pinch' && gesture.kind !== 'text-size') {
+          gesture.kind = textMode ? 'text-size' : 'pinch';
           gesture.startDist = touchDistance(touches);
           gesture.startScale = view.scale;
+          gesture.startSize = opts.current.textSize;
           setDraft(null);
         }
-        const next = Math.min(MAX_ZOOM, Math.max(1, gesture.startScale * (touchDistance(touches) / (gesture.startDist || 1))));
+        const ratio = touchDistance(touches) / (gesture.startDist || 1);
+        if (gesture.kind === 'text-size') {
+          setTextSize(Math.round(Math.min(TEXT_MAX, Math.max(TEXT_MIN, gesture.startSize * ratio))));
+          return;
+        }
+        const next = Math.min(MAX_ZOOM, Math.max(1, gesture.startScale * ratio));
         view.scale = next;
         scale.setValue(next);
+        return;
+      }
+
+      if (gesture.kind === 'text-move') {
+        setTextDraft((d) => (d ? { ...d, x: gesture.startX + g.dx, y: gesture.startY + g.dy } : d));
         return;
       }
 
@@ -273,6 +303,23 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
   }), [gesture, view, scale, translateX, translateY, width, canvasHeight, commitShape, resetView]);
 
   // ── Text ─────────────────────────────────────────────────────────────────
+  // Entering text mode places the caret in the middle of the photo and raises
+  // the keyboard straight away — the driver picked "text", so asking them to
+  // tap again before they can type is a step for nothing.
+  useEffect(() => {
+    if (mode !== MODE.TEXT) return;
+    if (textDraftRef.current) return;
+    if (!(imageRect.width > 0)) return;
+    setTextDraft({
+      x: imageRect.x + imageRect.width / 2,
+      y: imageRect.y + imageRect.height / 2,
+      value: '',
+    });
+  }, [mode, imageRect]);
+
+  // (x, y) is the CENTRE of the text, not an SVG baseline origin. Centring is
+  // what the on-photo editor shows, so storing anything else would mean
+  // converting in two places and getting it wrong in one.
   const commitText = useCallback(() => {
     setTextDraft((d) => {
       const value = (d?.value || '').trim();
@@ -522,28 +569,38 @@ export default function PhotoEditor({ uri, onCancel, onDone }) {
           ) : null}
 
           {/* Size control rides on the left edge of the photo, over it. */}
-          {drawing || mode === MODE.TEXT ? (
+          {/* Draw only. Text sizes by pinch instead — a slider and a two-finger
+              gesture doing the same job is one control too many. */}
+          {drawing ? (
             <SizeSlider
-              value={mode === MODE.TEXT ? textSize : strokeWidth}
-              min={mode === MODE.TEXT ? 14 : 2}
-              max={mode === MODE.TEXT ? 64 : 26}
+              value={strokeWidth}
+              min={2}
+              max={26}
               height={Math.min(240, canvasHeight - 80)}
-              onChange={mode === MODE.TEXT ? setTextSize : setStrokeWidth}
+              onChange={setStrokeWidth}
               style={[styles.slider, { top: 40 }]}
             />
           ) : null}
 
+          {/* No frame: the type sits straight on the photo, exactly as it will
+              in the exported image. pointerEvents="none" hands every touch to
+              the gesture layer beneath, so a drag moves the text and a pinch
+              resizes it while the field quietly keeps focus and the keyboard. */}
           {textDraft ? (
-            <View style={[styles.textEntry, { top: Math.max(0, textDraft.y - 20), left: space[3], right: space[3] }]}>
+            <View
+              style={[styles.textEntry, { top: textDraft.y - textSize, left: 0, right: 0 }]}
+              pointerEvents="none"
+            >
               <TextInput
                 value={textDraft.value}
                 onChangeText={(v) => setTextDraft((d) => (d ? { ...d, value: v } : d))}
                 placeholder={t('messages.markupTextPlaceholder')}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-                style={[styles.textInput, { color }]}
+                placeholderTextColor="rgba(255,255,255,0.45)"
+                style={[styles.textInput, { color, fontSize: textSize, lineHeight: textSize * 1.2 }]}
                 autoFocus
+                multiline
+                textAlign="center"
                 onSubmitEditing={commitText}
-                onBlur={commitText}
                 returnKeyType="done"
               />
             </View>
@@ -614,10 +671,13 @@ function Mark({ shape }) {
     );
   }
 
+  // (x, y) is the text's centre. SVG positions from the baseline, so nudge down
+  // by roughly a third of the cap height to sit it on that centre.
   return (
     <SvgText
       x={shape.x}
-      y={shape.y}
+      y={shape.y + shape.size * 0.34}
+      textAnchor="middle"
       fill={shape.color}
       fontSize={shape.size}
       fontWeight="bold"
@@ -683,11 +743,15 @@ const styles = StyleSheet.create({
   },
   sendText: { color: '#0A0E14', fontFamily: FONT.semibold, fontSize: 16 },
 
-  textEntry: { position: 'absolute' },
+  textEntry: { position: 'absolute', alignItems: 'center' },
   textInput: {
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: radius.md,
-    paddingHorizontal: space[3], paddingVertical: 8,
-    fontSize: 20, fontFamily: FONT.bold,
+    width: '100%',
+    paddingHorizontal: space[4],
+    fontFamily: FONT.bold,
+    // Mirrors the dark outline the SVG renderer strokes around the glyphs, so
+    // what's typed matches what gets exported.
+    textShadowColor: 'rgba(0,0,0,0.65)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
 });
