@@ -410,11 +410,6 @@ export const ka = {
     loadCancelled: 'ტვირთი გაუქმდა.',
     noPaperworkPhotos: 'დოკუმენტების ფოტო არ არის',
     loadPhotoA11y: 'ტვირთის ფოტო',
-    closePhotoA11y: 'ფოტოს დახურვა',
-    close: 'დახურვა',
-    photoFallback: 'ფოტო',
-    previousPhotoA11y: 'წინა ფოტო',
-    nextPhotoA11y: 'შემდეგი ფოტო',
     // ხანგრძლივი დაჭერა → ფოკუსის რეჟიმი → ტვირთის წაშლა საკუთარი ისტორიიდან
     longPressRemoveA11y: 'დააჭირეთ და გეჭიროთ, რომ ეს ტვირთი ისტორიიდან წაშალოთ',
     closeFocusA11y: 'დახურვა და ტვირთის შენარჩუნება',

@@ -41,13 +41,19 @@ const touchDistance = (touches) => {
 };
 
 export default function PhotoViewer({
-  uris, index = 0, msg, filename, onClose,
+  uris, index = 0, msg, filename, captions, onClose,
   onSendReply, onReact, onSaveToDocs, onDelete, onEdit,
 }) {
   const t = useT();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const list = useMemo(() => (uris || []).filter(Boolean), [uris]);
+  // This viewer is used from the chat thread AND from load history, where there
+  // is no conversation to reply to and nothing to react to. Rather than ship a
+  // second viewer, the chat-only chrome is driven by whether its callbacks were
+  // passed — no props, no composer, no "…" opening an empty sheet.
+  const hasComposer = !!(onSendReply || onReact);
+  const hasSheet = !!(onEdit || onSaveToDocs || (onDelete && msg?.from === 'driver'));
   const [page, setPage] = useState(index);
   const [zoomed, setZoomed] = useState(false);
   // Chrome hides on a single tap so it never covers the thing being inspected,
@@ -59,6 +65,7 @@ export default function PhotoViewer({
   const [reply, setReply] = useState('');
   const [toast, setToast] = useState(null);      // { text, bad } — in-modal feedback
   const [kbHeight, setKbHeight] = useState(0);
+  const caption = captions?.[page] || null;
   const toastTimer = useRef(null);
 
   useEffect(() => {
@@ -252,28 +259,38 @@ export default function PhotoViewer({
                 ? <ActivityIndicator size="small" color="#FFFFFF" />
                 : <Icon name="share" size={21} color="#FFFFFF" />}
             </Pressable>
-            <Pressable
-              onPress={() => setMoreOpen(true)}
-              style={styles.iconBtn}
-              hitSlop={10}
-              accessibilityRole="button"
-              accessibilityLabel={t('messages.moreActionsA11y')}
-            >
-              <Icon name="more-horizontal" size={22} color="#FFFFFF" />
-            </Pressable>
+            {hasSheet ? (
+              <Pressable
+                onPress={() => setMoreOpen(true)}
+                style={styles.iconBtn}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel={t('messages.moreActionsA11y')}
+              >
+                <Icon name="more-horizontal" size={22} color="#FFFFFF" />
+              </Pressable>
+            ) : null}
           </View>
         </View>
       ) : null}
 
-      {showChrome ? (
+      {showChrome && (hasComposer || caption) ? (
         <LinearGradient
           colors={['transparent', 'rgba(0,0,0,0.4)', 'rgba(0,0,0,0.8)']}
-          style={[styles.scrimBottom, { height: insets.bottom + 130 }]}
+          style={[styles.scrimBottom, { height: insets.bottom + (hasComposer ? 130 : 96) }]}
           pointerEvents="none"
         />
       ) : null}
 
-      {showChrome ? (
+      {/* Load-history photos carry a caption ("Bill of lading") and no composer;
+          it takes the space the reply pill would have used. */}
+      {showChrome && !hasComposer && caption ? (
+        <View style={[styles.captionBar, { paddingBottom: insets.bottom + space[5] }]} pointerEvents="none">
+          <Text style={styles.captionText} numberOfLines={3}>{caption}</Text>
+        </View>
+      ) : null}
+
+      {showChrome && hasComposer ? (
         <View
           // Plain View, not KeyboardAvoidingView: KAV assumes it's a flex
           // container, and absolutely positioned with `padding` behaviour it
@@ -539,6 +556,8 @@ const styles = StyleSheet.create({
   // screenshot without stamping a hard-edged band across the photo.
   scrimTop: { position: 'absolute', top: 0, left: 0, right: 0 },
   scrimBottom: { position: 'absolute', bottom: 0, left: 0, right: 0 },
+  captionBar: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: space[5] },
+  captionText: { color: '#FFFFFF', fontSize: 15, fontFamily: FONT.medium, textAlign: 'center', lineHeight: 21 },
 
   topBar: {
     position: 'absolute', top: 0, left: 0, right: 0,

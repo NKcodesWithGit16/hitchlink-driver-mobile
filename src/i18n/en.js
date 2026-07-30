@@ -416,11 +416,6 @@ export const en = {
     loadCancelled: 'Load cancelled.',
     noPaperworkPhotos: 'No paperwork photos',
     loadPhotoA11y: 'Load photo',
-    closePhotoA11y: 'Close photo',
-    close: 'Close',
-    photoFallback: 'Photo',
-    previousPhotoA11y: 'Previous photo',
-    nextPhotoA11y: 'Next photo',
     // Long-press → focus mode → remove a load from this driver's own history
     longPressRemoveA11y: 'Press and hold to remove this load from your history',
     closeFocusA11y: 'Close and keep this load',

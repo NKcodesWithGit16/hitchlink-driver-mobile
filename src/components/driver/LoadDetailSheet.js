@@ -181,12 +181,24 @@ export default function LoadDetailSheet({ load, stats, colors, unit = 'mi', onCl
               {load.weight ? <Chip styles={styles} label={`${num(load.weight)} lb`} /> : null}
             </View>
 
-            {/* ── Proof of delivery ── */}
+            {/* ── Proof of delivery ──
+                A horizontal strip of PORTRAIT tiles, not a row of four squat
+                landscape ones. Paperwork is photographed portrait, and the old
+                58px-tall full-width-flex tile cropped a bill of lading down to a
+                horizontal band through its middle — unrecognisable as a
+                document. 3:4 tiles crop almost nothing.
+
+                It also scrolls instead of slicing to 4: the previous version
+                dropped any extra photos silently, with no "+N" to say so. */}
             {photos.length > 0 ? (
               <View>
                 <Text style={styles.secLabel}>{t('loadDetail.proofOfDelivery')}</Text>
-                <View style={styles.pods}>
-                  {photos.slice(0, 4).map((p, i) => (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.pods}
+                >
+                  {photos.map((p, i) => (
                     <Pressable
                       key={p.id ?? i}
                       onPress={() => onOpenPhoto?.(i)}
@@ -194,10 +206,14 @@ export default function LoadDetailSheet({ load, stats, colors, unit = 'mi', onCl
                       accessibilityRole="imagebutton"
                       accessibilityLabel={p.caption || t('earnings.loadPhotoA11y')}
                     >
-                      <Image source={{ uri: p.thumbnailUrl || p.url }} style={styles.podImg} />
+                      <Image
+                        source={{ uri: p.thumbnailUrl || p.url }}
+                        style={styles.podImg}
+                        resizeMode="cover"
+                      />
                     </Pressable>
                   ))}
-                </View>
+                </ScrollView>
               </View>
             ) : null}
           </ScrollView>
@@ -291,7 +307,13 @@ const makeStyles = (c) => StyleSheet.create({
   chip: { fontSize: 11.5, fontFamily: FONT.semibold, color: c.textSecondary, backgroundColor: c.surface2, borderWidth: 1, borderColor: c.border, paddingHorizontal: 11, paddingVertical: 7, borderRadius: 999, overflow: 'hidden' },
 
   secLabel: { fontSize: 11, fontFamily: FONT.bold, letterSpacing: 0.9, textTransform: 'uppercase', color: c.textMuted, marginBottom: space[2] },
-  pods: { flexDirection: 'row', gap: space[2] },
-  pod: { flex: 1, height: 58, borderRadius: 12, borderWidth: 1, borderColor: c.border, overflow: 'hidden' },
+  pods: { flexDirection: 'row', gap: space[2], paddingRight: space[2] },
+  // Portrait, because paperwork is. Fixed width + aspectRatio rather than a
+  // fixed height, so the tile shape is the same on every screen size.
+  pod: {
+    width: 84, aspectRatio: 3 / 4, borderRadius: 12,
+    borderWidth: 1, borderColor: c.border, overflow: 'hidden',
+    backgroundColor: c.surface2,
+  },
   podImg: { width: '100%', height: '100%' },
 });

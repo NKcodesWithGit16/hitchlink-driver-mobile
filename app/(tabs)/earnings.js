@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Animated, RefreshControl, Modal, Image, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Animated, RefreshControl, Image } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import ScreenFade from '../../src/components/ui/ScreenFade';
@@ -25,6 +25,7 @@ import haptics from '../../src/lib/haptics';
 import { space, type, radius, FONT, shadow, toneOf } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 import { useCallBannerInset } from '../../src/components/call/CallOverlay';
+import PhotoViewer from '../../src/components/driver/PhotoViewer';
 
 const CHART_H = 116;
 
@@ -528,13 +529,18 @@ export default function EarningsScreen() {
         onHide={() => setUndo(null)}
       />
 
+      {/* The same viewer the chat thread uses — pinch-zoom, pan, swipe between
+          photos, save and share. Paperwork is the reason it matters here: a BOL
+          photographed on a dock is unreadable until you can zoom into it, and
+          the viewer this screen used before could only scale a whole photo into
+          a fixed box. No reply/react callbacks are passed, so that chrome stays
+          out; captions take its place. */}
       {lightbox ? (
-        <Lightbox
-          photos={lightbox.photos}
+        <PhotoViewer
+          uris={(lightbox.photos || []).map((p) => p.url || p.thumbnailUrl).filter(Boolean)}
+          captions={(lightbox.photos || []).map((p) => p.caption || null)}
           index={lightbox.index}
-          onIndex={(i) => setLightbox((lb) => ({ ...lb, index: i }))}
           onClose={() => setLightbox(null)}
-          styles={styles}
         />
       ) : null}
     </ScreenFade>
@@ -860,44 +866,6 @@ function HistoryCard({ load, colors, styles, unit, onOpen, onLongPress, onOpenPh
   );
 }
 
-// Fullscreen photo viewer with prev/next. Tapping the backdrop closes it.
-function Lightbox({ photos, index, onIndex, onClose, styles }) {
-  const { width } = useWindowDimensions();
-  const t = useT();
-  if (!photos || photos.length === 0) return null;
-  const p = photos[index];
-  const go = (dir) => onIndex((index + dir + photos.length) % photos.length);
-  return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
-      <View style={styles.lbOverlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel={t('earnings.closePhotoA11y')} />
-        <Image
-          source={{ uri: p.url || p.thumbnailUrl }}
-          style={{ width: width - 32, height: '68%' }}
-          resizeMode="contain"
-        />
-        <View style={styles.lbCaption} pointerEvents="none">
-          <Text style={styles.lbCaptionText}>{p.caption || t('earnings.photoFallback')}</Text>
-          <Text style={styles.lbCount}>{index + 1} / {photos.length}</Text>
-        </View>
-        <Pressable onPress={onClose} style={styles.lbClose} hitSlop={10} accessibilityRole="button" accessibilityLabel={t('earnings.close')}>
-          <Icon name="x" size={22} color="#FFFFFF" />
-        </Pressable>
-        {photos.length > 1 ? (
-          <>
-            <Pressable onPress={() => go(-1)} style={[styles.lbNav, { left: 12 }]} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('earnings.previousPhotoA11y')}>
-              <Icon name="chevron-left" size={26} color="#FFFFFF" />
-            </Pressable>
-            <Pressable onPress={() => go(1)} style={[styles.lbNav, { right: 12 }]} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('earnings.nextPhotoA11y')}>
-              <Icon name="chevron-right" size={26} color="#FFFFFF" />
-            </Pressable>
-          </>
-        ) : null}
-      </View>
-    </Modal>
-  );
-}
-
 const makeStyles = (c) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: c.bg },
 
@@ -1013,14 +981,6 @@ const makeStyles = (c) => StyleSheet.create({
   hiddenLinkAction: { ...type.caption, fontFamily: FONT.black },
   histNoPhotos: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderStyle: 'dashed', borderRadius: radius.md, paddingHorizontal: space[3], paddingVertical: space[2], alignSelf: 'flex-start' },
   histNoPhotosText: { ...type.caption },
-
-  /* Lightbox */
-  lbOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.94)', alignItems: 'center', justifyContent: 'center' },
-  lbClose: { position: 'absolute', top: 48, right: 20, width: 42, height: 42, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
-  lbCaption: { position: 'absolute', bottom: 56, left: 0, right: 0, alignItems: 'center', gap: 4 },
-  lbCaptionText: { color: '#FFFFFF', fontSize: 14, fontFamily: FONT.bold },
-  lbCount: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontFamily: FONT.medium, ...type.num },
-  lbNav: { position: 'absolute', top: '50%', marginTop: -24, width: 48, height: 48, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center' },
 
   /* Error / retry */
   errorBox: { alignItems: 'center', justifyContent: 'center', gap: space[3], paddingVertical: space[10], paddingHorizontal: space[4] },
