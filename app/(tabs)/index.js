@@ -353,6 +353,10 @@ export default function LoadScreen() {
     }
   };
 
+  // Shared by all three render branches below (loading/error/loaded) so the
+  // header avatar behaves the same whichever one is on screen.
+  const openProfile = () => router.push('/edit-profile');
+
   const handleUndo = async () => {
     if (!undo) return;
     haptics.tap();
@@ -384,7 +388,7 @@ export default function LoadScreen() {
   if (error && !load) {
     return (
       <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
-        <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
+        <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} onProfile={openProfile} />
         <View style={[styles.center, { flex: 1, paddingHorizontal: space[6] }]}>
           <View style={[styles.errorIcon, { backgroundColor: colors.cautionFill, borderColor: colors.bg }]}>
             <Icon name="wifi-off" size={34} color={colors.caution} />
@@ -408,7 +412,7 @@ export default function LoadScreen() {
   if (!load) {
     return (
       <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
-        <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
+        <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} onProfile={openProfile} />
         <ScrollView
           contentContainerStyle={{ flexGrow: 1 }}
           showsVerticalScrollIndicator={false}
@@ -445,7 +449,7 @@ export default function LoadScreen() {
 
   return (
     <ScreenFade style={[styles.screen, { paddingTop: insets.top + callInset }]}>
-      <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} />
+      <Header colors={colors} styles={styles} name={user?.firstName} photoUrl={user?.photoUrl} unreadCount={unreadCount} onBell={() => router.push('/alerts')} onProfile={openProfile} />
       <StatusBar
         chip={chip}
         driveMinutesLeft={hos.driveMinutesLeft}
@@ -592,7 +596,7 @@ export default function LoadScreen() {
 }
 
 /* ───────── Local pieces ───────── */
-function Header({ colors, styles, name, photoUrl, unreadCount = 0, onBell }) {
+function Header({ colors, styles, name, photoUrl, unreadCount = 0, onBell, onProfile }) {
   const t = useT();
   const initials = (name || t('load.driverFallback')).slice(0, 1).toUpperCase();
   const hasUnread = unreadCount > 0;
@@ -615,13 +619,27 @@ function Header({ colors, styles, name, photoUrl, unreadCount = 0, onBell }) {
             </View>
           ) : null}
         </Pressable>
-        <View style={[styles.avatar, { backgroundColor: colors.surfaceHi, borderColor: colors.border }]}>
+        {/* An avatar that looks tappable has to be tappable — it read as a dead
+            control before. Opens the same editor as More › Profile; because that
+            route is a sibling of (tabs) on the root stack, its Back pops to
+            whichever tab pushed it, landing here. */}
+        <Pressable
+          onPress={onProfile}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={t('load.profileA11y')}
+          style={({ pressed }) => [
+            styles.avatar,
+            { backgroundColor: colors.surfaceHi, borderColor: pressed ? colors.teal : colors.border },
+            pressed && { opacity: 0.85 },
+          ]}
+        >
           {photoUrl ? (
             <Image source={{ uri: photoUrl }} style={styles.avatarPhoto} />
           ) : (
             <Text style={styles.avatarText}>{initials}</Text>
           )}
-        </View>
+        </Pressable>
       </View>
     </View>
   );

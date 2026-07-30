@@ -199,9 +199,17 @@ export default function MoreScreen() {
               </Pressable>
             </View>
 
-            {/* Identity */}
+            {/* Identity — the avatar opens the editor, same as the pencil above
+                it and the Profile row below. A driver reaches for their own face
+                before they hunt for a 15px icon. */}
             <View style={styles.heroIdentity}>
-              <View style={styles.avatarRing}>
+              <Pressable
+                onPress={() => router.push('/edit-profile')}
+                hitSlop={6}
+                accessibilityRole="button"
+                accessibilityLabel={t('more.editProfileA11y')}
+                style={({ pressed }) => [styles.avatarRing, pressed && { opacity: 0.85 }]}
+              >
                 {user?.photoUrl ? (
                   <Image source={{ uri: user.photoUrl }} style={styles.avatarPhoto} />
                 ) : (
@@ -211,7 +219,7 @@ export default function MoreScreen() {
                     </Text>
                   </View>
                 )}
-              </View>
+              </Pressable>
 
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={styles.heroName} numberOfLines={1}>{user?.name ?? t('more.driver')}</Text>

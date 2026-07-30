@@ -76,6 +76,7 @@ export const en = {
     photoNotSentBody: "Your delivery was recorded, but the paperwork photo couldn't upload. Please resend it from Messages.",
     unreadAlertsA11y: '{count} unread alerts — open',
     alertsA11y: 'Alerts',
+    profileA11y: 'Your profile — edit',
     grossPay: 'Gross pay',
     ratePerMi: 'Rate / mi',
     ratePerKm: 'Rate / km',
