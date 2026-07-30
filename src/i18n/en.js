@@ -359,10 +359,12 @@ export const en = {
     payUnavailable: 'Pay data unavailable right now',
     dailyEarnings: 'Daily earnings',
     bestDayLine: 'Best {day} · {amount}',
-    bestDay: 'Best day',
     avgPerLoad: 'Avg / load',
-    perMile: 'Per mile',
-    perKm: 'Per km',
+    // Mileage strip: deadhead + loaded = driven. Deliberately unit-agnostic —
+    // only the third chip's label names mi/km, and all three share it.
+    deadhead: 'Deadhead',
+    loaded: 'Loaded',
+    emptyPct: '{pct}% empty',
     milesDriven: 'Miles driven',
     kilometersDriven: 'Kilometers driven',
     // Planned (the dispatcher's quote, may be missing) vs actual (GPS-measured)
@@ -373,9 +375,16 @@ export const en = {
     milesPlannedOnly: '{planned} {unit} planned',
     milesActualOnly: '{actual} {unit} driven',
     loadsCompleted: 'Loads completed',
+    // The card leads with gross ("Revenue"); netSub carries take-home beneath it,
+    // so the two per-mile figures can never be mistaken for each other.
     revenuePerMile: 'Revenue / mile',
     revenuePerKm: 'Revenue / km',
-    fuelUsed: 'Fuel used',
+    netSub: 'net {amount}',
+    // Cost, not gallons — the backend has no fuel-volume source (always 0).
+    fuel: 'Fuel',
+    perDistanceSub: '{amount} / {unit}',
+    unitMi: 'mi',
+    unitKm: 'km',
     whereItWent: 'Where it went',
     legendNet: 'Net {pct}%',
     legendFuel: 'Fuel {pct}%',

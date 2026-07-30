@@ -19,7 +19,7 @@ import { fetchEarnings, fetchLoadHistory } from '../../src/api/main';
 import { getHiddenState, hideLoad, unhideLoad, partitionHidden } from '../../src/lib/hiddenLoads';
 import { adjustEarnings } from '../../src/lib/earningsAdjust';
 import { getStats, computeLoadStats } from '../../src/lib/odometer';
-import { money, num, distNum, distRpm } from '../../src/lib/format';
+import { money, distNum, distRpm } from '../../src/lib/format';
 import { useDistanceUnit } from '../../src/lib/prefs';
 import haptics from '../../src/lib/haptics';
 import { space, type, radius, FONT, shadow, toneOf } from '../../src/theme/tokens';
@@ -184,7 +184,28 @@ export default function EarningsScreen() {
   const actualMiles  = d?.actualMiles || 0;
   const plannedMiles = d?.miles || 0;
   const rateMiles    = actualMiles > 0 ? actualMiles : plannedMiles;
-  const dpm     = rateMiles ? d.net / rateMiles : 0;
+  // TWO different per-mile figures, and the difference is the whole point: what
+  // the load paid per mile, and what the driver keeps per mile. Both divide by
+  // the same distance so they're comparable side by side — the gap between them
+  // IS the fuel and the deductions. The screen used to divide net by miles for
+  // both, so "Revenue / mile" printed the take-home figure twice under a label
+  // that promised gross. (The server also sends `rpm`, but over PLANNED miles;
+  // dividing by rateMiles keeps all three mileage figures on one denominator.)
+  const netRpm   = rateMiles ? d.net / rateMiles : 0;
+  const grossRpm = rateMiles ? d.gross / rateMiles : 0;
+  // Fuel per mile. `fuelGal` is still hardcoded to 0 by the backend, so the card
+  // shows the COST (which is real) rather than invented gallons.
+  const fuelRpm  = rateMiles ? d.fuelCost / rateMiles : 0;
+
+  // The measured distance split the way a driver thinks about it. Deadhead is
+  // the empty running to a pickup — unpaid miles, so the percentage matters more
+  // than the raw number and lower is better. Both are null (not 0) when the
+  // backend hasn't been redeployed with the split yet, which is what lets the
+  // chips show "—" instead of claiming a truck ran zero empty miles.
+  const deadheadMiles = Number.isFinite(d?.deadheadMiles) ? d.deadheadMiles : null;
+  const loadedMiles   = Number.isFinite(d?.loadedMiles)   ? d.loadedMiles   : null;
+  const hasSplit      = deadheadMiles !== null && loadedMiles !== null && actualMiles > 0;
+  const deadheadPct   = hasSplit ? Math.round((deadheadMiles / actualMiles) * 100) : null;
   const goal    = d ? (d.goal || fallbackGoal(d)) : 0;
 
   // Summary-bar reveal window: begins as the hero's bottom nears the top.
@@ -303,21 +324,31 @@ export default function EarningsScreen() {
                 </View>
               </FadeInView>
 
-              {/* Insights strip */}
+              {/* ── Mileage strip ──
+                  Three figures that ADD UP: deadhead + loaded = driven. Grouping
+                  them makes the row self-checking and puts the split a driver
+                  can act on (empty miles are unpaid miles) where it's read
+                  first. Best day isn't here anymore — the chart header directly
+                  above already says "Best Wed · $880", and the tallest bar says
+                  it again. */}
               <FadeInView delay={110}>
                 <View style={styles.insightRow}>
-                  <InsightChip icon="zap"         label={t('earnings.bestDay')}   value={bestBar ? money(bestBar.v) : '—'} sub={bestBar?.d} colors={colors} styles={styles} />
-                  <InsightChip icon="package"     label={t('earnings.avgPerLoad')} value={money(avgLoad)}                   colors={colors} styles={styles} />
-                  <InsightChip icon="dollar-sign" label={t(unit === 'km' ? 'earnings.perKm' : 'earnings.perMile')} value={`$${distRpm(dpm, unit)}`} colors={colors} styles={styles} />
-                </View>
-              </FadeInView>
-
-              {/* Stats grid */}
-              <FadeInView delay={160}>
-                <View style={styles.grid}>
-                  {/* Measured distance leads — the card says "driven" — with the
-                      quoted figure underneath so the two are never confused. */}
-                  <StatCard
+                  <InsightChip
+                    icon="corner-up-right"
+                    label={t('earnings.deadhead')}
+                    value={hasSplit ? distNum(deadheadMiles, unit) : '—'}
+                    sub={hasSplit ? t('earnings.emptyPct', { pct: deadheadPct }) : null}
+                    colors={colors} styles={styles}
+                  />
+                  <InsightChip
+                    icon="truck"
+                    label={t('earnings.loaded')}
+                    value={hasSplit ? distNum(loadedMiles, unit) : '—'}
+                    colors={colors} styles={styles}
+                  />
+                  {/* Measured distance, with the quoted figure (or the reason we
+                      have none) underneath so the two are never confused. */}
+                  <InsightChip
                     icon="navigation"
                     label={unit === 'km' ? t('earnings.kilometersDriven') : t('earnings.milesDriven')}
                     value={rateMiles ? distNum(rateMiles, unit) : '—'}
@@ -326,15 +357,40 @@ export default function EarningsScreen() {
                         ? (plannedMiles > 0 ? t('earnings.plannedSub', { n: distNum(plannedMiles, unit) }) : t('earnings.gpsMeasured'))
                         : (plannedMiles > 0 ? t('earnings.plannedNoGps') : null)
                     }
-                    accent={colors.teal} colors={colors} styles={styles}
+                    colors={colors} styles={styles}
                   />
-                  <StatCard icon="repeat"     label={t('earnings.loadsCompleted')} value={String(d.loads)} accent={colors.teal} colors={colors} styles={styles} />
+                </View>
+              </FadeInView>
+
+              {/* ── Stats grid ── the money and volume figures */}
+              <FadeInView delay={160}>
+                <View style={styles.grid}>
+                  <StatCard icon="package" label={t('earnings.avgPerLoad')} value={money(avgLoad)} accent={colors.teal} colors={colors} styles={styles} />
+                  {/* Both per-mile figures on one card: the rate the loads were
+                      booked at, and what's left after fuel and fees. The gap
+                      between them is the cost of running the truck. */}
+                  <StatCard
+                    icon="trending-up"
+                    label={t(unit === 'km' ? 'earnings.revenuePerKm' : 'earnings.revenuePerMile')}
+                    value={rateMiles ? `$${distRpm(grossRpm, unit)}` : '—'}
+                    sub={rateMiles ? t('earnings.netSub', { amount: `$${distRpm(netRpm, unit)}` }) : null}
+                    accent={colors.go} colors={colors} styles={styles}
+                  />
                 </View>
               </FadeInView>
               <FadeInView delay={200}>
                 <View style={styles.grid}>
-                  <StatCard icon="trending-up" label={t(unit === 'km' ? 'earnings.revenuePerKm' : 'earnings.revenuePerMile')} value={rateMiles ? `$${distRpm(d.net / rateMiles, unit)}` : '—'} accent={colors.go} colors={colors} styles={styles} />
-                  <StatCard icon="droplet"     label={t('earnings.fuelUsed')}      value={`${num(d.fuelGal)} gal`} sub={money(d.fuelCost)} accent={colors.caution} colors={colors} styles={styles} />
+                  <StatCard icon="repeat" label={t('earnings.loadsCompleted')} value={String(d.loads)} accent={colors.teal} colors={colors} styles={styles} />
+                  {/* Fuel COST, not gallons: the backend's fuelGal has no data
+                      source and is hardcoded to 0, so this card spent its life
+                      telling drivers they burned "0 gal". The cost is real. */}
+                  <StatCard
+                    icon="droplet"
+                    label={t('earnings.fuel')}
+                    value={money(d.fuelCost)}
+                    sub={rateMiles ? t('earnings.perDistanceSub', { amount: `$${distRpm(fuelRpm, unit)}`, unit: unit === 'km' ? t('earnings.unitKm') : t('earnings.unitMi') }) : null}
+                    accent={colors.caution} colors={colors} styles={styles}
+                  />
                 </View>
               </FadeInView>
 
