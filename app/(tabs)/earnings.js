@@ -29,6 +29,11 @@ import PhotoViewer from '../../src/components/driver/PhotoViewer';
 
 const CHART_H = 116;
 
+// Gap between dismissing one Modal and presenting the next. iOS will not present
+// while a dismissal is in flight — it freezes instead — and a Modal's fade/slide
+// runs ~250ms. Same constant and same reason as messages.js; see openPhoto below.
+const MODAL_HANDOFF_MS = 320;
+
 // A sensible stretch target when the backend doesn't send an explicit goal —
 // 15% above last period, rounded to a clean hundred.
 const fallbackGoal = (d) => Math.round(((d.prevNet || d.net || 0) * 1.15) / 100) * 100;
@@ -157,6 +162,41 @@ export default function EarningsScreen() {
     await loadData();
     setRefreshing(false);
   }, [loadData]);
+
+  // ── Opening a photo, from either place ──────────────────────────────────
+  // The detail sheet and the photo viewer are both Modals, and iOS will not
+  // present one while another is dismissing — it just freezes, which is exactly
+  // what raising the viewer on top of the open sheet did. So the sheet is
+  // dismissed FIRST and the viewer raised once it's gone, then put back when the
+  // viewer closes, so the driver lands where they were rather than on the list.
+  //
+  // From a history card there's no sheet open and nothing to hand off, so that
+  // path stays immediate.
+  const handoffRef = useRef(null);
+  useEffect(() => () => { if (handoffRef.current) clearTimeout(handoffRef.current); }, []);
+
+  const openPhotoFromCard = useCallback((photos, index) => {
+    haptics.tap();
+    setLightbox({ photos: photos || [], index });
+  }, []);
+
+  const handoff = useCallback((fn) => {
+    if (handoffRef.current) clearTimeout(handoffRef.current);
+    handoffRef.current = setTimeout(fn, MODAL_HANDOFF_MS);
+  }, []);
+
+  const openPhotoFromDetail = useCallback((index) => {
+    if (!detail) return;
+    const from = detail;
+    setDetail(null);   // dismiss the sheet; the viewer follows once it's gone
+    handoff(() => setLightbox({ photos: from.load.photos || [], index, returnTo: from }));
+  }, [detail, handoff]);
+
+  const closeLightbox = useCallback(() => {
+    const back = lightbox?.returnTo;
+    setLightbox(null);
+    if (back) handoff(() => setDetail(back));
+  }, [lightbox, handoff]);
 
   // Every figure below is derived from `d`, so adjusting the period here is
   // what makes the whole screen — hero, chart, insights, grid, breakdown —
@@ -473,7 +513,7 @@ export default function EarningsScreen() {
                   unit={unit}
                   onOpen={() => openDetail(l)}
                   onLongPress={() => openFocus(l)}
-                  onOpenPhoto={(idx) => { haptics.tap(); setLightbox({ photos: l.photos || [], index: idx }); }}
+                  onOpenPhoto={(idx) => openPhotoFromCard(l.photos, idx)}
                 />
               </FadeInView>
             ))
@@ -507,7 +547,7 @@ export default function EarningsScreen() {
           colors={colors}
           unit={unit}
           onClose={() => setDetail(null)}
-          onOpenPhoto={(idx) => setLightbox({ photos: detail.load.photos || [], index: idx })}
+          onOpenPhoto={openPhotoFromDetail}
         />
       ) : null}
 
@@ -540,7 +580,7 @@ export default function EarningsScreen() {
           uris={(lightbox.photos || []).map((p) => p.url || p.thumbnailUrl).filter(Boolean)}
           captions={(lightbox.photos || []).map((p) => p.caption || null)}
           index={lightbox.index}
-          onClose={() => setLightbox(null)}
+          onClose={closeLightbox}
         />
       ) : null}
     </ScreenFade>
