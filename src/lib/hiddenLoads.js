@@ -2,14 +2,24 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 /* Loads the driver has removed from their own Pay-tab history.
  *
- * This is a DEVICE-LOCAL view preference, not a delete. A delivered load is a
+ * TWO ACTIONS, ONE STORE. Both are DEVICE-LOCAL. A delivered load is a
  * financial record — it still exists for the dispatcher, for billing and for
  * settlements, and the earnings figures above the history list (which the
- * backend computes) are deliberately unaffected. All that changes is which
- * cards this driver sees on this phone.
+ * backend computes) are deliberately unaffected by either. All that changes is
+ * which cards this driver sees on this phone.
+ *
+ *   hideLoad()   — reversible. Restorable for three weeks from More › Hidden
+ *                  loads, then it compacts down to a tombstone on its own.
+ *   deleteLoad() — permanent on this driver's side, immediately. Never appears
+ *                  on the Hidden-loads screen and can't be restored.
+ *
+ * The difference is one flag, because the end state is identical: a bare
+ * tombstone that keeps the load filtered out of history forever. A delete just
+ * skips the restorable phase and stores no snapshot to restore from.
  *
  * (The backend's DELETE /loads/{id} is a global soft-delete that would pull the
- * load out of everyone's records, so it is intentionally NOT used here.)
+ * load out of EVERYONE's records — dispatcher, billing, settlements — so it is
+ * intentionally NOT used by either action here.)
  *
  * Storage is keyed by driver so a shared cab phone never applies one driver's
  * hidden list to another's history. Each entry keeps a small snapshot of the
@@ -39,10 +49,23 @@ const idOf = (x) => (x == null ? '' : String(x));
 
 /* Pure: is this entry still inside its restore window? A missing hiddenAt
    (hand-edited or pre-window storage) counts as expired — fail closed, so a
-   load the driver deleted never quietly resurfaces as restorable. */
+   load the driver deleted never quietly resurfaces as restorable.
+   An explicit delete is never restorable, however recent it is. */
 export function isRestorable(entry, now = Date.now()) {
-  return !!entry?.hiddenAt && now - entry.hiddenAt < RESTORE_WINDOW_MS;
+  if (!entry || entry.deleted) return false;
+  return !!entry.hiddenAt && now - entry.hiddenAt < RESTORE_WINDOW_MS;
 }
+
+/* The minimal form an entry ends up in once it can no longer be restored: the
+   id (so the load stays filtered out of history forever) and when it went, and
+   nothing else — the snapshot is wiped off the device. `deleted` has to ride
+   along, or compaction would strip the flag and make a permanent delete look
+   like a fresh hide on the next read. */
+const tombstoneOf = (e) => (e.deleted
+  ? { id: e.id, hiddenAt: e.hiddenAt, deleted: true }
+  : { id: e.id, hiddenAt: e.hiddenAt });
+
+const isTombstone = (e) => Object.keys(e).length <= (e.deleted ? 3 : 2);
 
 /* Pure: whole days left in the restore window, floored at 0. Drives the
    "restorable for N more days" line on the Hidden-loads screen. */
@@ -57,9 +80,9 @@ export function compact(list, now = Date.now()) {
   let changed = false;
   const out = list.map((e) => {
     if (isRestorable(e, now)) return e;
-    if (Object.keys(e).length <= 2) return e;   // already a bare tombstone
+    if (isTombstone(e)) return e;
     changed = true;
-    return { id: e.id, hiddenAt: e.hiddenAt };
+    return tombstoneOf(e);
   });
   return changed ? out : list;
 }
@@ -121,6 +144,20 @@ export async function hideLoad(driverId, load) {
   await write(driverId, list);
 }
 
+/* Delete on this driver's side, for good and straight away — no restore
+   window, no snapshot kept, never listed on the Hidden-loads screen.
+   Deliberately overwrites rather than skips an existing entry: deleting a load
+   that was merely hidden has to take away the restore it already had. */
+export async function deleteLoad(driverId, load) {
+  const id = idOf(load?.id);
+  if (!id) return;
+  const list = await read(driverId);
+  await write(driverId, [
+    ...list.filter((e) => e.id !== id),
+    { id, hiddenAt: Date.now(), deleted: true },
+  ]);
+}
+
 /* Bring one load back. A tombstone is past its window and can't be restored —
    guarded here as well as in the UI, so no caller can undo a permanent delete. */
 export async function unhideLoad(driverId, loadId) {
@@ -136,6 +173,19 @@ export async function unhideLoad(driverId, loadId) {
 export async function clearHidden(driverId) {
   const list = await read(driverId);
   await write(driverId, list.filter((e) => !isRestorable(e)));
+}
+
+/* "Delete all" — the mirror of clearHidden. Every entry the driver could still
+   have restored becomes a permanent tombstone instead; ones already past the
+   window are left exactly as they are. The original hiddenAt is kept rather
+   than stamped with now(), because it still records when the load actually
+   left the history. */
+export async function deleteAllHidden(driverId) {
+  const list = await read(driverId);
+  const now = Date.now();
+  await write(driverId, list.map((e) => (
+    isRestorable(e, now) ? { id: e.id, hiddenAt: e.hiddenAt, deleted: true } : e
+  )));
 }
 
 /* Pure: split a history list into what the driver sees and what they removed.

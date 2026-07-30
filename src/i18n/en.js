@@ -416,15 +416,19 @@ export const en = {
     loadCancelled: 'Load cancelled.',
     noPaperworkPhotos: 'No paperwork photos',
     loadPhotoA11y: 'Load photo',
-    // Long-press → focus mode → remove a load from this driver's own history
-    longPressRemoveA11y: 'Press and hold to remove this load from your history',
+    // Long-press → focus mode → hide (reversible) or delete (permanent) a load
+    // from this driver's own history
+    longPressRemoveA11y: 'Press and hold to hide or delete this load from your history',
     closeFocusA11y: 'Close and keep this load',
-    deleteFromHistory: 'Delete from history',
-    deleteHint: 'Removes it from your history on this phone only. Your pay and your dispatcher’s records don’t change.',
-    deleteConfirmTitle: 'Delete this load?',
-    deleteConfirmBody: 'It disappears from your load history. You have 3 weeks to bring it back from More › Hidden loads — after that it’s gone for good.',
+    hideFromHistory: 'Hide from history',
+    hideHint: 'Goes to More › Hidden loads. Bring it back any time in the next 3 weeks.',
+    deleteFromHistory: 'Delete permanently',
+    deleteHint: 'Gone from this phone for good — it can’t be restored. Your pay and your dispatcher’s records don’t change.',
+    deleteConfirmTitle: 'Delete this load for good?',
+    deleteConfirmBody: 'It’s removed from your history on this phone and can’t be brought back — not even from Hidden loads. Hide it instead if you might want it later. Your pay and your dispatcher’s records don’t change.',
     keepLoad: 'Keep it',
-    removedFromHistory: 'Removed from history',
+    removedFromHistory: 'Hidden from history',
+    deletedFromHistory: 'Deleted from your history',
     historyAllHiddenRestore: 'Every load in your history is hidden. Restore them from More › Hidden loads.',
     historyAllHidden: 'Every load in your history is hidden.',
     hiddenCount: '{count} hidden',
@@ -475,13 +479,16 @@ export const en = {
 
   hiddenLoads: {
     title: 'Hidden loads',
-    blurb: 'Loads you removed from your Pay history. They’re only hidden on this phone — your dispatcher, your pay and your settlements are unchanged. You can restore one for 3 weeks after removing it; after that it’s permanent.',
-    empty: 'Nothing to restore. Press and hold a load in your Pay history to remove it from the list.',
+    blurb: 'Loads you hid from your Pay history. They’re only hidden on this phone — your dispatcher, your pay and your settlements are unchanged. You can restore one for 3 weeks after hiding it; after that it’s permanent. Delete removes it for good straight away.',
+    empty: 'Nothing to restore. Press and hold a load in your Pay history to hide it from the list.',
     daysLeft: 'Restorable for {days} more days',
     lastDay: 'Last day to restore',
     restore: 'Restore',
     restoreAll: 'Restore all',
     restoreA11y: 'Restore {origin} to {destination} to your history',
+    deleteA11y: 'Delete {origin} to {destination} permanently',
+    deleteAll: 'Delete all',
+    deleteAllA11y: 'Delete all {count} hidden loads permanently',
   },
 
   documents: {

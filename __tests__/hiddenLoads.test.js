@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  getHidden, getHiddenIds, getHiddenState, hideLoad, unhideLoad, clearHidden,
+  getHidden, getHiddenIds, getHiddenState, hideLoad, deleteLoad, unhideLoad, clearHidden, deleteAllHidden,
   filterHidden, hydrateHidden, isRestorable, daysLeft, compact, RESTORE_WINDOW_MS,
 } from '../src/lib/hiddenLoads';
 
@@ -173,5 +173,106 @@ describe('hydrateHidden', () => {
     const entries = [{ id: 'L9', hiddenAt: 5, origin: 'Reno, NV', destination: 'Boise, ID' }];
     const out = hydrateHidden(entries, []);
     expect(out[0]).toMatchObject({ id: 'L9', origin: 'Reno, NV', destination: 'Boise, ID' });
+  });
+});
+
+describe('deleteLoad — permanent on the driver side', () => {
+  test('filters the load out of history like a hide does', async () => {
+    await deleteLoad(D, load('L1'));
+    expect((await getHiddenIds(D)).has('L1')).toBe(true);
+    expect(filterHidden([load('L1'), load('L2')], await getHiddenIds(D)))
+      .toEqual([expect.objectContaining({ id: 'L2' })]);
+  });
+
+  test('never appears on the Hidden-loads screen, however recent', async () => {
+    await deleteLoad(D, load('L1'));
+    expect(await getHidden(D)).toEqual([]);
+    expect((await getHiddenState(D)).restorable).toBe(0);
+  });
+
+  test('cannot be restored', async () => {
+    await deleteLoad(D, load('L1'));
+    expect(await unhideLoad(D, 'L1')).toBe(false);
+    expect((await getHiddenIds(D)).has('L1')).toBe(true);
+  });
+
+  test('"restore all" leaves it deleted', async () => {
+    await hideLoad(D, load('L1'));
+    await deleteLoad(D, load('L2'));
+    await clearHidden(D);
+    const ids = await getHiddenIds(D);
+    expect(ids.has('L1')).toBe(false);   // the hidden one came back
+    expect(ids.has('L2')).toBe(true);    // the deleted one did not
+  });
+
+  test('stores no snapshot of the load', async () => {
+    await deleteLoad(D, load('L1'));
+    const raw = JSON.parse(await AsyncStorage.getItem(`hl_hidden_loads_${D}`));
+    expect(raw).toEqual([{ id: 'L1', hiddenAt: expect.any(Number), deleted: true }]);
+  });
+
+  test('deleting an already-hidden load takes away its restore', async () => {
+    await hideLoad(D, load('L1'));
+    expect((await getHidden(D)).length).toBe(1);
+    await deleteLoad(D, load('L1'));
+    expect(await getHidden(D)).toEqual([]);
+    expect(await unhideLoad(D, 'L1')).toBe(false);
+    expect((await getHiddenIds(D)).size).toBe(1);   // not duplicated
+  });
+
+  test('compaction keeps the deleted flag, so it never looks like a fresh hide', async () => {
+    await deleteLoad(D, load('L1'));
+    await backdate('L1', RESTORE_WINDOW_MS + DAY);
+    await getHiddenIds(D);   // triggers a compacting read + write
+    const raw = JSON.parse(await AsyncStorage.getItem(`hl_hidden_loads_${D}`));
+    expect(raw[0].deleted).toBe(true);
+    expect(isRestorable(raw[0])).toBe(false);
+  });
+
+  test('compact() does not rewrite an already-minimal deleted tombstone', () => {
+    const list = [{ id: 'L1', hiddenAt: 1, deleted: true }];
+    expect(compact(list, Date.now())).toBe(list);   // same reference — no pointless write
+  });
+
+  test('a deleted entry is never restorable and has no days left', () => {
+    const fresh = { id: 'L1', hiddenAt: Date.now(), deleted: true };
+    expect(isRestorable(fresh)).toBe(false);
+    expect(daysLeft(fresh)).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('deleteAllHidden', () => {
+  test('turns every restorable entry into a permanent one', async () => {
+    await hideLoad(D, load('L1'));
+    await hideLoad(D, load('L2'));
+    await deleteAllHidden(D);
+    expect(await getHidden(D)).toEqual([]);
+    const ids = await getHiddenIds(D);
+    expect(ids).toEqual(new Set(['L1', 'L2']));      // still filtered out of history
+    expect(await unhideLoad(D, 'L1')).toBe(false);   // and unrecoverable
+    expect(await unhideLoad(D, 'L2')).toBe(false);
+  });
+
+  test('wipes the snapshots but keeps when each load left the history', async () => {
+    await hideLoad(D, load('L1'));
+    const [before] = JSON.parse(await AsyncStorage.getItem(`hl_hidden_loads_${D}`));
+    await deleteAllHidden(D);
+    const [after] = JSON.parse(await AsyncStorage.getItem(`hl_hidden_loads_${D}`));
+    expect(after).toEqual({ id: 'L1', hiddenAt: before.hiddenAt, deleted: true });
+  });
+
+  test('leaves entries already past the window untouched', async () => {
+    await hideLoad(D, load('L1'));
+    await backdate('L1', RESTORE_WINDOW_MS + DAY);
+    await getHiddenIds(D);   // compact it to a plain tombstone first
+    await deleteAllHidden(D);
+    const [stored] = JSON.parse(await AsyncStorage.getItem(`hl_hidden_loads_${D}`));
+    expect(stored.deleted).toBeUndefined();
+    expect((await getHiddenIds(D)).has('L1')).toBe(true);
+  });
+
+  test('is a no-op on an empty list', async () => {
+    await deleteAllHidden(D);
+    expect((await getHiddenIds(D)).size).toBe(0);
   });
 });

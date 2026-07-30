@@ -11,8 +11,12 @@ import { space, type, radius, FONT } from '../../theme/tokens';
 /* A safety net after an irreversible-feeling action: confirm the change AND
    give a few seconds to take it back. Slides up above the tab bar, auto-hides
    after `duration`. Frosted glass so it reads as a transient overlay, not a
-   working surface. */
-export default function UndoToast({ visible, message, onUndo, onHide, duration = 5000 }) {
+   working surface.
+
+   Omit `onUndo` and the undo button isn't rendered — the toast then just
+   confirms what happened. Genuinely irreversible actions have to take that
+   path: offering an Undo that can't undo anything is worse than no toast. */
+export default function UndoToast({ visible, message, onUndo, onHide, duration = 5000, icon = 'check-circle', iconColor }) {
   const { colors } = useTheme();
   const t = useT();
   const insets = useSafeAreaInsets();
@@ -41,18 +45,20 @@ export default function UndoToast({ visible, message, onUndo, onHide, duration =
       style={[styles.wrap, { bottom: insets.bottom + 88, transform: [{ translateY: ty }] }]}
     >
       <GlassView radius={radius.xl} style={styles.toast}>
-        <Icon name="check-circle" size={18} color={colors.go} />
+        <Icon name={icon} size={18} color={iconColor ?? colors.go} />
         <Text style={[styles.msg, { color: colors.textPrimary }]} numberOfLines={1}>{message}</Text>
-        <Pressable
-          onPress={() => { haptics.tap(); onUndo?.(); }}
-          hitSlop={12}
-          style={styles.undoBtn}
-          accessibilityRole="button"
-          accessibilityLabel={t('ui.undoA11y')}
-        >
-          <Icon name="rotate-ccw" size={15} color={colors.teal} />
-          <Text style={[styles.undoText, { color: colors.teal }]}>{t('ui.undo')}</Text>
-        </Pressable>
+        {onUndo ? (
+          <Pressable
+            onPress={() => { haptics.tap(); onUndo(); }}
+            hitSlop={12}
+            style={styles.undoBtn}
+            accessibilityRole="button"
+            accessibilityLabel={t('ui.undoA11y')}
+          >
+            <Icon name="rotate-ccw" size={15} color={colors.teal} />
+            <Text style={[styles.undoText, { color: colors.teal }]}>{t('ui.undo')}</Text>
+          </Pressable>
+        ) : null}
       </GlassView>
     </Animated.View>
   );

@@ -15,14 +15,21 @@ import { space, type, radius, FONT, shadow, tap, toneOf, glassFor, motion } from
  *
  * Everything behind is blurred and dimmed; the pressed load lifts out of the
  * list — bigger type, its own shadow — so there is no doubt about WHICH load
- * is about to be removed. Delete is a two-step: the button arms a confirm
- * block in place, which is why this isn't Alert.alert (an Alert can't render
- * the card it's talking about, and RN-web has no Alert at all).
+ * is about to go.
+ *
+ * TWO ACTIONS, RANKED BY CONSEQUENCE. Hide is reversible and therefore the
+ * quiet default: one tap, undo toast, restorable for three weeks. Delete is
+ * permanent on this driver's side, so it sits below as a plain danger-tinted
+ * link and takes a second tap — the button arms a confirm block in place,
+ * which is why this isn't Alert.alert (an Alert can't render the card it's
+ * talking about, and RN-web has no Alert at all). The confirm copy names Hide
+ * as the alternative, because reaching for Delete when you meant Hide is the
+ * mistake worth catching.
  *
  * Tapping the backdrop dismisses — except while the confirm is armed, where
  * an accidental outside tap should not be the thing that resolves it.
  */
-export default function HistoryFocusOverlay({ load, when, miles, unit, onClose, onDelete }) {
+export default function HistoryFocusOverlay({ load, when, miles, unit, onClose, onHide, onDelete }) {
   const { colors } = useTheme();
   const t = useT();
   const reduce = useReduceMotion();
@@ -50,10 +57,18 @@ export default function HistoryFocusOverlay({ load, when, miles, unit, onClose, 
 
   const arm = () => { haptics.warning(); setConfirming(true); };
 
-  const confirm = async () => {
+  const hide = async () => {
     if (busy) return;
     setBusy(true);
     haptics.success();
+    await onHide?.();
+  };
+
+  const confirm = async () => {
+    if (busy) return;
+    setBusy(true);
+    // Not haptics.success — nothing good happened, something irreversible did.
+    haptics.warning();
     await onDelete?.();
   };
 
@@ -158,20 +173,46 @@ export default function HistoryFocusOverlay({ load, when, miles, unit, onClose, 
             </View>
           ) : (
             <View style={styles.actions}>
+              {/* Hide leads: it's the reversible one, so it gets the full-size
+                  primary treatment and Delete gets the quieter, riskier slot. */}
+              <Pressable
+                onPress={hide}
+                disabled={busy}
+                style={({ pressed }) => [
+                  styles.hideBtn,
+                  {
+                    backgroundColor: colors.surface,
+                    borderColor: colors.borderStrong,
+                    opacity: busy ? 0.6 : 1,
+                    transform: [{ scale: pressed ? motion.press : 1 }],
+                  },
+                  shadow.float,
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={t('earnings.hideFromHistory')}
+              >
+                <Icon name="eye-off" size={20} color={colors.textPrimary} />
+                <Text style={[styles.hideText, { color: colors.textPrimary }]}>{t('earnings.hideFromHistory')}</Text>
+              </Pressable>
+              <Text style={[styles.hint, { color: colors.textSecondary }]}>{t('earnings.hideHint')}</Text>
+
+              <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
               <Pressable
                 onPress={arm}
+                disabled={busy}
                 style={({ pressed }) => [
                   styles.deleteBtn,
-                  { backgroundColor: danger.solid, transform: [{ scale: pressed ? motion.press : 1 }] },
-                  shadow.glow(danger.solid),
+                  { borderColor: danger.solid + '55', backgroundColor: danger.fill, opacity: pressed ? 0.85 : 1 },
                 ]}
                 accessibilityRole="button"
                 accessibilityLabel={t('earnings.deleteFromHistory')}
               >
-                <Icon name="trash-2" size={20} color={danger.ink} />
-                <Text style={[styles.deleteText, { color: danger.ink }]}>{t('earnings.deleteFromHistory')}</Text>
+                <Icon name="trash-2" size={18} color={danger.solid} />
+                <Text style={[styles.deleteText, { color: danger.solid }]}>{t('earnings.deleteFromHistory')}</Text>
               </Pressable>
               <Text style={[styles.hint, { color: colors.textSecondary }]}>{t('earnings.deleteHint')}</Text>
+
               <Pressable
                 onPress={onClose}
                 hitSlop={8}
@@ -209,11 +250,17 @@ const styles = StyleSheet.create({
   thumbMoreText: { color: '#FFFFFF', fontSize: 15, fontFamily: FONT.black },
 
   actions: { gap: space[3] },
-  deleteBtn: {
-    minHeight: tap.primary, borderRadius: radius.lg,
+  hideBtn: {
+    minHeight: tap.primary, borderRadius: radius.lg, borderWidth: 1,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: space[5],
   },
-  deleteText: { fontSize: 16, fontFamily: FONT.bold },
+  hideText: { fontSize: 16, fontFamily: FONT.bold },
+  divider: { height: 1, alignSelf: 'stretch', marginVertical: space[1] },
+  deleteBtn: {
+    minHeight: tap.secondary, borderRadius: radius.lg, borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: space[5],
+  },
+  deleteText: { fontSize: 15, fontFamily: FONT.bold },
   hint: { ...type.caption, textAlign: 'center', lineHeight: 19, paddingHorizontal: space[3] },
   cancelBtn: { minHeight: tap.icon, alignItems: 'center', justifyContent: 'center' },
   cancelText: { fontSize: 15, fontFamily: FONT.bold },

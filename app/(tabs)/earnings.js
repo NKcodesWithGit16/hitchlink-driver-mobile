@@ -16,7 +16,7 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { fetchEarnings, fetchLoadHistory } from '../../src/api/main';
-import { getHiddenState, hideLoad, unhideLoad, partitionHidden } from '../../src/lib/hiddenLoads';
+import { getHiddenState, hideLoad, deleteLoad, unhideLoad, partitionHidden } from '../../src/lib/hiddenLoads';
 import { adjustEarnings } from '../../src/lib/earningsAdjust';
 import { getStats, computeLoadStats } from '../../src/lib/odometer';
 import { money, distNum, distRpm } from '../../src/lib/format';
@@ -88,7 +88,7 @@ export default function EarningsScreen() {
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
   const [restorable, setRestorable] = useState(0);
   const [focus, setFocus] = useState(null);       // long-pressed load, in focus mode
-  const [undo, setUndo] = useState(null);         // { load } — the just-removed load
+  const [undo, setUndo] = useState(null);         // { load, permanent? } — the just-removed load
   const router = useRouter();
 
   // Open the per-load breakdown: pull any stored actual-miles record and merge
@@ -136,16 +136,28 @@ export default function EarningsScreen() {
   const { visible: visibleHistory, hidden: hiddenHistory } =
     useMemo(() => partitionHidden(history, hiddenIds), [history, hiddenIds]);
 
-  // Long-press → focus mode. Removing only writes the id to local storage and
-  // drops the card; the undo toast gives a few seconds to take it back.
+  // Long-press → focus mode, which offers both removals. Each only writes to
+  // local storage and drops the card — neither touches the server, so the pay
+  // figures above and the dispatcher's records are unaffected either way.
   const openFocus = useCallback((l) => { haptics.impact(); setFocus(l); }, []);
 
-  const removeFromHistory = useCallback(async (l) => {
+  // Reversible: goes to More › Hidden loads, and the undo toast gives a few
+  // seconds to take it back without going there.
+  const hideFromHistory = useCallback(async (l) => {
     await hideLoad(userId, l);
     setHiddenIds((prev) => new Set(prev).add(String(l.id)));
     setRestorable((n) => n + 1);
     setFocus(null);
     setUndo({ load: l });
+  }, [userId]);
+
+  // Permanent on this driver's side: never reaches the Hidden-loads screen, so
+  // `restorable` deliberately doesn't move, and the toast carries no undo.
+  const deleteFromHistory = useCallback(async (l) => {
+    await deleteLoad(userId, l);
+    setHiddenIds((prev) => new Set(prev).add(String(l.id)));
+    setFocus(null);
+    setUndo({ load: l, permanent: true });
   }, [userId]);
 
   const undoRemove = useCallback(async () => {
@@ -558,14 +570,18 @@ export default function EarningsScreen() {
           miles={milesLabel(focus, unit, t)}
           unit={unit}
           onClose={() => setFocus(null)}
-          onDelete={() => removeFromHistory(focus)}
+          onHide={() => hideFromHistory(focus)}
+          onDelete={() => deleteFromHistory(focus)}
         />
       ) : null}
 
       <UndoToast
         visible={!!undo}
-        message={t('earnings.removedFromHistory')}
-        onUndo={undoRemove}
+        message={t(undo?.permanent ? 'earnings.deletedFromHistory' : 'earnings.removedFromHistory')}
+        icon={undo?.permanent ? 'trash-2' : 'check-circle'}
+        iconColor={undo?.permanent ? colors.danger : undefined}
+        // No undo on the permanent one — there is nothing left to restore.
+        onUndo={undo?.permanent ? undefined : undoRemove}
         onHide={() => setUndo(null)}
       />
 
