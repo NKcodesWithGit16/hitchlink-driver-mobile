@@ -7,13 +7,29 @@
 // Self-contained and theme-driven — it takes `colors` and builds its own styles,
 // like the app's other overlays. `stats` comes from computeLoadStats (lib/loadStats).
 
-import { useMemo } from 'react';
-import { Modal, View, Text, Pressable, ScrollView, StyleSheet, Image } from 'react-native';
+import { useMemo, useRef } from 'react';
+import { Modal, View, Text, Pressable, ScrollView, StyleSheet, Image, Animated, PanResponder } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../ui/Icon';
+import haptics from '../../lib/haptics';
 import { money, num, signedNum, distNum, toDistance, distRpm, toRatePerDistance } from '../../lib/format';
 import { space, radius, type, FONT, toneOf } from '../../theme/tokens';
 import { useT } from '../../i18n/LanguageContext';
+
+// Drag-to-dismiss, on RN's own Animated + PanResponder — same reasoning as
+// PhotoViewer: gesture-handler/reanimated aren't in this project and adding a
+// native module for one sheet isn't worth an extra EAS build.
+//
+// Two independent ways to let go and have it close, because they're different
+// gestures: a slow deliberate pull past DISMISS_DISTANCE, or a quick flick
+// that never travels far but is clearly downward (DISMISS_VELOCITY, px/ms).
+// Distance alone makes a flick feel broken — the sheet snaps back under a
+// thumb that has already left the glass.
+const DISMISS_DISTANCE = 120;
+const DISMISS_VELOCITY = 0.7;
+// Upward drag is rubber-banded rather than free: the sheet is already at its
+// full height, so there is nothing above it to pull into view.
+const RUBBER_BAND = 0.18;
 
 // Tolerant date label: handles both 'YYYY-MM-DD' (mock) and a full ISO
 // timestamp (live /history), never renders a raw string.
@@ -33,6 +49,58 @@ export default function LoadDetailSheet({ load, stats, colors, unit = 'mi', onCl
   const insets = useSafeAreaInsets();
   const t = useT();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+
+  const dragY = useRef(new Animated.Value(0)).current;
+  // Whether the drag has already crossed the close threshold, so the "you can
+  // let go now" tick fires once per crossing instead of on every frame past it.
+  const armed = useRef(false);
+
+  // The scrim thins out as the sheet is pulled down, so the drag reads as
+  // dismissing rather than as the sheet sliding around behind a fixed dim.
+  const scrim = dragY.interpolate({ inputRange: [0, 320], outputRange: [1, 0.25], extrapolate: 'clamp' });
+
+  const pan = useMemo(() => {
+    const settle = () => {
+      armed.current = false;
+      Animated.spring(dragY, { toValue: 0, useNativeDriver: true, bounciness: 4 }).start();
+    };
+
+    return PanResponder.create({
+      // Claimed on contact, in both phases — see the band's comment in the JSX.
+      onStartShouldSetPanResponderCapture: () => true,
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => { armed.current = false; },
+
+      onPanResponderMove: (_e, g) => {
+        const y = g.dy < 0 ? g.dy * RUBBER_BAND : g.dy;
+        dragY.setValue(y);
+        const past = y > DISMISS_DISTANCE;
+        if (past !== armed.current) {
+          armed.current = past;
+          if (past) haptics.tap();
+        }
+      },
+
+      onPanResponderRelease: (_e, g) => {
+        if (g.dy > DISMISS_DISTANCE || (g.dy > 0 && g.vy > DISMISS_VELOCITY)) {
+          // Let the Modal's own slide-out finish the exit from wherever the
+          // drag left the sheet — animating it away first and then dismissing
+          // plays the same movement twice.
+          onClose?.();
+          return;
+        }
+        settle();
+      },
+
+      // Once the pull starts it stays ours; nothing above should be able to
+      // yank it away mid-drag and strand the sheet half-way down.
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderTerminate: settle,
+    });
+  }, [dragY, onClose]);
+
   if (!load) return null;
 
   const s = stats || {};
@@ -53,10 +121,22 @@ export default function LoadDetailSheet({ load, stats, colors, unit = 'mi', onCl
   return (
     <Modal visible transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
       <View style={styles.overlay}>
+        <Animated.View style={[StyleSheet.absoluteFill, styles.scrim, { opacity: scrim }]} />
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel={t('loadDetail.closeA11y')} />
 
-        <View style={[styles.sheet, { paddingBottom: insets.bottom + space[5] }]}>
-          <View style={styles.grabber} />
+        <Animated.View style={[styles.sheet, { paddingBottom: insets.bottom + space[5], transform: [{ translateY: dragY }] }]}>
+          {/* Grab band. It takes the touch on contact rather than waiting to
+              see a drag, because the move-phase negotiation never reaches a
+              view that let the touch-down pass — the sheet sat dead until this
+              claimed on start. That's also why the band stops here instead of
+              wrapping the header: anything inside it can no longer be tapped,
+              and the close button has to stay tappable.
+              collapsable={false}: a View carrying nothing but responder props
+              is what Android's view flattening removes, leaving no native
+              target to receive the touch at all. */}
+          <View {...pan.panHandlers} collapsable={false} style={styles.handle}>
+            <View style={styles.grabber} />
+          </View>
 
           {/* ── Header ── */}
           <View style={styles.header}>
@@ -217,7 +297,7 @@ export default function LoadDetailSheet({ load, stats, colors, unit = 'mi', onCl
               </View>
             ) : null}
           </ScrollView>
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );
@@ -253,13 +333,20 @@ function Chip({ styles, label }) {
 }
 
 const makeStyles = (c) => StyleSheet.create({
-  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: c.overlay },
+  // The dim is its own layer, not the overlay's background, so it can fade
+  // with the drag while the overlay stays the (transparent) flex container.
+  overlay: { flex: 1, justifyContent: 'flex-end' },
+  scrim: { backgroundColor: c.overlay },
   sheet: {
     backgroundColor: c.surface, borderTopLeftRadius: radius['2xl'], borderTopRightRadius: radius['2xl'],
     paddingHorizontal: space[5], paddingTop: space[2], maxHeight: '92%',
     borderTopWidth: 1, borderColor: c.border,
   },
-  grabber: { width: 40, height: 5, borderRadius: 3, backgroundColor: c.borderStrong, alignSelf: 'center', marginBottom: space[3] },
+  // The band is what the thumb actually has to hit, so it's padded out to a
+  // real target rather than the 5px the grabber itself occupies, and pulled up
+  // into the sheet's top padding so there's no dead strip above it to miss into.
+  handle: { marginTop: -space[2], paddingTop: space[3], paddingBottom: space[2] },
+  grabber: { width: 40, height: 5, borderRadius: 3, backgroundColor: c.borderStrong, alignSelf: 'center' },
 
   header: { flexDirection: 'row', alignItems: 'flex-start', gap: space[3] },
   route: { ...type.title, color: c.textPrimary },
