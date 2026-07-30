@@ -175,6 +175,12 @@ export default function EarningsScreen() {
   const dedPct  = d ? d.deductions / wfTotal : 0;
   const bestBar = d ? d.bars.reduce((a, b) => (b.v > a.v ? b : a), d.bars[0]) : null;
   const avgLoad = d && d.loads ? Math.round(d.net / d.loads) : 0;
+  // Take-home per ACTIVE bar, and the bars are days in the week view and weeks in
+  // the month view — so one division serves both and the label follows `range`.
+  // Averaging over bars that earned nothing would quietly punish a driver for
+  // taking a day off, which is the opposite of what this figure is for.
+  const activeBars = d ? d.bars.filter((b) => b.v > 0).length : 0;
+  const avgPerBar  = activeBars ? Math.round(d.net / activeBars) : 0;
 
   // Two mileage figures now: what the loads were QUOTED at (nullable — a
   // dispatcher can book without knowing the mileage) and what the truck
@@ -193,9 +199,6 @@ export default function EarningsScreen() {
   // dividing by rateMiles keeps all three mileage figures on one denominator.)
   const netRpm   = rateMiles ? d.net / rateMiles : 0;
   const grossRpm = rateMiles ? d.gross / rateMiles : 0;
-  // Fuel per mile. `fuelGal` is still hardcoded to 0 by the backend, so the card
-  // shows the COST (which is real) rather than invented gallons.
-  const fuelRpm  = rateMiles ? d.fuelCost / rateMiles : 0;
 
   // The measured distance split the way a driver thinks about it. Deadhead is
   // the empty running to a pickup — unpaid miles, so the percentage matters more
@@ -381,15 +384,18 @@ export default function EarningsScreen() {
               <FadeInView delay={200}>
                 <View style={styles.grid}>
                   <StatCard icon="repeat" label={t('earnings.loadsCompleted')} value={String(d.loads)} accent={colors.teal} colors={colors} styles={styles} />
-                  {/* Fuel COST, not gallons: the backend's fuelGal has no data
-                      source and is hardcoded to 0, so this card spent its life
-                      telling drivers they burned "0 gal". The cost is real. */}
+                  {/* Take-home per day worked — the number a driver uses to decide
+                      whether to take one more load. Sits here instead of a fuel
+                      card, which showed gallons the backend hardcodes to 0 and a
+                      cost only a dispatcher can enter and no screen can enter yet.
+                      Fuel is still in the breakdown below, where a real figure
+                      will appear on its own once anything populates it. */}
                   <StatCard
-                    icon="droplet"
-                    label={t('earnings.fuel')}
-                    value={money(d.fuelCost)}
-                    sub={rateMiles ? t('earnings.perDistanceSub', { amount: `$${distRpm(fuelRpm, unit)}`, unit: unit === 'km' ? t('earnings.unitKm') : t('earnings.unitMi') }) : null}
-                    accent={colors.caution} colors={colors} styles={styles}
+                    icon="calendar"
+                    label={t(range === 'month' ? 'earnings.avgPerWeek' : 'earnings.avgPerDay')}
+                    value={activeBars ? money(avgPerBar) : '—'}
+                    sub={activeBars ? t(range === 'month' ? 'earnings.weeksWorked' : 'earnings.daysWorked', { n: activeBars }) : null}
+                    accent={colors.teal} colors={colors} styles={styles}
                   />
                 </View>
               </FadeInView>

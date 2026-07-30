@@ -380,11 +380,12 @@ export const en = {
     revenuePerMile: 'Revenue / mile',
     revenuePerKm: 'Revenue / km',
     netSub: 'net {amount}',
-    // Cost, not gallons — the backend has no fuel-volume source (always 0).
-    fuel: 'Fuel',
-    perDistanceSub: '{amount} / {unit}',
-    unitMi: 'mi',
-    unitKm: 'km',
+    // Take-home per active bar. The bars are days in the week view and weeks in
+    // the month view, so the same figure needs both labels.
+    avgPerDay: 'Avg / day',
+    avgPerWeek: 'Avg / week',
+    daysWorked: '{n} days worked',
+    weeksWorked: '{n} weeks worked',
     whereItWent: 'Where it went',
     legendNet: 'Net {pct}%',
     legendFuel: 'Fuel {pct}%',
