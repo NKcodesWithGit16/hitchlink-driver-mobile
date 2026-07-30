@@ -19,6 +19,8 @@
  *     different week for us than for the server.
  *   · Net/fuel/deductions shrink by the load's gross share rather than by its
  *     own settlement lines, so a load with unusual deductions is approximated.
+ *     The MILEAGE figures are exempt — planned, deadhead and loaded all come off
+ *     exactly, because history carries each of them per load.
  *   · Windows are computed in device-local time; the backend uses UTC.
  *   · Cancelled loads are skipped entirely — they never produced a settlement,
  *     so hiding one must not move any money.
@@ -130,12 +132,24 @@ export function adjustEarnings(period, hidden, { range = 'week', now = new Date(
     bars = bars.map((b) => (b.v > 0 ? { ...b, v: round2(b.v * f) } : b));
   }
 
-  // Both mileage figures come off exactly: planned (what the loads were quoted
-  // at) and actual (what the GPS measured). A hidden load has to leave both.
+  // Every mileage figure comes off EXACTLY — each hidden load knows its own
+  // planned, deadhead and loaded miles, so none of these needs the proportional
+  // estimate the money figures use.
   const miles = Math.max(0, round2((Number(period.miles) || 0) - sum(out, (l) => l.miles)));
-  const actualMiles = Math.max(0, round2(
-    (Number(period.actualMiles) || 0) - sum(out, (l) => l.actualMiles ?? l.drivenMiles),
-  ));
+  // The Pay tab shows deadhead, loaded and driven side by side and they have to
+  // add up, so when the split is present, derive the total from its two halves
+  // rather than subtracting a third figure independently. Absent the split (a
+  // backend without DeadheadMiles/LoadedMiles), fall back to the old subtraction.
+  const hasSplit = Number.isFinite(period.deadheadMiles) && Number.isFinite(period.loadedMiles);
+  const deadheadMiles = hasSplit
+    ? Math.max(0, round2(period.deadheadMiles - sum(out, (l) => l.deadheadMiles)))
+    : period.deadheadMiles;
+  const loadedMiles = hasSplit
+    ? Math.max(0, round2(period.loadedMiles - sum(out, (l) => l.loadedMiles)))
+    : period.loadedMiles;
+  const actualMiles = hasSplit
+    ? round2(deadheadMiles + loadedMiles)
+    : Math.max(0, round2((Number(period.actualMiles) || 0) - sum(out, (l) => l.actualMiles ?? l.drivenMiles)));
 
   return {
     ...period,
@@ -145,6 +159,8 @@ export function adjustEarnings(period, hidden, { range = 'week', now = new Date(
     deductions: round2((Number(period.deductions) || 0) * keep),
     fuelGal:    round2((Number(period.fuelGal) || 0) * keep),
     miles,
+    deadheadMiles,
+    loadedMiles,
     actualMiles,
     loads:      Math.max(0, (Number(period.loads) || 0) - out.length),
     rpm:        miles > 0 ? round2(adjGross / miles) : 0,

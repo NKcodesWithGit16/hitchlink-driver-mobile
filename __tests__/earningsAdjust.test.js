@@ -68,6 +68,43 @@ describe('adjustEarnings', () => {
     expect(out.miles).toBe(1500);
   });
 
+  // The Pay tab prints deadhead, loaded and driven next to each other, so the
+  // invariant the driver can SEE is that the first two sum to the third. Hiding
+  // a load must not break it.
+  test('the deadhead/loaded split comes off exactly and still sums to driven', () => {
+    const p = period({ deadheadMiles: 300, loadedMiles: 1900, actualMiles: 2200 });
+    const out = adjustEarnings(p, [hidden(15, { deadheadMiles: 70, loadedMiles: 460 })], opts);
+    expect(out.deadheadMiles).toBe(230);
+    expect(out.loadedMiles).toBe(1440);
+    expect(out.actualMiles).toBe(1670);
+    expect(out.deadheadMiles + out.loadedMiles).toBe(out.actualMiles);
+  });
+
+  test('driven is derived from the split, so it cannot drift from its own halves', () => {
+    // actualMiles arrives disagreeing with its parts; the split is authoritative.
+    const p = period({ deadheadMiles: 300, loadedMiles: 1900, actualMiles: 9999 });
+    const out = adjustEarnings(p, [hidden(15, { deadheadMiles: 70, loadedMiles: 460 })], opts);
+    expect(out.actualMiles).toBe(1670);
+  });
+
+  test('a hidden load with no split leaves both halves whole', () => {
+    const p = period({ deadheadMiles: 300, loadedMiles: 1900, actualMiles: 2200 });
+    const out = adjustEarnings(p, [hidden(15)], opts);   // no deadhead/loaded on the load
+    expect(out.deadheadMiles).toBe(300);
+    expect(out.loadedMiles).toBe(1900);
+    expect(out.actualMiles).toBe(2200);
+  });
+
+  // A backend that predates the split sends neither field; the adjustment must
+  // not invent zeros, or the chips would read "0 empty miles" instead of "—".
+  test('a period without the split keeps it absent', () => {
+    const p = period({ actualMiles: 2200 });
+    const out = adjustEarnings(p, [hidden(15, { actualMiles: 530 })], opts);
+    expect(out.deadheadMiles).toBeUndefined();
+    expect(out.loadedMiles).toBeUndefined();
+    expect(out.actualMiles).toBe(1670);
+  });
+
   test('the day bar loses the load net, and only that day', () => {
     const out = adjustEarnings(period(), [hidden(15)], opts); // Wed, net/gross = 0.75
     expect(out.bars[2]).toEqual({ d: 'Wed', v: 150 });        // 900 − 1000 × 0.75
