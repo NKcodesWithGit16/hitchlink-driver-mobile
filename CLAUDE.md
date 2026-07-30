@@ -79,6 +79,22 @@ Sending force-pins regardless. Entering the tab **always** drops to the newest m
 `useFocusEffect`, not a mount effect, because the tab stays mounted and restoring the old scroll offset
 after a tab switch was reported as a bug: opening a chat means "show me the latest".
 
+Two details make that hold on a **cold start**, where the symptom was "chat opens part-way up the thread,
+but switching tabs and back fixes it":
+
+- **The `SETTLE_MS` window is armed when content arrives, not when the tab gains focus.** During it, every
+  content-size change pins unconditionally and un-animated. Focus-first means the window is spent on an
+  empty list — history is still in flight behind auth, the socket and the active-load fetch — so the thread
+  is already "settled" by the time it has rows, and only gets the conditional, animated pin. A second visit
+  worked only because the rows were measured by then.
+- **Every programmatic scroll goes through `scrollToEnd()`, which flags itself for `AUTO_SCROLL_GRACE_MS`.**
+  RN gives an animated `scrollToEnd` the same `onScroll` events as a finger drag, and its intermediate frames
+  all read as "not at the bottom" — so the scroll *unpinned the very thing it was called to pin*, and no
+  later content-size change would follow. `onScroll` therefore ignores scrolls inside that window;
+  `onScrollBeginDrag` clears the flag, because a real finger outranks an in-flight auto-scroll. Photo bubbles
+  resolve their height from a network `Image.getSize`, well after settling, so this is what lets a thread
+  ending in photos still finish at the bottom.
+
 All three resolve the hub's JWT via `accessTokenFactory: () => getValidToken()` (`src/lib/session.js`), so
 a reconnect after token expiry re-authenticates automatically rather than failing. On `onreconnected`, the
 chat/load hooks re-join their room and force a re-fetch to catch anything missed while the socket was down

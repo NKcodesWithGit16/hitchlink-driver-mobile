@@ -63,6 +63,11 @@ const BOTTOM_PIN_SLOP = 120;
 // as the driver's own. FlatList measures rows in batches, so the real bottom
 // moves several times after the first paint.
 const SETTLE_MS = 800;
+// How long after we ask for an animated scroll the resulting scroll events are
+// still ours rather than the driver's. RN reports no difference between the two,
+// and scrollToEnd's animation runs ~250-300ms; anything inside this window is
+// discounted. See scrollToEnd / onScroll.
+const AUTO_SCROLL_GRACE_MS = 450;
 // Cap on one album. The backend takes any number of attachments, but each is
 // uploaded on cab wifi or LTE and they all have to land before the message
 // posts, so this keeps a fat-fingered "select all" from stalling the thread.
@@ -147,15 +152,47 @@ export default function MessagesScreen() {
   const [docSaveAsset, setDocSaveAsset] = useState(null);
   const scrollRef   = useRef(null);
   // Bottom-pinning state — see the "Keeping the newest message in view" block
-  // below. Declared up here with the other refs because the keyboard listeners
-  // (which run before that block in source order) read them too.
+  // below. Declared up here, along with the two helpers that drive it, because
+  // the keyboard listeners (which run before that block in source order) scroll
+  // the thread too and have to go through the same path.
   const atBottomRef = useRef(true);   // driver is parked on the newest message
   const settledRef  = useRef(false);  // first paint finished laying itself out
+  const settleTimerRef = useRef(null);
+  const autoScrollingRef = useRef(false); // a scroll WE asked for is in flight
+  const autoScrollTimerRef = useRef(null);
   const kbPad       = useRef(new Animated.Value(0)).current; // live keyboard height → wrapper padding
   const seenIdsRef  = useRef(new Set());    // dispatcher-message ids already dinged/accounted for
   const firstLoadRef = useRef(true);        // skip the sound on the initial history fetch
   const isTypingRef  = useRef(false);       // have we told the dispatcher "typing" without a "stopped" yet
   const typingTimeoutRef = useRef(null);    // auto-sends "stopped typing" after a pause
+
+  // Every programmatic scroll goes through here so the scroll events it
+  // generates can be told apart from a driver's drag. Without that, an animated
+  // scrollToEnd unpins the very thing it was called to pin: the frames on the
+  // way down all report "not at the bottom", onScroll believes them, and the
+  // next content-size change declines to follow.
+  const scrollToEnd = useCallback((animated = true) => {
+    autoScrollingRef.current = true;
+    if (autoScrollTimerRef.current) clearTimeout(autoScrollTimerRef.current);
+    autoScrollTimerRef.current = setTimeout(
+      () => { autoScrollingRef.current = false; },
+      animated ? AUTO_SCROLL_GRACE_MS : 120,
+    );
+    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated }));
+  }, []);
+
+  // (Re)starts the settle window — the period during which the thread is still
+  // measuring itself and every content-size change pins unconditionally.
+  const armSettle = useCallback(() => {
+    settledRef.current = false;
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    settleTimerRef.current = setTimeout(() => { settledRef.current = true; }, SETTLE_MS);
+  }, []);
+
+  useEffect(() => () => {
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    if (autoScrollTimerRef.current) clearTimeout(autoScrollTimerRef.current);
+  }, []);
 
   // Keyboard tracking drives two things: (1) kbOpen collapses the composer's
   // own bottom padding (the floating tab island is hidden behind the keyboard,
@@ -187,9 +224,7 @@ export default function MessagesScreen() {
       // Follow the keyboard down to the newest message only if that's where
       // the driver already was. Scrolled up re-reading something, tapping the
       // composer must not throw away their place.
-      if (atBottomRef.current) {
-        requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
-      }
+      if (atBottomRef.current) scrollToEnd(true);
     });
     const h = Keyboard.addListener(hideEvt, (e) => {
       setKbOpen(false);
@@ -203,7 +238,7 @@ export default function MessagesScreen() {
       }).start();
     });
     return () => { s.remove(); h.remove(); };
-  }, [kbPad]);
+  }, [kbPad, scrollToEnd]);
 
   // dispatcher info comes from the driver profile loaded in AuthContext
   const dispatcher = user?.dispatcher;
@@ -299,10 +334,6 @@ export default function MessagesScreen() {
   // Stop signaling "typing" if the driver navigates away mid-composition.
   useEffect(() => () => stopTypingSignal(), [stopTypingSignal]);
 
-  const scrollToEnd = useCallback((animated = true) => {
-    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated }));
-  }, []);
-
   // ── Keeping the newest message in view ──────────────────────────────────
   // A messenger opens on the newest message and stays there. Auto-scrolling
   // only when the message COUNT rose (what this did before) missed both of the
@@ -339,15 +370,33 @@ export default function MessagesScreen() {
   useFocusEffect(
     useCallback(() => {
       atBottomRef.current = true;
-      settledRef.current = false;
+      armSettle();
       scrollToEnd(false);
-      const id = setTimeout(() => { settledRef.current = true; }, SETTLE_MS);
-      return () => clearTimeout(id);
-    }, [scrollToEnd]),
+    }, [armSettle, scrollToEnd]),
   );
 
+  // …and the settle window has to be measured from when there is something to
+  // lay out, not from when the tab gained focus. Opening chat as the very first
+  // screen after a cold start (or a Metro bundle) meant the whole 800ms was
+  // spent on an EMPTY list: history is still in flight behind auth, the socket
+  // and the active-load fetch. By the time the messages landed the thread had
+  // already declared itself settled, so the one scroll it got was the animated,
+  // conditional kind, aimed at the bottom of the first measured batch — leaving
+  // the driver part-way up. Switching tabs and back worked only because the
+  // rows were measured by then, which is exactly the asymmetry to remove.
+  const hasContentRef = useRef(false);
+  useEffect(() => {
+    if (items.length === 0) { hasContentRef.current = false; return; }
+    if (hasContentRef.current) return;   // only the 0 → n transition
+    hasContentRef.current = true;
+    atBottomRef.current = true;
+    armSettle();
+    scrollToEnd(false);
+  }, [items.length, armSettle, scrollToEnd]);
+
   const onScroll = useCallback((e) => {
-    if (!settledRef.current) return; // our own settling scrolls, not the driver
+    if (!settledRef.current) return;      // our own settling scrolls, not the driver
+    if (autoScrollingRef.current) return; // ditto, for a scroll we just asked for
     const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
     const fromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
     atBottomRef.current = fromBottom <= BOTTOM_PIN_SLOP;
@@ -874,7 +923,11 @@ export default function MessagesScreen() {
           scrollEventThrottle={16}
           // A drag means the driver has taken over — stop treating scroll
           // events as our own settling and honour where they leave the thread.
-          onScrollBeginDrag={() => { settledRef.current = true; }}
+          // A real finger outranks an in-flight auto-scroll, so cancel that too.
+          onScrollBeginDrag={() => {
+            settledRef.current = true;
+            autoScrollingRef.current = false;
+          }}
           // The thread opens at the bottom; rendering a screenful up front
           // keeps that first paint from showing a gap above the newest message.
           initialNumToRender={20}
