@@ -364,7 +364,10 @@ export const ka = {
     avgPerLoad: 'საშ. / ტვირთი',
     deadhead: 'ცარიელი',
     loaded: 'დატვირთული',
+    driven: 'გავლილი',
     emptyPct: '{pct}% ცარიელი',
+    unitMi: 'მილი',
+    unitKm: 'კმ',
     milesDriven: 'გავლილი მილი',
     kilometersDriven: 'გავლილი კილომეტრი',
     // დაგეგმილი (დისპეტჩერის მითითებული) vs ფაქტობრივი (GPS-ით გაზომილი)

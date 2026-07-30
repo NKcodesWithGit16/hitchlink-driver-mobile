@@ -190,6 +190,9 @@ export default function EarningsScreen() {
   const actualMiles  = d?.actualMiles || 0;
   const plannedMiles = d?.miles || 0;
   const rateMiles    = actualMiles > 0 ? actualMiles : plannedMiles;
+  // Every distance on this screen is shown in the driver's chosen unit, so each
+  // one carries the unit with it — a bare "2,318" doesn't say which.
+  const unitLabel = unit === 'km' ? t('earnings.unitKm') : t('earnings.unitMi');
   // TWO different per-mile figures, and the difference is the whole point: what
   // the load paid per mile, and what the driver keeps per mile. Both divide by
   // the same distance so they're comparable side by side — the gap between them
@@ -340,6 +343,7 @@ export default function EarningsScreen() {
                     icon="corner-up-right"
                     label={t('earnings.deadhead')}
                     value={hasSplit ? distNum(deadheadMiles, unit) : '—'}
+                    unit={hasSplit ? unitLabel : null}
                     sub={hasSplit ? t('earnings.emptyPct', { pct: deadheadPct }) : null}
                     colors={colors} styles={styles}
                   />
@@ -347,17 +351,21 @@ export default function EarningsScreen() {
                     icon="truck"
                     label={t('earnings.loaded')}
                     value={hasSplit ? distNum(loadedMiles, unit) : '—'}
+                    unit={hasSplit ? unitLabel : null}
                     colors={colors} styles={styles}
                   />
                   {/* Measured distance, with the quoted figure (or the reason we
-                      have none) underneath so the two are never confused. */}
+                      have none) underneath so the two are never confused. The
+                      label is just "Driven" — the unit now rides on the value, so
+                      "Miles driven … 2,318 mi" would say it twice. */}
                   <InsightChip
                     icon="navigation"
-                    label={unit === 'km' ? t('earnings.kilometersDriven') : t('earnings.milesDriven')}
+                    label={t('earnings.driven')}
                     value={rateMiles ? distNum(rateMiles, unit) : '—'}
+                    unit={rateMiles ? unitLabel : null}
                     sub={
                       actualMiles > 0
-                        ? (plannedMiles > 0 ? t('earnings.plannedSub', { n: distNum(plannedMiles, unit) }) : t('earnings.gpsMeasured'))
+                        ? (plannedMiles > 0 ? t('earnings.plannedSub', { n: `${distNum(plannedMiles, unit)} ${unitLabel}` }) : t('earnings.gpsMeasured'))
                         : (plannedMiles > 0 ? t('earnings.plannedNoGps') : null)
                     }
                     colors={colors} styles={styles}
@@ -708,14 +716,23 @@ function Waterfall({ netPct, fuelPct, dedPct, colors, styles }) {
   );
 }
 
-function InsightChip({ icon, label, value, sub, colors, styles }) {
+/**
+ * `unit` renders as a smaller muted suffix on the same baseline (312 mi), so the
+ * number still reads as the number while the unit stays unambiguous — the same
+ * screen shows miles or kilometres depending on a setting, and a bare figure
+ * doesn't say which. Nested Text so it shares the value's line and alignment.
+ */
+function InsightChip({ icon, label, value, unit, sub, colors, styles }) {
   return (
     <View style={[styles.chip, { backgroundColor: colors.surface, borderColor: colors.border }]}>
       <View style={[styles.chipIcon, { backgroundColor: colors.tealFill }]}>
         <Icon name={icon} size={13} color={colors.teal} />
       </View>
       <Text style={[styles.chipLabel, { color: colors.textMuted }]}>{label}</Text>
-      <Text style={[styles.chipValue, { color: colors.textPrimary }]}>{value}</Text>
+      <Text style={[styles.chipValue, { color: colors.textPrimary }]}>
+        {value}
+        {unit ? <Text style={[styles.chipUnit, { color: colors.textMuted }]}>{` ${unit}`}</Text> : null}
+      </Text>
       {sub ? <Text style={[styles.chipSub, { color: colors.textMuted }]}>{sub}</Text> : null}
     </View>
   );
@@ -948,6 +965,7 @@ const makeStyles = (c) => StyleSheet.create({
   chipIcon: { width: 30, height: 30, borderRadius: 999, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
   chipLabel: { fontSize: 10, fontFamily: FONT.bold, letterSpacing: 0.3 },
   chipValue: { fontSize: 15, fontFamily: FONT.black, letterSpacing: -0.3 },
+  chipUnit: { fontSize: 10, fontFamily: FONT.bold, letterSpacing: 0 },
   chipSub: { fontSize: 10, fontFamily: FONT.medium },
 
   /* Stats grid */

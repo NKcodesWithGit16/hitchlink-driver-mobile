@@ -364,7 +364,12 @@ export const en = {
     // only the third chip's label names mi/km, and all three share it.
     deadhead: 'Deadhead',
     loaded: 'Loaded',
+    driven: 'Driven',
     emptyPct: '{pct}% empty',
+    // Suffixed to every distance on the Pay tab, since the same screen shows
+    // miles or kilometres depending on the driver's setting.
+    unitMi: 'mi',
+    unitKm: 'km',
     milesDriven: 'Miles driven',
     kilometersDriven: 'Kilometers driven',
     // Planned (the dispatcher's quote, may be missing) vs actual (GPS-measured)
