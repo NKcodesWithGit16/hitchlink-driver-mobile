@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, Pressable, Image,
+  View, Text, StyleSheet, ScrollView, Pressable,
   Modal, Animated, Alert, RefreshControl, Linking, Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -24,9 +24,11 @@ import {
 } from '../../src/api/main';
 import {
   loadDocuments, syncOfflineCopies, cachedFileFor, cachedIds, ensureCached,
-  sortDocuments, isCredential, cachedThumb, ensureThumb, CREDENTIAL_TYPES,
+  sortDocuments, CREDENTIAL_TYPES,
 } from '../../src/lib/docCache';
 import PhotoViewer from '../../src/components/driver/PhotoViewer';
+import DocThumb from '../../src/components/driver/DocThumb';
+import DocFocusOverlay from '../../src/components/driver/DocFocusOverlay';
 import { fileKind, baseMime } from '../../src/lib/imageMime';
 import { expiryStatus, fmtDate, daysUntil, fileSize } from '../../src/lib/format';
 import { scheduleDocumentExpiryReminders } from '../../src/lib/localNotifications';
@@ -73,10 +75,13 @@ export default function DocumentsScreen() {
   const [stale, setStale]     = useState(null);   // { savedAt } | null
   // Which documents can be opened with no signal, for the card's offline dot.
   const [offline, setOffline] = useState(() => new Set());
-  // Inspection mode: { uris, captions } while showing credentials to an officer.
-  const [inspection, setInspection] = useState(null);
-  const [opening, setOpening] = useState(false);
-  const [renewing, setRenewing] = useState(null);   // doc id mid-renewal
+  // The fullscreen viewer: { uris, captions }. One mount, two ways in —
+  // inspection mode and tapping a single image document. Both are local files.
+  const [photoView, setPhotoView] = useState(null);
+  const [opening, setOpening]     = useState(false);  // inspection bar
+  const [openingId, setOpeningId] = useState(null);   // doc being opened from its card
+  const [focus, setFocus]         = useState(null);   // doc under long-press
+  const [renewing, setRenewing]   = useState(null);   // doc id mid-renewal
 
   // Add-document review flow: pick → (maybe) AI-extract → editable review
   // modal → save. The actual POST /documents happens inside the modal.
@@ -110,7 +115,14 @@ export default function DocumentsScreen() {
         // swallowed inside syncOfflineCopies — it's an optimization, and a
         // driver should never see it fail.
         syncOfflineCopies(userId, d || [], { onChange: refreshOfflineFlags })
-          .then(refreshOfflineFlags)
+          .then((res) => {
+            refreshOfflineFlags();
+            // A backfilled preview is on the phone already, but a card only
+            // looks for one once the list says the document has it. One
+            // refetch flips that; it can't loop, because the sync marks each
+            // document it filled in and won't offer it again.
+            if (res?.backfilled) loadData();
+          })
           .catch(() => {});
       }
     } catch {
@@ -192,11 +204,94 @@ export default function DocumentsScreen() {
         return;
       }
       haptics.success();
-      setInspection({ uris, captions });
+      setPhotoView({ uris, captions });
     } finally {
       setOpening(false);
     }
   };
+
+  /* Tapping a card opens the DOCUMENT, not a page about it.
+     The detail sheet it used to open repeated the card almost field for field —
+     number, expiry, status, countdown — so the tap bought a driver nothing.
+     What they came for is the scan itself: the photo of the CDL, the PDF of the
+     registration. Renew and Delete moved to the long press (DocFocusOverlay).
+
+     Three renderers, because a document is not always an image:
+       image → PhotoViewer, so it pinches and zooms (an officer reading a small
+               number off a scan is the whole point of this screen)
+       other → QuickLook on iOS, which renders a PDF in place; everything else,
+               and all of Android, falls through to the share sheet, which is
+               what the old View button already did
+       no file at all → the detail sheet, which is now its only job: it is the
+               one thing that can say "no file attached" and offer a fix.
+
+     Prefers the offline copy: it opens instantly and it is the only thing that
+     works with no signal. If refreshing it fails we fall back to whatever is
+     already on disk — a slightly older CDL beats an error box at a weigh
+     station. */
+  const openDocument = useCallback(async (doc) => {
+    if (!doc || openingId) return;
+    if (!(doc.hasContent || doc.url)) { setOpen(doc); return; }
+
+    setOpeningId(String(doc.id));
+    try {
+      if (doc.url && !doc.hasContent) {
+        await Linking.openURL(doc.url);
+        return;
+      }
+      let result = null;
+      try {
+        result = await ensureCached(userId, doc);
+      } catch {
+        result = await cachedFileFor(userId, doc.id);
+      }
+      // Web has no filesystem cache, and neither has a document the caching
+      // policy never picked up. Fetch those the old way.
+      if (!result) result = await fetchDocumentContent(doc.id, doc.fileName || doc.label);
+      if (!result) {
+        Alert.alert(t('documents.notAvailableTitle'), t('documents.notAvailableBody'));
+        return;
+      }
+      if (Platform.OS === 'web') {
+        window.open(result.uri, '_blank');
+      } else if (baseMime(result.contentType).startsWith('image/')) {
+        setPhotoView({ uris: [result.uri], captions: [doc.label] });
+      } else if (canPreview(result.uri)) {
+        await previewAsync(result.uri);
+      } else {
+        const available = await Sharing.isAvailableAsync();
+        if (!available) throw new Error('Sharing unavailable on this device');
+        // mimeType is Android-only, UTI is iOS-only — pass both, or the
+        // receiving app on one platform gets no idea what it's being handed.
+        await Sharing.shareAsync(result.uri, {
+          mimeType: result.contentType,
+          ...(result.uti ? { UTI: result.uti } : {}),
+          dialogTitle: doc.label,
+        });
+      }
+    } catch {
+      haptics.error();
+      Alert.alert(t('documents.couldNotOpen'), t('documents.pleaseTryAgain'));
+    } finally {
+      setOpeningId(null);
+    }
+  }, [openingId, userId, t]);
+
+  const openFocus = useCallback((doc) => { haptics.impact(); setFocus(doc); }, []);
+
+  // Delete from the focus overlay. The overlay owns the confirm, so by the time
+  // this runs the driver has said yes twice.
+  const removeDocument = useCallback(async (doc) => {
+    try {
+      await deleteDocument(doc.id);
+      setFocus(null);
+      await loadData();
+    } catch {
+      setFocus(null);
+      haptics.error();
+      Alert.alert(t('documents.couldNotDelete'), t('documents.pleaseTryAgain'));
+    }
+  }, [loadData, t]);
 
   // Sorted for the job, not by upload date: what's lapsed, then what's about
   // to, then the credentials in the order an inspection asks for them.
@@ -467,8 +562,10 @@ export default function DocumentsScreen() {
                   doc={doc}
                   offline={offline.has(String(doc.id))}
                   renewing={renewing === String(doc.id)}
+                  opening={openingId === String(doc.id)}
                   onRenew={() => renewDocument(doc)}
-                  onPress={() => setOpen(doc)}
+                  onPress={() => openDocument(doc)}
+                  onLongPress={() => openFocus(doc)}
                   colors={colors}
                   styles={styles}
                 />
@@ -524,27 +621,47 @@ export default function DocumentsScreen() {
         )}
       </ScrollView>
 
+      {/* Now only reached by a document with no file attached — everything else
+          opens its own bytes. Kept because that case still needs somewhere to
+          say so, and somewhere to fix it from. */}
       <DocViewer
         doc={open}
         onClose={() => setOpen(null)}
         colors={colors}
         styles={styles}
         insets={insets}
-        userId={userId}
-        onUploaded={loadData}
+        opening={openingId === String(open?.id)}
+        onOpenFile={openDocument}
+        onDeleted={loadData}
         onRenew={renewDocument}
       />
+
+      {/* Long press. Renew is also on the card for anything expiring or expired,
+          because a gesture nobody can see must not be the only route to fixing a
+          lapsed CDL — see the comment at the top of DocFocusOverlay. */}
+      {focus && (
+        <DocFocusOverlay
+          doc={focus}
+          offline={offline.has(String(focus.id))}
+          onClose={() => setFocus(null)}
+          // Stand the overlay down BEFORE the picker opens, same reason the
+          // detail sheet does: presenting over a modal that is about to unmount
+          // is the iOS race this app has been bitten by more than once.
+          onRenew={() => { const d = focus; setFocus(null); return renewDocument(d); }}
+          onDelete={() => removeDocument(focus)}
+        />
+      )}
 
       {/* Reuses the chat/load-history viewer — pinch, pan and swipe between
           credentials are already solved there. No callbacks means no composer
           and no ⋯ sheet; allowDownload=false drops Save/Share, which target
           remote urls and would fail on these local files. */}
-      {inspection && (
+      {photoView && (
         <PhotoViewer
-          uris={inspection.uris}
-          captions={inspection.captions}
+          uris={photoView.uris}
+          captions={photoView.captions}
           allowDownload={false}
-          onClose={() => setInspection(null)}
+          onClose={() => setPhotoView(null)}
         />
       )}
 
@@ -565,43 +682,13 @@ export default function DocumentsScreen() {
 
 /* ─────────── Doc Card ─────────── */
 
-// Resolved thumbnails, kept module-level so re-rendering the list doesn't
-// re-request them. A stored `null` means "asked, this document has none" — a
-// PDF or anything uploaded before thumbnails existed — so it isn't asked again.
-const thumbUris = new Map();
-
-function useDocThumb(doc) {
-  const id = String(doc?.id ?? '');
-  const has = !!doc?.hasThumbnail;
-  const [uri, setUri] = useState(() => (has ? cachedThumb(id) || thumbUris.get(id) || null : null));
-
-  useEffect(() => {
-    if (!has || uri || thumbUris.get(id) === null) return;
-    let alive = true;
-    ensureThumb(id)
-      .then((u) => { thumbUris.set(id, u || null); if (alive && u) setUri(u); })
-      .catch(() => {});   // a missing preview is never worth surfacing
-    return () => { alive = false; };
-  }, [id, has, uri]);
-
-  return uri;
-}
-
-function DocCard({ doc, offline, renewing, onRenew, onPress, colors, styles }) {
+function DocCard({ doc, offline, renewing, opening, onRenew, onPress, onLongPress, colors, styles }) {
   const reduce  = useReduceMotion();
   const t       = useT();
   const status  = expiryStatus(doc.expires);
   const days    = daysUntil(doc.expires);
   const tone    = toneOf(colors, status.tone);
-  // A credential keeps its own meaningful glyph (a licence looks like a card, a
-  // medical card like a pulse). Everything else used to fall back to one shared
-  // file-text icon, which is what made a list of driver-added documents
-  // indistinguishable — those get an icon for the actual file format instead.
-  const thumb   = useDocThumb(doc);
   const kind    = fileKind(doc.contentType);
-  const glyph   = isCredential(doc)
-    ? { name: doc.icon || 'file-text', family: 'feather' }
-    : { name: kind.icon, family: kind.family };
   const size    = fileSize(doc.sizeBytes);
   const barFill = Math.max(0, Math.min(1, (days ?? 0) / 365));
   const barAnim = useRef(new Animated.Value(0)).current;
@@ -630,12 +717,21 @@ function DocCard({ doc, offline, renewing, onRenew, onPress, colors, styles }) {
   return (
     <Pressable
       onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={400}
       style={({ pressed }) => [
         styles.docCard,
         { backgroundColor: colors.surface, borderColor: colors.border, opacity: pressed ? 0.88 : 1 },
       ]}
       accessibilityRole="button"
       accessibilityLabel={t('documents.docCardA11y', { label: doc.label, status: statusLabel })}
+      accessibilityHint={t('documents.docCardHint')}
+      // A long press has no screen-reader equivalent unless it's registered as
+      // an action, and Renew/Delete live behind it.
+      accessibilityActions={[{ name: 'longpress', label: t('documents.moreActionsA11y') }]}
+      onAccessibilityAction={(e) => {
+        if (e.nativeEvent.actionName === 'longpress') onLongPress?.();
+      }}
     >
       {/* Status stripe */}
       <View style={[styles.stripe, { backgroundColor: tone.solid }]} />
@@ -645,12 +741,12 @@ function DocCard({ doc, offline, renewing, onRenew, onPress, colors, styles }) {
         <View style={styles.docTop}>
           {/* The document's own first look when there is one, the file-type
               glyph when there isn't. Same 44pt tile either way, so cards don't
-              jump as previews arrive. */}
-          <View style={[styles.docIcon, { backgroundColor: tone.fill }]}>
-            {thumb
-              ? <Image source={{ uri: thumb }} style={styles.docThumb} resizeMode="cover" />
-              : <Icon name={glyph.name} family={glyph.family} size={20} color={tone.solid} />}
-          </View>
+              jump as previews arrive — and it carries the busy state, since the
+              tap now fetches this document rather than pushing a screen.
+              `renewing` counts too: a renewal started from the long-press sheet
+              on a still-valid document has no Renew button to spin, and the file
+              read plus AI pass that follow the picker are not instant. */}
+          <DocThumb doc={doc} tone={tone} size={44} busy={!!(opening || renewing)} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.docLabel, { color: colors.textPrimary }]} numberOfLines={1}>
               {doc.label}
@@ -721,6 +817,10 @@ function DocCard({ doc, offline, renewing, onRenew, onPress, colors, styles }) {
           <Pressable
             onPress={onRenew}
             disabled={renewing}
+            // A nested pressable swallows the parent's long press, so it has to
+            // forward it — otherwise this button is a dead zone for the sheet.
+            onLongPress={onLongPress}
+            delayLongPress={400}
             style={({ pressed }) => [
               styles.renewBtn,
               { borderColor: tone.solid, backgroundColor: tone.fill, opacity: pressed || renewing ? 0.7 : 1 },
@@ -738,7 +838,9 @@ function DocCard({ doc, offline, renewing, onRenew, onPress, colors, styles }) {
         )}
       </View>
 
-      <Icon name="chevron-right" size={16} color={colors.textMuted} style={{ alignSelf: 'center', marginRight: space[3] }} />
+      {/* No trailing chevron. It means "pushes a screen", and the tap no longer
+          does — it opens the document itself. The busy state it used to carry
+          moved onto the thumbnail, which is the thing being fetched. */}
     </Pressable>
   );
 }
@@ -766,10 +868,17 @@ function DocCardSkeleton({ colors, styles }) {
 
 /* ─────────── Doc Viewer ─────────── */
 
-function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded, onRenew }) {
-  const [viewing, setViewing]       = useState(false);
-  const [deleting, setDeleting]     = useState(false);
-  const [previewUri, setPreviewUri] = useState(null);
+/* The metadata sheet. It used to be what a tap on a card opened, and it
+ * repeated that card almost field for field — number, expiry, status, a
+ * countdown of the same days the card already counts. Tapping now opens the
+ * document itself, so this is reached only by a document with NO file: the one
+ * case that has nothing to render and genuinely needs to say why.
+ *
+ * Opening still routes through the screen's own opener rather than a second
+ * copy of it, and stands this Modal down first — presenting the viewer over a
+ * Modal that is about to unmount is the iOS race this app keeps hitting. */
+function DocViewer({ doc, onClose, colors, styles, insets, opening, onOpenFile, onDeleted, onRenew }) {
+  const [deleting, setDeleting] = useState(false);
   const t = useT();
   if (!doc) return null;
   const status = expiryStatus(doc.expires);
@@ -777,56 +886,11 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded, o
   const tone   = toneOf(colors, status.tone);
   const hasFile = !!(doc.hasContent || doc.url);
 
-  const viewFile = async () => {
-    if (viewing || !hasFile) return;
-    setViewing(true);
-    try {
-      if (doc.url && !doc.hasContent) {
-        await Linking.openURL(doc.url);
-        return;
-      }
-      // Offline copy first — it opens instantly and it is the only thing that
-      // works with no signal. If refreshing it fails we fall back to whatever
-      // is already on disk: a slightly older CDL beats an error box at a
-      // weigh station.
-      let result = null;
-      try {
-        result = await ensureCached(userId, doc);
-      } catch {
-        result = await cachedFileFor(userId, doc.id);
-      }
-      // Web has no filesystem cache; so does a document that policy never
-      // stored. Fetch it the old way.
-      if (!result) result = await fetchDocumentContent(doc.id, doc.fileName || doc.label);
-      if (!result) {
-        Alert.alert(t('documents.notAvailableTitle'), t('documents.notAvailableBody'));
-        return;
-      }
-      if (Platform.OS === 'web') {
-        window.open(result.uri, '_blank');
-      } else if (result.contentType?.startsWith('image/')) {
-        setPreviewUri(result.uri);
-      } else if (canPreview(result.uri)) {
-        // iOS: render it in place with the system viewer (the same one Files
-        // and Mail use). Anything QuickLook can't handle — and all of Android —
-        // falls through to the share sheet below.
-        await previewAsync(result.uri);
-      } else {
-        const available = await Sharing.isAvailableAsync();
-        if (!available) throw new Error('Sharing unavailable on this device');
-        // mimeType is Android-only, UTI is iOS-only — pass both, or the
-        // receiving app on one platform gets no idea what it's being handed.
-        await Sharing.shareAsync(result.uri, {
-          mimeType: result.contentType,
-          ...(result.uti ? { UTI: result.uti } : {}),
-          dialogTitle: doc.label,
-        });
-      }
-    } catch {
-      Alert.alert(t('documents.couldNotOpen'), t('documents.pleaseTryAgain'));
-    } finally {
-      setViewing(false);
-    }
+  const viewFile = () => {
+    if (opening || !hasFile) return;
+    const d = doc;
+    onClose();
+    onOpenFile?.(d);
   };
 
   const doDelete = () => {
@@ -839,7 +903,7 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded, o
           setDeleting(true);
           try {
             await deleteDocument(doc.id);
-            await onUploaded?.();
+            await onDeleted?.();
             onClose();
           } catch {
             Alert.alert(t('documents.couldNotDelete'), t('documents.pleaseTryAgain'));
@@ -950,15 +1014,15 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded, o
 
           <Pressable
             onPress={viewFile}
-            disabled={viewing || !hasFile}
+            disabled={opening || !hasFile}
             style={({ pressed }) => [
               styles.actionBtnOutline,
-              { borderColor: colors.border, backgroundColor: colors.surface, opacity: pressed || viewing ? 0.85 : hasFile ? 1 : 0.5 },
+              { borderColor: colors.border, backgroundColor: colors.surface, opacity: pressed || opening ? 0.85 : hasFile ? 1 : 0.5 },
             ]}
           >
-            <Icon name={viewing ? 'loader' : 'eye'} size={18} color={colors.textSecondary} />
+            <Icon name={opening ? 'loader' : 'eye'} size={18} color={colors.textSecondary} />
             <Text style={[styles.actionBtnText, { color: colors.textSecondary }]}>
-              {viewing ? t('documents.opening') : hasFile ? t('documents.viewDocument') : t('documents.noFileAttached')}
+              {opening ? t('documents.opening') : hasFile ? t('documents.viewDocument') : t('documents.noFileAttached')}
             </Text>
           </Pressable>
 
@@ -978,22 +1042,6 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded, o
         </ScrollView>
 
       </View>
-
-      {previewUri ? (
-        <Modal visible animationType="fade" transparent onRequestClose={() => setPreviewUri(null)}>
-          <View style={styles.previewOverlay}>
-            <Pressable
-              onPress={() => setPreviewUri(null)}
-              style={[styles.previewClose, { top: insets.top + space[3] }]}
-              accessibilityRole="button"
-              accessibilityLabel={t('documents.closePreviewA11y')}
-            >
-              <Icon name="x" size={22} color="#FFFFFF" />
-            </Pressable>
-            <Image source={{ uri: previewUri }} style={styles.previewImage} resizeMode="contain" />
-          </View>
-        </Modal>
-      ) : null}
     </Modal>
   );
 }
@@ -1060,8 +1108,6 @@ const makeStyles = (c) => StyleSheet.create({
   stripe: { width: 5, alignSelf: 'stretch', flexShrink: 0 },
   docBody: { flex: 1, padding: space[4], gap: space[3] },
   docTop: { flexDirection: 'row', alignItems: 'center', gap: space[3] },
-  docIcon: { width: 44, height: 44, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden' },
-  docThumb: { width: '100%', height: '100%' },
   docLabel: { ...type.bodyStrong, fontSize: 15 },
   docSub: { ...type.caption, marginTop: 1 },
 
@@ -1162,14 +1208,6 @@ const makeStyles = (c) => StyleSheet.create({
     gap: 10, borderRadius: radius.lg, paddingVertical: 16, borderWidth: 1,
   },
   actionBtnText: { fontSize: 15, fontFamily: FONT.bold },
-
-  /* Full-screen image preview */
-  previewOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', alignItems: 'center', justifyContent: 'center' },
-  previewClose: {
-    position: 'absolute', right: space[4], width: 40, height: 40, borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center', zIndex: 1,
-  },
-  previewImage: { width: '100%', height: '80%' },
 
   /* Error / retry */
   errorBox: { alignItems: 'center', justifyContent: 'center', gap: space[3], paddingVertical: space[10], paddingHorizontal: space[4] },

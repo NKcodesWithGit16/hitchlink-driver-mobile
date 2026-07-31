@@ -866,6 +866,23 @@ export async function makeDocThumbnail(uri, mimeType) {
   }
 }
 
+// Attaches a preview to a document that already exists — the backfill route.
+// Everything uploaded before thumbnails existed, and everything the dispatcher
+// added from the web portal, has none, and the server cannot make one: no image
+// library was added to the API and none should be. So the phone renders it from
+// the copy lib/docCache has ALREADY downloaded for offline use and PUTs just the
+// bytes. Deliberately separate from PUT /documents/{id}, which refuses to touch
+// a document's file.
+export async function uploadDocumentThumbnail(documentId, base64) {
+  if (USE_MOCK) { await wait(120); return true; }
+  if (!documentId || !base64) return false;
+  await apiFetch(`/documents/${documentId}/thumbnail`, {
+    method: 'PUT',
+    body: JSON.stringify({ thumbnailBase64: base64 }),
+  });
+  return true;
+}
+
 // The stored preview for a document as raw JPEG bytes, or null when it has none
 // (a 404 — normal for PDFs and for anything uploaded before thumbnails existed,
 // so it is deliberately not an error). lib/docCache turns these into something

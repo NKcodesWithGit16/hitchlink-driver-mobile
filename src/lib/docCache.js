@@ -1,8 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { Directory, File, Paths } from 'expo-file-system';
-import { fetchDocuments, fetchDocumentContent, fetchDocumentThumbnail } from '../api/main';
+import {
+  fetchDocuments, fetchDocumentContent, fetchDocumentThumbnail,
+  makeDocThumbnail, uploadDocumentThumbnail,
+} from '../api/main';
 import { expiryStatus, daysUntil } from './format';
+import { baseMime } from './imageMime';
 
 /* Offline copies of the driver's documents.
  *
@@ -76,6 +80,29 @@ export function isStale(doc, entry) {
   // every document on every visit.
   if (!doc?.lastModifiedAt) return false;
   return entry.lastModifiedAt !== doc.lastModifiedAt;
+}
+
+/**
+ * Can this document's missing preview be filled in from the copy on disk?
+ *
+ * Documents uploaded before thumbnails existed, and everything the dispatcher
+ * added from the web portal, have none — and the server can't render one, by
+ * design. The phone can, off the file the cache has already downloaded, so the
+ * backfill costs no extra download and no extra data: a document the caching
+ * policy declined to keep is simply never a candidate.
+ *
+ * `thumbBackfill` on the manifest entry stops it repeating: 'done' once the
+ * server has it, 'unsupported' when the manipulator couldn't render this file at
+ * all. Re-downloading rewrites the entry and so earns a fresh attempt, which is
+ * right — the bytes changed.
+ */
+export function shouldBackfillThumb(doc, entry) {
+  if (!doc?.id || doc.hasThumbnail) return false;
+  if (!entry?.path) return false;
+  if (entry.thumbBackfill) return false;
+  // Only images. A PDF has no preview here for the same reason it has none on
+  // upload: expo-image-manipulator cannot rasterize one.
+  return baseMime(entry.contentType || doc.contentType).startsWith('image/');
 }
 
 /**
@@ -309,14 +336,68 @@ export async function cachedIds(driverId) {
   return new Set(Object.keys(manifest));
 }
 
+/* A few per visit, not the whole list. Each one decodes a full-size image and
+   re-encodes it, which is real work on the cheap Android phones plenty of
+   drivers carry — and the backlog converges over a handful of visits anyway. */
+const MAX_THUMB_BACKFILL_PER_SYNC = 3;
+
+/**
+ * Renders previews for documents that never got one, from the copies already on
+ * disk, and sends them up. See shouldBackfillThumb for what qualifies.
+ * Returns how many were filled in.
+ */
+async function backfillThumbnails(driverId, docs, { onChange } = {}) {
+  const manifest = await readManifest(driverId);
+  let filled = 0;
+
+  for (const doc of docs || []) {
+    if (filled >= MAX_THUMB_BACKFILL_PER_SYNC) break;
+    const id = idOf(doc.id);
+    const entry = manifest[id];
+    if (!shouldBackfillThumb(doc, entry)) continue;
+
+    // makeDocThumbnail swallows its own failures and returns null, so a null
+    // here means "this file can't produce one" rather than "try again later".
+    const base64 = await makeDocThumbnail(entry.path, entry.contentType || doc.contentType);
+    if (!base64) {
+      manifest[id] = { ...entry, thumbBackfill: 'unsupported' };
+      await writeManifest(driverId, manifest);
+      continue;
+    }
+
+    try {
+      await uploadDocumentThumbnail(id, base64);
+    } catch {
+      // Offline, or the server refused it. Leave the entry unmarked so the next
+      // sync retries — unlike a file that can't be rendered, this will succeed.
+      continue;
+    }
+
+    manifest[id] = { ...entry, thumbBackfill: 'done' };
+    await writeManifest(driverId, manifest);
+    // Pull the stored copy down now (a few KB) so the card can show it as soon
+    // as the list reports hasThumbnail, rather than a visit later.
+    try { await ensureThumb(id); } catch {}
+    filled += 1;
+    onChange?.();
+  }
+
+  return filled;
+}
+
 /**
  * Brings the offline copies in line with the current list: caches whatever
- * policy says should be there, then evicts orphans and anything over budget.
- * Runs in the background after a successful fetch — every failure is ignored,
- * because this is an optimization and must never surface as an error.
+ * policy says should be there, evicts orphans and anything over budget, then
+ * backfills any missing previews. Runs in the background after a successful
+ * fetch — every failure is ignored, because this is an optimization and must
+ * never surface as an error.
+ *
+ * Returns `{ backfilled }` so the screen can refetch once: a preview only
+ * becomes visible when the list reports `hasThumbnail`, and by then the image
+ * itself is already on the phone.
  */
 export async function syncOfflineCopies(driverId, docs, { onChange } = {}) {
-  if (!fsReady() || !driverId) return;
+  if (!fsReady() || !driverId) return { backfilled: 0 };
 
   const manifest = await readManifest(driverId);
   for (const doc of docs || []) {
@@ -347,6 +428,15 @@ export async function syncOfflineCopies(driverId, docs, { onChange } = {}) {
   } catch {
     // Eviction is housekeeping; failing it just leaves files on disk.
   }
+
+  // After eviction, so nothing is rendered for a file that was just dropped.
+  let backfilled = 0;
+  try {
+    backfilled = await backfillThumbnails(driverId, docs, { onChange });
+  } catch {
+    // Same rule as everything else here: a missing preview is never an error.
+  }
+  return { backfilled };
 }
 
 /** Wipes every offline copy for a driver. Called on sign-out. */

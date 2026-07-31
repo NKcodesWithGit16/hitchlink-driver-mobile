@@ -367,8 +367,24 @@ lazy `require` of `expo-image-manipulator` — see the boot-crash note above) se
 upload; `HitchLink.Main` stores it in a nullable `Document.ThumbnailContent` bytea and serves
 `GET /documents/{id}/thumbnail`, with `hasThumbnail` on the list DTO. **No image library was added to the
 API** and none should be. PDFs get no thumbnail by design and fall back to the file-type icon from
-`fileKind()`; existing documents and anything uploaded from the dispatcher portal have none either, and a
-backfill would need server-side rendering.
+`fileKind()`.
+
+**Older documents backfill themselves, from the copy already on the phone.** Anything uploaded before
+thumbnails existed, and everything the dispatcher adds from the web portal, arrives with none — and the
+server can't render one without the image library that isn't there. So `backfillThumbnails` in
+`docCache.js` renders it on the device off the **offline copy that was downloaded anyway** and PUTs the
+bytes to `PUT /documents/{id}/thumbnail` (`SetDocumentThumbnailCommand`). Three things about it:
+
+- **It never downloads anything to do this.** `shouldBackfillThumb` requires a manifest entry with a real
+  file, so a document the caching policy declined to keep is simply not a candidate. The data-plan
+  reasoning that governs `shouldAutoCache` governs this for free.
+- **`SetDocumentThumbnailCommand` must not bump `LastModifiedAt`** — that field is what `isStale` compares
+  to decide whether the cached *file* is out of date, so bumping it would make every backfilled document
+  re-download its full bytes over cellular to deliver a 40 KB picture.
+- `thumbBackfill` on the manifest entry (`'done'` / `'unsupported'`) stops it repeating, and is what makes
+  the one refetch `syncOfflineCopies` triggers via its `{ backfilled }` return value terminate rather than
+  loop. `useDocThumb` checks the local file regardless of `hasThumbnail`, because the preview lands on disk
+  before the list has been refetched to report it.
 
 **Renewal replaces, and goes through the review modal.** `UpdateDocumentCommand` deliberately refuses to
 swap a document's file bytes ("that would be a delete-and-re-upload"), so renewing uploads a new document
@@ -385,6 +401,46 @@ Save and Share both route through `downloadChatAttachment`, which fetches a *rem
 mode passes local `file://` uris. Only image credentials can go in the viewer, so readiness ("3 of 4 ready
 to show") is reported on the entry bar rather than as a placeholder slide — a driver needs to learn their
 registration isn't on the phone while still parked.
+
+**A tap opens the document, a long press opens the actions.** `DocViewer` used to be what a tap opened,
+and it repeated the card almost field for field — number, expiry, status, a countdown of the same days the
+card counts — so the tap cost a driver a screen and bought them nothing. `openDocument` now goes straight
+to the bytes: image → `PhotoViewer` (it pinches, which is what reading a number off a scan needs), other →
+QuickLook on iOS and the share sheet everywhere else, exactly what the old View button did. **`DocViewer`
+survives for one case only: a document with no file attached**, which is the one thing that has nothing to
+render and needs somewhere to say so. Its View button routes back through the screen's `openDocument`
+rather than keeping a second copy of that logic, and stands its own Modal down first.
+
+Renew and Delete moved to `DocFocusOverlay` (long press), modelled on `HistoryFocusOverlay` down to the
+armed-in-place delete confirm — an `Alert` can't render the document it's talking about, and RN-web has no
+`Alert` at all. It parts company with that overlay in one way: **the two actions are a grouped menu with no
+caption under either row.** "Upload renewal" and "Delete document" are self-evident. The Pay tab keeps its
+captions because there the two actions *sound* alike and the difference (hide is reversible for three
+weeks, delete isn't) is exactly what the captions carry — that is information, not a restatement of the
+button. Don't add captions back here on consistency grounds.
+
+Two things about how it's built. **The document is solid, the menu is glass** — `GlassView` is the material
+`tokens.js` reserves for overlay chrome, and the split makes the hierarchy readable before a word is: the
+subject is the card lifted out of the list, the actions are chrome over it. **Exactly one `GlassView`,
+though, and that's a budget.** Each one is a live `BlurView` stacked on the backdrop's, and `dimezisBlurView`
+is expensive on the cheap Android handsets plenty of drivers carry — so Cancel and the delete confirm stay
+opaque (which is the iOS convention for both anyway). The three layers rise on `motion.stagger`, so the
+document lands before its actions and the sheet reads as coming *out* of the card. And the lifted card is
+two nested views on purpose: iOS clips a shadow the moment `overflow: hidden` is set, which the status
+stripe needs, so the outer view owns the fill and elevation and the inner one owns the clip. **Renew stays on the card as well for anything expired or expiring, and must not be moved
+into the sheet alone**: a long press advertises nothing, and burying the fix for a lapsed CDL behind an
+invisible gesture recreates the dead end this screen just stopped having. What the sheet adds is renewing a
+document that is still *valid*. `accessibilityActions` carries the long press to VoiceOver/TalkBack, and
+nested pressables (the card's own Renew button) forward `onLongPress` or they'd be dead zones.
+
+The 44pt identity tile — the document's thumbnail, or a glyph for its file type — is `DocThumb`
+(`src/components/driver/DocThumb.js`) rather than inline in the tab, because the overlay has to show the
+*same* tile as the card it lifted out of the list; two independent resolvers would flash a generic icon
+while re-fetching a preview the card already had. **The card has no trailing chevron**: that glyph promises
+"pushes a screen", which the tap stopped doing. The busy state lives on the tile instead (`busy` scrims it
+and spins), because the tile *is* the document — a spinner there reads as "fetching this one", where one at
+the row's edge reads as "this row is doing something". It covers `renewing` as well as `opening`, since a
+renewal started from the sheet on a still-valid document has no Renew button to spin.
 
 ## "Delete from history" is a device-local hide, deliberately
 

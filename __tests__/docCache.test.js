@@ -5,11 +5,12 @@
 jest.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: {} }));
 jest.mock('../src/api/main', () => ({
   fetchDocuments: jest.fn(), fetchDocumentContent: jest.fn(), fetchDocumentThumbnail: jest.fn(),
+  makeDocThumbnail: jest.fn(), uploadDocumentThumbnail: jest.fn(),
 }));
 
 import {
   shouldAutoCache, isStale, evictionPlan, sortDocuments, isCredential,
-  AUTO_CACHE_SIZE_CAP,
+  shouldBackfillThumb, AUTO_CACHE_SIZE_CAP,
 } from '../src/lib/docCache';
 
 const MB = 1024 * 1024;
@@ -154,4 +155,47 @@ test('isCredential covers exactly the DOT-required set', () => {
   expect(isCredential({ type: 'License' })).toBe(true);
   expect(isCredential({ type: 'Other' })).toBe(false);
   expect(isCredential(null)).toBe(false);
+});
+
+describe('shouldBackfillThumb', () => {
+  const cached = (over = {}) => ({
+    path: 'file:///documents/d1/cdl.jpg', contentType: 'image/jpeg', ...over,
+  });
+
+  test('an image already on disk with no preview qualifies', () => {
+    expect(shouldBackfillThumb(doc({ hasThumbnail: false }), cached())).toBe(true);
+  });
+
+  test('a document that already has a preview is left alone', () => {
+    expect(shouldBackfillThumb(doc({ hasThumbnail: true }), cached())).toBe(false);
+  });
+
+  test('nothing on disk means nothing to render from — no extra download', () => {
+    expect(shouldBackfillThumb(doc(), undefined)).toBe(false);
+    expect(shouldBackfillThumb(doc(), { contentType: 'image/jpeg' })).toBe(false);
+  });
+
+  test('only images — a PDF cannot be rasterized here', () => {
+    expect(shouldBackfillThumb(doc(), cached({ contentType: 'application/pdf' }))).toBe(false);
+    expect(shouldBackfillThumb(doc(), cached({ contentType: undefined }))).toBe(false);
+  });
+
+  test('falls back to the list content type when the entry has none', () => {
+    const d = doc({ contentType: 'image/png' });
+    expect(shouldBackfillThumb(d, cached({ contentType: undefined }))).toBe(true);
+  });
+
+  test('a charset parameter does not defeat the image check', () => {
+    expect(shouldBackfillThumb(doc(), cached({ contentType: 'IMAGE/JPEG; charset=binary' }))).toBe(true);
+  });
+
+  test('once marked it never repeats, whichever way it went', () => {
+    expect(shouldBackfillThumb(doc(), cached({ thumbBackfill: 'done' }))).toBe(false);
+    expect(shouldBackfillThumb(doc(), cached({ thumbBackfill: 'unsupported' }))).toBe(false);
+  });
+
+  test('survives missing input', () => {
+    expect(shouldBackfillThumb(null, cached())).toBe(false);
+    expect(shouldBackfillThumb(doc(), null)).toBe(false);
+  });
 });
