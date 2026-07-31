@@ -17,6 +17,14 @@ const SOURCES = {
   ringback: require('../../assets/sounds/ringback.wav'),
 };
 
+// How long to keep the one-shot message player alive before tearing it down and
+// releasing quiet mode. This MUST outlast message.wav itself — `player.remove()`
+// mid-playback cuts the sound off — so it tracks the asset's length plus
+// headroom rather than being a round number chosen once. message.wav is 0.85s
+// today; raise this if a longer ding is ever swapped in. (Nothing reads the
+// asset's duration at runtime, so the coupling is only enforced here.)
+const MESSAGE_SOUND_MS = 1200;
+
 let quietRefCount = 0;
 function enterQuietMode() {
   quietRefCount += 1;
@@ -41,7 +49,7 @@ export function playMessageSound() {
   setTimeout(() => {
     try { player.remove(); } catch {}
     exitQuietMode();
-  }, 600);
+  }, MESSAGE_SOUND_MS);
 }
 
 let ringPlayer = null;
