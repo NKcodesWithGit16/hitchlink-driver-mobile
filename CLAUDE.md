@@ -386,6 +386,24 @@ bytes to `PUT /documents/{id}/thumbnail` (`SetDocumentThumbnailCommand`). Three 
   loop. `useDocThumb` checks the local file regardless of `hasThumbnail`, because the preview lands on disk
   before the list has been refetched to report it.
 
+**Add and Renew ask where the document comes from: camera, photos, or files.** They used to go straight to
+`DocumentPicker.getDocumentAsync` with a wildcard type, which reads as "anything" and on iOS is not —
+`UIDocumentPickerViewController` browses Files and cannot see the photo library at all, so a driver who
+photographed their CDL (the ordinary way a credential arrives) could not add it without exporting the photo
+to Files by hand. `pickAsset` in `app/(tabs)/documents.js` now normalizes both pickers to the one shape
+`DocumentReviewModal` consumes; note `mimeType` is not cosmetic there, since both the AI read and the
+thumbnail are gated on it. The chooser is `src/components/driver/ActionSheet.js` and **not `Alert.alert`**:
+Android renders at most three buttons, so Cancel plus these three would silently lose one — the same limit
+that keeps the navigation-app picker to three — and RN-web has no `Alert` at all. Opening it from inside
+another Modal (the detail sheet, the focus overlay) goes through `openSourceAfterModal`, which waits for
+that Modal to actually go.
+
+Image documents run through `normalizeDocumentImage` (`src/api/main.js`) before anything reads them, so
+the same web-safe-JPEG guarantee the chat/POD/avatar paths have applies here — the dispatcher reads these
+in a browser too. It closes two holes the pickers' own `Compatible` flag can't: a HEIC picked out of
+**Files** (that flag is the photo library's, and iOS-only), and a 12 MP camera photo going into a Postgres
+bytea column at full size, where every later download pays for it.
+
 **Renewal replaces, and goes through the review modal.** `UpdateDocumentCommand` deliberately refuses to
 swap a document's file bytes ("that would be a delete-and-re-upload"), so renewing uploads a new document
 and then soft-deletes the old one (`DELETE /documents/{id}` → `IsActive = false`; the row survives for the

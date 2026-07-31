@@ -7,6 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
 import Icon from '../../src/components/ui/Icon';
 import FadeInView from '../../src/components/ui/FadeInView';
@@ -20,7 +21,7 @@ import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import {
   uploadDocument, deleteDocument, fetchDocumentContent,
-  extractDocumentFields, readDocumentBase64,
+  extractDocumentFields, readDocumentBase64, normalizeDocumentImage,
 } from '../../src/api/main';
 import {
   loadDocuments, syncOfflineCopies, cachedFileFor, cachedIds, ensureCached,
@@ -29,6 +30,7 @@ import {
 import PhotoViewer from '../../src/components/driver/PhotoViewer';
 import DocThumb from '../../src/components/driver/DocThumb';
 import DocFocusOverlay from '../../src/components/driver/DocFocusOverlay';
+import ActionSheet from '../../src/components/driver/ActionSheet';
 import { fileKind, baseMime } from '../../src/lib/imageMime';
 import { expiryStatus, fmtDate, daysUntil, fileSize } from '../../src/lib/format';
 import { scheduleDocumentExpiryReminders } from '../../src/lib/localNotifications';
@@ -45,6 +47,74 @@ const ageLabel = (ms) => {
   if (mins < 1440) return `${Math.floor(mins / 60)}h`;
   return `${Math.floor(mins / 1440)}d`;
 };
+
+// The AI read is skipped above this — see extractDocumentFields.
+const AI_READ_SIZE_CAP = 8 * 1024 * 1024;
+
+// Long enough for a full-screen Modal's slide-out to finish before another is
+// presented. See openSourceAfterModal.
+const MODAL_HANDOFF_MS = 320;
+
+/* The three ways a document gets onto this screen, normalized to the one shape
+   DocumentReviewModal consumes: { uri, name, mimeType, size, base64 }.
+   expo-document-picker and expo-image-picker disagree on almost every field
+   name, and getting mimeType wrong is not cosmetic — both the AI read and the
+   thumbnail are gated on it, so a missing one silently costs the driver the
+   auto-filled expiry date and the card its preview.
+
+   THE CAMERA AND LIBRARY ROUTES ARE THE POINT. Calling getDocumentAsync with a
+   wildcard type reads as "anything", and on iOS it is not:
+   UIDocumentPickerViewController browses Files, which cannot see the photo
+   library at all. A driver who photographed their CDL — the ordinary way a
+   credential gets into this app — could not add it without first exporting the
+   photo to Files by hand. */
+async function pickAsset(source, t) {
+  // Files is the fallback, not the photo library: an unrecognised source should
+  // land on the picker that can open anything, not silently on one that can't.
+  if (source !== 'camera' && source !== 'library') {
+    const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true, base64: true });
+    if (res.canceled) return null;
+    const a = res.assets?.[0];
+    if (!a?.uri) return null;
+    return { uri: a.uri, name: a.name, mimeType: a.mimeType, size: a.size, base64: a.base64 };
+  }
+
+  const camera = source === 'camera';
+  const perm = camera
+    ? await ImagePicker.requestCameraPermissionsAsync()
+    : await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!perm.granted) {
+    Alert.alert(
+      t('documents.permissionNeededTitle'),
+      t('documents.permissionNeededBody', {
+        source: camera ? t('documents.cameraAccess') : t('documents.libraryAccess'),
+      }),
+    );
+    return null;
+  }
+
+  const launch = camera ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
+  const res = await launch({
+    quality: 0.85,
+    // iOS hands back HEIC for a camera photo picked out of the library, which no
+    // browser can decode — and the dispatcher reads these in one. Ignored on
+    // Android and by the camera; normalizeDocumentImage below is the guarantee.
+    preferredAssetRepresentationMode:
+      ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+  });
+  if (res.canceled) return null;
+  const a = res.assets?.[0];
+  if (!a?.uri) return null;
+
+  return {
+    uri: a.uri,
+    // The library usually supplies a real filename; the camera never does.
+    name: a.fileName || `document-${Date.now()}.jpg`,
+    mimeType: a.mimeType || 'image/jpeg',
+    size: a.fileSize,
+    base64: a.base64,
+  };
+}
 
 export default function DocumentsScreen() {
   const insets = useSafeAreaInsets();
@@ -82,6 +152,8 @@ export default function DocumentsScreen() {
   const [openingId, setOpeningId] = useState(null);   // doc being opened from its card
   const [focus, setFocus]         = useState(null);   // doc under long-press
   const [renewing, setRenewing]   = useState(null);   // doc id mid-renewal
+  // Which flow is waiting on a camera/library/files answer: { mode, doc? }.
+  const [pickTarget, setPickTarget] = useState(null);
 
   // Add-document review flow: pick → (maybe) AI-extract → editable review
   // modal → save. The actual POST /documents happens inside the modal.
@@ -308,20 +380,36 @@ export default function DocumentsScreen() {
   //
   // Shared by "Add" and by a card's "Renew": the two differ only in what the
   // form starts from and whether an old document is retired afterwards.
-  const pickForReview = useCallback(async (defaults, replaceId, onBusy) => {
-    const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true, base64: true });
-    if (res.canceled) return false;
-    const asset = res.assets?.[0];
-    if (!asset) return false;
+  const pickForReview = useCallback(async (defaults, replaceId, onBusy, source) => {
+    const picked = await pickAsset(source, t);
+    if (!picked) return false;
 
     onBusy(true);
     try {
+      // A photo is re-encoded to a web-safe JPEG and downscaled before anything
+      // else reads it, so the AI, the thumbnail and the stored bytes all describe
+      // the same file. Throws rather than falling back when it can't transcode —
+      // a document the dispatcher can't open is worse than a failed add.
+      const norm = await normalizeDocumentImage(picked.uri, picked.mimeType);
+      const asset = norm
+        ? {
+            ...picked,
+            uri: norm.uri,
+            mimeType: norm.mimeType,
+            size: norm.sizeBytes,
+            // Only discard the picker's base64 when the bytes were actually
+            // rewritten; a small web-safe photo passes through untouched and
+            // re-reading it would be pure waste.
+            base64: norm.uri === picked.uri ? picked.base64 : undefined,
+          }
+        : picked;
+
       const base64 = await readDocumentBase64(asset.uri, asset.base64);
 
       let extraction = null;
       let extractionError = null;
       const isImage = asset.mimeType?.startsWith('image/');
-      const underSizeCap = !asset.size || asset.size <= 8 * 1024 * 1024;
+      const underSizeCap = !asset.size || asset.size <= AI_READ_SIZE_CAP;
       if (isImage && underSizeCap) {
         try {
           extraction = await extractDocumentFields({ base64, mediaType: asset.mimeType });
@@ -340,17 +428,18 @@ export default function DocumentsScreen() {
     } finally {
       onBusy(false);
     }
-  }, []);
+  }, [t]);
 
-  const addDoc = async () => {
+  const addDoc = useCallback(async (source) => {
     if (adding) return;
     try {
-      await pickForReview(null, null, setAdding);
+      await pickForReview(null, null, setAdding, source);
     } catch {
       setAdding(false);
+      haptics.error();
       Alert.alert(t('documents.couldNotAdd'), t('documents.pleaseTryAgain'));
     }
-  };
+  }, [adding, pickForReview, t]);
 
   /* Renewing a lapsed credential. Lives here rather than in the viewer so the
      card can offer it directly — an expired document used to be a red card with
@@ -368,13 +457,14 @@ export default function DocumentsScreen() {
      handleReviewSaved). Without that a driver ends up with two CDL cards, and
      since the list now leads with what's expired, the stale one would sit at the
      top of the screen immediately after they'd just fixed it. */
-  const renewDocument = useCallback(async (doc) => {
+  const renewDocument = useCallback(async (doc, source) => {
     if (!doc || renewing) return false;
     try {
       return await pickForReview(
         { type: doc.type, label: doc.label, documentNumber: doc.documentNumber || '' },
         String(doc.id),
         (busy) => setRenewing(busy ? String(doc.id) : null),
+        source,
       );
     } catch {
       setRenewing(null);
@@ -383,6 +473,36 @@ export default function DocumentsScreen() {
       return false;
     }
   }, [renewing, pickForReview, t]);
+
+  /* Where a document comes from is asked BEFORE the picker opens, because there
+     are three answers and no way to ask afterwards. Add and Renew share the
+     sheet; `pickTarget` remembers which of them asked.
+
+     The sheet stands down before the picker launches: presenting a native picker
+     over a Modal that is about to unmount is the iOS presentation race this app
+     has been bitten by more than once. */
+  const chooseSource = useCallback((key) => {
+    const target = pickTarget;
+    setPickTarget(null);
+    if (!target) return;
+    if (target.mode === 'renew') renewDocument(target.doc, key);
+    else addDoc(key);
+  }, [pickTarget, addDoc, renewDocument]);
+
+  /* Opening the sheet from INSIDE another Modal — the detail sheet, the focus
+     overlay — has to wait for that one to actually go, for the same reason.
+     MODAL_HANDOFF_MS covers the detail sheet's slide-out; the focus overlay has
+     no animation and would be fine with a tick, but one constant is easier to
+     keep right than two. */
+  const openSourceAfterModal = useCallback((target) => {
+    setTimeout(() => setPickTarget(target), MODAL_HANDOFF_MS);
+  }, []);
+
+  const sourceActions = useMemo(() => ([
+    { key: 'camera',  icon: 'camera', label: t('documents.sourceCamera') },
+    { key: 'library', icon: 'image',  label: t('documents.sourceLibrary') },
+    { key: 'files',   icon: 'folder', label: t('documents.sourceFiles') },
+  ]), [t]);
 
   const closeReview = () => {
     setReviewVisible(false);
@@ -425,7 +545,7 @@ export default function DocumentsScreen() {
           </Text>
         </View>
         <Pressable
-          onPress={addDoc}
+          onPress={() => setPickTarget({ mode: 'add' })}
           disabled={adding}
           style={[styles.addBtn, { backgroundColor: colors.teal, opacity: adding ? 0.7 : 1 }, shadow.glow(colors.teal)]}
           accessibilityLabel={t('documents.addA11y')}
@@ -563,7 +683,7 @@ export default function DocumentsScreen() {
                   offline={offline.has(String(doc.id))}
                   renewing={renewing === String(doc.id)}
                   opening={openingId === String(doc.id)}
-                  onRenew={() => renewDocument(doc)}
+                  onRenew={() => setPickTarget({ mode: 'renew', doc })}
                   onPress={() => openDocument(doc)}
                   onLongPress={() => openFocus(doc)}
                   colors={colors}
@@ -584,7 +704,7 @@ export default function DocumentsScreen() {
                   {t('documents.emptyBody')}
                 </Text>
                 <Pressable
-                  onPress={addDoc}
+                  onPress={() => setPickTarget({ mode: 'add' })}
                   disabled={adding}
                   style={[styles.retryBtn, { borderColor: colors.teal, opacity: adding ? 0.7 : 1 }]}
                   accessibilityRole="button"
@@ -633,7 +753,7 @@ export default function DocumentsScreen() {
         opening={openingId === String(open?.id)}
         onOpenFile={openDocument}
         onDeleted={loadData}
-        onRenew={renewDocument}
+        onRenew={(doc) => openSourceAfterModal({ mode: 'renew', doc })}
       />
 
       {/* Long press. Renew is also on the card for anything expiring or expired,
@@ -644,10 +764,9 @@ export default function DocumentsScreen() {
           doc={focus}
           offline={offline.has(String(focus.id))}
           onClose={() => setFocus(null)}
-          // Stand the overlay down BEFORE the picker opens, same reason the
-          // detail sheet does: presenting over a modal that is about to unmount
-          // is the iOS race this app has been bitten by more than once.
-          onRenew={() => { const d = focus; setFocus(null); return renewDocument(d); }}
+          // Stand the overlay down BEFORE the source sheet opens — two Modals
+          // swapping inside one commit is the iOS presentation race.
+          onRenew={() => { const d = focus; setFocus(null); openSourceAfterModal({ mode: 'renew', doc: d }); }}
           onDelete={() => removeDocument(focus)}
         />
       )}
@@ -662,6 +781,23 @@ export default function DocumentsScreen() {
           captions={photoView.captions}
           allowDownload={false}
           onClose={() => setPhotoView(null)}
+        />
+      )}
+
+      {/* Camera / photos / files. Not Alert.alert: Android renders at most three
+          buttons, so Cancel plus these three would silently lose one — and web
+          has no Alert at all. */}
+      {pickTarget && (
+        <ActionSheet
+          title={pickTarget.mode === 'renew'
+            ? t('documents.renewSourceTitle')
+            : t('documents.addSourceTitle')}
+          subtitle={pickTarget.mode === 'renew'
+            ? t('documents.renewSourceSub', { label: pickTarget.doc?.label })
+            : t('documents.addSourceSub')}
+          actions={sourceActions}
+          onSelect={chooseSource}
+          onClose={() => setPickTarget(null)}
         />
       )}
 

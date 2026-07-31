@@ -791,6 +791,23 @@ export async function readDocumentBase64(uri, base64) {
   });
 }
 
+// A document that happens to be a photo, resolved to something a browser can
+// render and to a sane size. Same guarantee as the chat/POD/avatar paths — and
+// needed for the same reason, since the dispatcher views these in a web portal —
+// but reached differently: a document is uploaded as base64 JSON rather than
+// PUT to a signed url, so this hands back a uri to read rather than bytes.
+//
+// Two holes it closes that the pickers' own `Compatible` flag can't: a HEIC
+// picked out of Files (that flag is the photo library's, and iOS-only), and a
+// 12 MP camera photo going into a Postgres bytea column at full size, where
+// every later download pays for it. Deliberately throws rather than falling
+// back when a non-web-safe image can't be transcoded — see normalizePhoto.
+export async function normalizeDocumentImage(uri, mimeType) {
+  if (!uri || !baseMime(mimeType).startsWith('image/')) return null;
+  const out = await normalizePhoto(uri);
+  return { uri: out.uri, mimeType: out.mimeType, sizeBytes: out.sizeBytes };
+}
+
 // Adds a real document file (PDF, scan, etc. — not just a photo) picked via
 // expo-document-picker. Sent as base64 JSON straight to POST /documents,
 // matching the backend's UploadDocumentCommand contract (Kestrel's request
