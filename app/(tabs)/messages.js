@@ -55,19 +55,21 @@ const replyPreviewOf = (m) => ({ id: m.id, from: m.from, text: m.text, kind: m.k
 // guaranteed top-down expand (see Bubble's revealAnim) instead of leaving it
 // to LayoutAnimation, which doesn't let us control which edge stays put.
 const REVEALED_ROW_HEIGHT = 22;
-// Anything within this of the bottom of the thread counts as "at the bottom"
-// for auto-scroll purposes — roughly one short bubble, so a pixel or two of
-// overscroll doesn't unpin it. See "Keeping the newest message in view".
+// Anything within this of the newest message counts as "at the bottom" for
+// auto-scroll purposes — roughly one short bubble, so a pixel or two of
+// overscroll doesn't unpin it. The thread is inverted, so it is measured from
+// scroll offset 0. See "Keeping the newest message in view".
 const BOTTOM_PIN_SLOP = 120;
-// How long the thread gets to lay itself out before scroll events are treated
-// as the driver's own. FlatList measures rows in batches, so the real bottom
-// moves several times after the first paint.
-const SETTLE_MS = 800;
 // How long after we ask for an animated scroll the resulting scroll events are
 // still ours rather than the driver's. RN reports no difference between the two,
-// and scrollToEnd's animation runs ~250-300ms; anything inside this window is
-// discounted. See scrollToEnd / onScroll.
+// and the animation runs ~250-300ms; anything inside this window is discounted.
+// See scrollToNewest / onScroll.
 const AUTO_SCROLL_GRACE_MS = 450;
+// How long after the driver's finger leaves the thread we keep treating it as
+// theirs. A lifted finger is not the end of a scroll — momentum usually
+// follows, and onMomentumScrollEnd does not fire at all when it doesn't, so
+// neither event can end the interaction on its own. See endUserScroll.
+const USER_SCROLL_IDLE_MS = 250;
 // Cap on one album. The backend takes any number of attachments, but each is
 // uploaded on cab wifi or LTE and they all have to land before the message
 // posts, so this keeps a fat-fingered "select all" from stalling the thread.
@@ -163,10 +165,12 @@ export default function MessagesScreen() {
   // the keyboard listeners (which run before that block in source order) scroll
   // the thread too and have to go through the same path.
   const atBottomRef = useRef(true);   // driver is parked on the newest message
-  const settledRef  = useRef(false);  // first paint finished laying itself out
-  const settleTimerRef = useRef(null);
   const autoScrollingRef = useRef(false); // a scroll WE asked for is in flight
   const autoScrollTimerRef = useRef(null);
+  const userScrollingRef = useRef(false); // driver's finger (or its momentum) owns the thread
+  const userScrollTimerRef = useRef(null);
+  const pinAgainRef = useRef(false);      // content grew while our own scroll was running
+  const pinIfNeededRef = useRef(null);    // set below; lets scrollToNewest re-run the decision
   const kbPad       = useRef(new Animated.Value(0)).current; // live keyboard height → wrapper padding
   const seenIdsRef  = useRef(new Set());    // dispatcher-message ids already dinged/accounted for
   const firstLoadRef = useRef(true);        // skip the sound on the initial history fetch
@@ -175,30 +179,48 @@ export default function MessagesScreen() {
 
   // Every programmatic scroll goes through here so the scroll events it
   // generates can be told apart from a driver's drag. Without that, an animated
-  // scrollToEnd unpins the very thing it was called to pin: the frames on the
-  // way down all report "not at the bottom", onScroll believes them, and the
-  // next content-size change declines to follow.
-  const scrollToEnd = useCallback((animated = true) => {
+  // scroll unpins the very thing it was called to pin: the frames on the way
+  // there all report "not at the newest", onScroll believes them, and the next
+  // content-size change declines to follow.
+  //
+  // The list is inverted, so the newest message is at offset 0 — NOT at
+  // scrollToEnd(), which on an inverted list means the oldest message.
+  const scrollToNewest = useCallback((animated = true) => {
     autoScrollingRef.current = true;
     if (autoScrollTimerRef.current) clearTimeout(autoScrollTimerRef.current);
-    autoScrollTimerRef.current = setTimeout(
-      () => { autoScrollingRef.current = false; },
-      animated ? AUTO_SCROLL_GRACE_MS : 120,
-    );
-    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated }));
+    autoScrollTimerRef.current = setTimeout(() => {
+      autoScrollingRef.current = false;
+      // The thread grew while we were travelling. Land it once, now that the
+      // animation is over — see pinIfNeeded for why it isn't done as it grows.
+      if (!pinAgainRef.current) return;
+      pinAgainRef.current = false;
+      pinIfNeededRef.current?.();
+    }, animated ? AUTO_SCROLL_GRACE_MS : 120);
+    requestAnimationFrame(() => scrollRef.current?.scrollToOffset({ offset: 0, animated }));
   }, []);
 
-  // (Re)starts the settle window — the period during which the thread is still
-  // measuring itself and every content-size change pins unconditionally.
-  const armSettle = useCallback(() => {
-    settledRef.current = false;
-    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
-    settleTimerRef.current = setTimeout(() => { settledRef.current = true; }, SETTLE_MS);
+  // Marks the driver's scroll as over — but only after a beat, because neither
+  // scroll-lifecycle event can decide that alone. onScrollEndDrag fires the
+  // moment the finger lifts, which is usually the START of a fling, not the end
+  // of anything; onMomentumScrollEnd never fires when a drag stops dead with no
+  // momentum, so clearing the flag only there would disable auto-scroll for the
+  // rest of the session. Both call this, and onMomentumScrollBegin cancels it.
+  const endUserScroll = useCallback(() => {
+    if (userScrollTimerRef.current) clearTimeout(userScrollTimerRef.current);
+    userScrollTimerRef.current = setTimeout(
+      () => { userScrollingRef.current = false; },
+      USER_SCROLL_IDLE_MS,
+    );
+  }, []);
+
+  const beginUserScroll = useCallback(() => {
+    if (userScrollTimerRef.current) clearTimeout(userScrollTimerRef.current);
+    userScrollingRef.current = true;
   }, []);
 
   useEffect(() => () => {
-    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
     if (autoScrollTimerRef.current) clearTimeout(autoScrollTimerRef.current);
+    if (userScrollTimerRef.current) clearTimeout(userScrollTimerRef.current);
   }, []);
 
   // Keyboard tracking drives two things: (1) kbOpen collapses the composer's
@@ -231,7 +253,7 @@ export default function MessagesScreen() {
       // Follow the keyboard down to the newest message only if that's where
       // the driver already was. Scrolled up re-reading something, tapping the
       // composer must not throw away their place.
-      if (atBottomRef.current) scrollToEnd(true);
+      if (atBottomRef.current) scrollToNewest(true);
     });
     const h = Keyboard.addListener(hideEvt, (e) => {
       setKbOpen(false);
@@ -245,7 +267,7 @@ export default function MessagesScreen() {
       }).start();
     });
     return () => { s.remove(); h.remove(); };
-  }, [kbPad, scrollToEnd]);
+  }, [kbPad, scrollToNewest]);
 
   // dispatcher info comes from the driver profile loaded in AuthContext
   const dispatcher = user?.dispatcher;
@@ -342,84 +364,85 @@ export default function MessagesScreen() {
   useEffect(() => () => stopTypingSignal(), [stopTypingSignal]);
 
   // ── Keeping the newest message in view ──────────────────────────────────
-  // A messenger opens on the newest message and stays there. Auto-scrolling
-  // only when the message COUNT rose (what this did before) missed both of the
-  // cases that matter:
+  // The thread is an INVERTED list, and almost everything here follows from
+  // that. Inverted means the data is fed newest-first and drawn bottom-up, so
+  // the newest message lives at scroll offset 0 and is where the list already
+  // rests. Opening the chat renders one screenful of the newest messages and
+  // stops; older ones mount only as they are scrolled to.
   //
-  //   Opening the tab — the one scroll fired a frame after the data arrived,
-  //   before FlatList had measured the variable-height bubbles. It only ever
-  //   renders a batch at a time, so "the bottom" it scrolled to was the bottom
-  //   of the first ~20 rows, part-way up the thread.
+  // Chronological order is what the eye sees, because two flips cancel: `rows`
+  // is reversed on the way in (see the useMemo) and the list draws it back the
+  // other way. Day separators still precede their day, and buildChatRows bakes
+  // prevFrom/nextFrom into each row, so grouping is unaffected by the reversal.
   //
-  //   Sending — the optimistic bubble bumps the count and scrolls, then the
-  //   server echo replaces it with the persisted copy. Same count, different
-  //   height (plus a "seen" avatar row appearing), so nothing re-scrolled and
-  //   the driver was left just off the bottom of their own message.
+  // What this replaces is the reason the file used to be much more complicated.
+  // Non-inverted, the newest message sat at the FAR END: opening the tab meant
+  // rendering from the oldest and then scrollToEnd-ing the whole way down,
+  // mounting and measuring every bubble in between. The bottom therefore moved
+  // continuously during the one operation that had to land on it, which needed
+  // a "settle window" that re-pinned on every content-size change to chase it,
+  // and that machinery is what produced the bouncing, the post-call jumps and
+  // the shake. None of it survives the flip: there is no long scroll, so
+  // nothing to chase.
   //
-  // So pin to the bottom on every content-size change instead, but ONLY while
-  // the driver is already there. That guard is what lets this coexist with the
-  // reveal-on-tap timestamp: scrolled up reading history, a bubble growing
-  // 22px no longer yanks the view down — which is the exact bug that got
-  // onContentSizeChange removed in the first place.
-  //
-  // Until the thread settles, FlatList is still measuring batches and the
-  // bottom keeps moving, so every change pins unconditionally and without
-  // animation — the driver should never SEE the thread walking itself down.
-  // Settled means either they took control (a drag) or layout has had time to
-  // converge; from then on it's the conditional pin, animated.
-  //
-  // This runs on FOCUS, not just on mount, and that's the whole point: the tab
-  // stays mounted when the driver switches away, so scrolling up to re-read
-  // something and coming back used to restore the old scroll offset. Opening
-  // the chat means "show me the latest", so every entry resets the pin and
-  // drops to the newest message — the scroll position is not worth preserving
-  // across a tab switch, the conversation is.
+  // Two things still need doing by hand, and both are small:
+  //   - New content while parked at the bottom. Inverted or not, a message
+  //     arriving is a content-size change; if the driver is already at the
+  //     newest, follow it down (pinIfNeeded).
+  //   - Entering the tab. It stays mounted across a tab switch, so it would
+  //     otherwise restore the old offset. Opening a chat means "show me the
+  //     latest" — the conversation is worth preserving across a switch, the
+  //     scroll position is not.
   useFocusEffect(
     useCallback(() => {
       atBottomRef.current = true;
-      armSettle();
-      scrollToEnd(false);
-    }, [armSettle, scrollToEnd]),
+      scrollToNewest(false);
+    }, [scrollToNewest]),
   );
 
-  // …and the settle window has to be measured from when there is something to
-  // lay out, not from when the tab gained focus. Opening chat as the very first
-  // screen after a cold start (or a Metro bundle) meant the whole 800ms was
-  // spent on an EMPTY list: history is still in flight behind auth, the socket
-  // and the active-load fetch. By the time the messages landed the thread had
-  // already declared itself settled, so the one scroll it got was the animated,
-  // conditional kind, aimed at the bottom of the first measured batch — leaving
-  // the driver part-way up. Switching tabs and back worked only because the
-  // rows were measured by then, which is exactly the asymmetry to remove.
-  const hasContentRef = useRef(false);
-  useEffect(() => {
-    if (items.length === 0) { hasContentRef.current = false; return; }
-    if (hasContentRef.current) return;   // only the 0 → n transition
-    hasContentRef.current = true;
-    atBottomRef.current = true;
-    armSettle();
-    scrollToEnd(false);
-  }, [items.length, armSettle, scrollToEnd]);
-
   const onScroll = useCallback((e) => {
-    if (!settledRef.current) return;      // our own settling scrolls, not the driver
-    if (autoScrollingRef.current) return; // ditto, for a scroll we just asked for
-    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-    const fromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
-    atBottomRef.current = fromBottom <= BOTTOM_PIN_SLOP;
+    if (autoScrollingRef.current) return; // a scroll we asked for, not the driver
+    // Offset 0 IS the newest message, so this is a plain comparison — no
+    // arithmetic over contentSize, which was unreliable precisely when it
+    // mattered, while rows were still being measured.
+    atBottomRef.current = e.nativeEvent.contentOffset.y <= BOTTOM_PIN_SLOP;
   }, []);
 
-  const onContentSizeChange = useCallback(() => {
-    if (!settledRef.current) { scrollToEnd(false); return; }
-    if (atBottomRef.current) scrollToEnd(true);
-  }, [scrollToEnd]);
+  // The single decision about whether the thread should move, in priority
+  // order. Every content-size change runs it, and so does the tail of an
+  // auto-scroll that had to defer one.
+  const pinIfNeeded = useCallback(() => {
+    // 1. Never move a thread the driver is working. A finger outranks
+    // everything, including a message arriving this instant.
+    if (userScrollingRef.current) return;
+
+    // 2. Never start a second scroll on top of one already running. An
+    // animated scroll mounts the rows it travels past, each of which changes
+    // the content size and lands back here — so this could restart its own
+    // animation from wherever it had reached, repeatedly. That re-entry was
+    // the shake. Remember the target moved and re-decide once, at the end.
+    if (autoScrollingRef.current) { pinAgainRef.current = true; return; }
+
+    if (atBottomRef.current) scrollToNewest(true);
+  }, [scrollToNewest]);
+  // Read by scrollToNewest's tail. Assigned during render rather than in an
+  // effect so the very first content-size change already has it.
+  pinIfNeededRef.current = pinIfNeeded;
+
+  const onContentSizeChange = pinIfNeeded;
 
   // Sending is an explicit "I'm on the newest message" — even if the driver had
   // scrolled up, their own message has to land in view.
   const pinToBottom = useCallback(() => {
     atBottomRef.current = true;
-    scrollToEnd(settledRef.current);
-  }, [scrollToEnd]);
+    // …and it outranks a scroll that has only just finished, so the follow-up
+    // pin once the new bubble has been measured isn't swallowed by the guard
+    // in pinIfNeeded. Reaching the send button means the finger has already
+    // left the thread.
+    if (userScrollTimerRef.current) clearTimeout(userScrollTimerRef.current);
+    userScrollingRef.current = false;
+    scrollToNewest(true);
+  }, [scrollToNewest]);
 
   const append = useCallback((msg) => {
     setItems((prev) => [...prev, { id: `local-${Date.now()}`, from: 'driver', at: nowStr(), ...msg }]);
@@ -779,12 +802,18 @@ export default function MessagesScreen() {
   // the virtualized list below consumes. Grouping neighbours (prevFrom/
   // nextFrom) are resolved here rather than by index-peeking during render,
   // because a FlatList row can't see its siblings.
+  // Reversed for the inverted list — see "Keeping the newest message in view".
+  // buildChatRows still runs chronologically, so a day separator is emitted
+  // BEFORE its day's messages; reversing puts it after them in the array, and
+  // the inverted list draws later items higher, which lands it back above its
+  // day on screen. Grouping is unaffected: prevFrom/nextFrom are resolved into
+  // each row up front, not by looking at array neighbours.
   const rows = useMemo(
     () => buildChatRows(items, (key, date) => dayLabel(key, date, {
       today: t('common.today'),
       yesterday: t('common.yesterday'),
       months: t('common.monthsShort'),
-    })),
+    })).reverse(),
     [items, t],
   );
 
@@ -847,12 +876,21 @@ export default function MessagesScreen() {
           </View>
         </View>
         <View style={styles.headerActions}>
-          {/* Video is the secondary affordance and is styled as one — a driver
-              reaches for audio far more often, and two filled green circles
-              would be two competing primaries. It carries the accent fill
-              rather than green, because green here means "call" (the phone-UI
-              convention answer/hang-up rests on) and is not a colour to spend
-              on a second button. */}
+          {/* Both call buttons are one treatment — a pale tint of their own
+              colour behind a glyph carrying that colour at full strength —
+              and are told apart by hue and icon rather than by weight. The
+              colours still mean what they always did: video carries the
+              accent, which follows whatever the driver picked in Appearance,
+              and audio keeps the fixed green that phone UI everywhere uses
+              for "call".
+              Audio was a filled green disc with a glow, which made the
+              loudest thing in this header a button rather than the person
+              being talked to, and buried the actual phone glyph as a small
+              knockout inside it. Colouring the glyph instead of the disc puts
+              the weight back on the icon. Note this deliberately leaves the
+              header with no single primary action; green also still reads as
+              "call" here because the only other green is the availability
+              dot, which is a status, not an action. */}
           <Pressable
             onPress={onVideoCallPress}
             style={styles.videoBtn}
@@ -870,14 +908,7 @@ export default function MessagesScreen() {
             accessibilityLabel={t('messages.callA11y', { name: dispatcher?.name || t('messages.dispatcherFallback') })}
             accessibilityHint={t('messages.callHintA11y')}
           >
-            <LinearGradient
-              colors={colors.gradients.go}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[styles.callBtnFill, shadow.glow(colors.go)]}
-            >
-              <Icon family="ionicons" name="call" size={18} color={colors.onAccent} />
-            </LinearGradient>
+            <Icon family="ionicons" name="call" size={19} color={colors.go} />
           </Pressable>
         </View>
       </View>
@@ -924,36 +955,59 @@ export default function MessagesScreen() {
         {/* ── Chat area ──
             Virtualized: a long thread used to mount every bubble at once (each
             with its own Animated values and, for voice notes, its own player),
-            which is what made opening a busy conversation stutter. Kept
-            NON-inverted so the existing ordering, grouping and scroll-to-end
-            behaviour carry over unchanged. */}
+            which is what made opening a busy conversation stutter.
+            It was then kept NON-inverted so the existing ordering, grouping and
+            scroll-to-end behaviour carried over unchanged — which turned out to
+            be the expensive half of that decision, because virtualizing a list
+            you always have to scroll to the far end of buys much less than it
+            looks. It is inverted now; see "Keeping the newest message in view"
+            for what that removed. */}
         <FlatList
           ref={scrollRef}
           data={rows}
+          // Newest-first data drawn bottom-up. This is what makes opening the
+          // chat cheap: the first batch IS the newest messages, so there is no
+          // scroll across the whole thread and no measuring of everything in
+          // between. See "Keeping the newest message in view".
+          inverted
           keyExtractor={(row) => row.key}
           renderItem={renderRow}
           contentContainerStyle={styles.chatContent}
           showsVerticalScrollIndicator={false}
           style={styles.chatScroll}
-          ListFooterComponent={typing ? <TypingIndicator colors={colors} styles={styles} dispatcher={dispatcher} /> : null}
-          // Bottom-pinning (see the block above onScroll): the content size
-          // changes several times while FlatList measures its batches, and each
-          // one re-pins until the real bottom is reached.
+          // Header, not footer: inverted flips the two, and the typing bubble
+          // belongs under the newest message.
+          ListHeaderComponent={typing ? <TypingIndicator colors={colors} styles={styles} dispatcher={dispatcher} /> : null}
           onContentSizeChange={onContentSizeChange}
           onScroll={onScroll}
           scrollEventThrottle={16}
-          // A drag means the driver has taken over — stop treating scroll
-          // events as our own settling and honour where they leave the thread.
-          // A real finger outranks an in-flight auto-scroll, so cancel that too.
+          // NOTE: maintainVisibleContentPosition does NOT belong here. It was
+          // tried while this list was still non-inverted and put the bouncing
+          // straight back: it answers a content-size change by moving the
+          // scroll offset, which is the same event the pin reacts to, so the
+          // two compound on every send, echo swap and call. Inverting is what
+          // actually solves the problem it was reached for — rows resolving
+          // their height above the viewport no longer disturb the anchor,
+          // because the anchor is the bottom.
+          // A drag means the driver has taken over. A real finger outranks an
+          // in-flight auto-scroll, so cancel that too.
           onScrollBeginDrag={() => {
-            settledRef.current = true;
             autoScrollingRef.current = false;
+            beginUserScroll();
           }}
-          // The thread opens at the bottom; rendering a screenful up front
-          // keeps that first paint from showing a gap above the newest message.
-          initialNumToRender={20}
-          maxToRenderPerBatch={12}
-          windowSize={11}
+          // The interaction outlives the finger — see endUserScroll.
+          onScrollEndDrag={endUserScroll}
+          onMomentumScrollBegin={beginUserScroll}
+          onMomentumScrollEnd={endUserScroll}
+          // One screenful, and small batches after it. These are far lower than
+          // they were because the list no longer has to render its way to the
+          // far end before showing anything — 20 rows up front and batches of
+          // 12 were paying for that trip, and each batch is JS-thread work in
+          // the middle of a scroll.
+          initialNumToRender={10}
+          maxToRenderPerBatch={6}
+          updateCellsBatchingPeriod={60}
+          windowSize={9}
           removeClippedSubviews={Platform.OS === 'android'}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="none"
@@ -1271,6 +1325,11 @@ function BubbleVisual({ msg, mine, colors, styles, onOpenImage, onBubbleDoubleTa
 // prevFrom/nextFrom are the senders of the neighbouring messages WITHIN the
 // same day, resolved upstream by buildChatRows — a virtualized row can't reach
 // its siblings, and grouping must not span a date separator.
+// Message ids whose entrance animation has already played. Module-level for
+// the same reason imageSizeCache is: FlatList recycles the row, so the memory
+// of what it has already done cannot live inside it.
+const enteredIds = new Set();
+
 function Bubble({ msg, prevFrom, nextFrom, colors, styles, onAction, onReactQuick, onDoubleTap, onOpenImage, onCallBack, onRetry, revealed, onToggleReveal, showSeen, dispatcher }) {
   const t = useT();
   const mine = msg.from === 'driver';
@@ -1279,22 +1338,36 @@ function Bubble({ msg, prevFrom, nextFrom, colors, styles, onAction, onReactQuic
   const showAvatar = !mine && !nextSame;
   const hasReactions = msg.reactions?.length > 0;
 
-  // Gentle entrance — runs once when a bubble first mounts (stable m.id keys
-  // mean existing bubbles don't re-animate on every poll/re-render).
+  // Gentle entrance — once per message, ever. Stable m.id keys stop it
+  // re-running on a poll or re-render, but they do NOT stop virtualization:
+  // FlatList unmounts rows that leave the window and mounts them fresh on the
+  // way back, so keying off mount alone re-animated every bubble as it
+  // scrolled into view. That is wrong to look at (history should not fade in)
+  // and it is a burst of per-row work in the middle of a scroll, which is what
+  // made scrolling feel heavy.
   const reduce = useReduceMotion();
-  const enter = useRef(new Animated.Value(reduce ? 1 : 0)).current;
+  const alreadyEntered = reduce || enteredIds.has(msg.id);
+  const enter = useRef(new Animated.Value(alreadyEntered ? 1 : 0)).current;
   useEffect(() => {
-    if (reduce) return;
+    if (alreadyEntered) return;
+    enteredIds.add(msg.id);
     Animated.timing(enter, { toValue: 1, duration: 240, useNativeDriver: true }).start();
-  }, []);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Messenger-style reveal-on-tap timestamp: an Animated height/opacity this
   // bubble owns and drives itself off the `revealed` prop — top-anchored, so
   // it always expands downward from directly under the bubble, never from
   // the bottom of the screen. Height can't use the native driver, but it's a
   // single small row so the JS-thread cost is negligible.
-  const revealAnim = useRef(new Animated.Value(0)).current;
+  // Starts AT its resting value and only animates on an actual change. It used
+  // to animate on mount too, and since height can't use the native driver that
+  // is a JS-thread animation — one per row, every time virtualization mounted
+  // one, all the way through a scroll. Nothing was even moving: the tween ran
+  // 180ms from 0 to 0.
+  const revealAnim = useRef(new Animated.Value(revealed ? 1 : 0)).current;
+  const revealFirstRef = useRef(true);
   useEffect(() => {
+    if (revealFirstRef.current) { revealFirstRef.current = false; return; }
     Animated.timing(revealAnim, { toValue: revealed ? 1 : 0, duration: 180, useNativeDriver: false }).start();
   }, [revealed, revealAnim]);
 
@@ -2335,8 +2408,15 @@ const makeStyles = (c) => StyleSheet.create({
   statusDot: { width: 7, height: 7, borderRadius: 999 },
   statusText: { ...type.caption },
   headerActions: { flexDirection: 'row', gap: space[2], marginLeft: space[3] },
-  callBtn: { width: 44, height: 44, flexShrink: 0 },
-  callBtnFill: { flex: 1, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
+  /* The two header call buttons are the same treatment in different hues —
+     kept adjacent and written out in full so a change to one is visibly a
+     change to only one. goFill/tealFill are the 12–14% tints of go/teal. */
+  callBtn: {
+    width: 44, height: 44, flexShrink: 0, borderRadius: 999,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: c.goFill,
+    borderWidth: 1, borderColor: c.border,
+  },
   videoBtn: {
     width: 44, height: 44, flexShrink: 0, borderRadius: 999,
     alignItems: 'center', justifyContent: 'center',
@@ -2359,7 +2439,11 @@ const makeStyles = (c) => StyleSheet.create({
   // sits under the keyboard instead of lifting above it.
   chatScroll: { flex: 1, backgroundColor: 'transparent' },
   threadGlow: { position: 'absolute', top: 0, left: 0, right: 0, height: 200 },
-  chatContent: { padding: space[4], paddingBottom: space[6], gap: 0 },
+  // paddingTop, not paddingBottom, and that is not a typo: the list is
+  // inverted, so this container is laid out flipped and its top edge is the
+  // one the driver sees at the bottom. The extra room belongs under the newest
+  // message, above the composer.
+  chatContent: { padding: space[4], paddingTop: space[6], gap: 0 },
 
   dateSep: { flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: space[4] },
   dateLine: { flex: 1, height: 1 },
