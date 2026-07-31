@@ -107,6 +107,20 @@ export function relativeMinutes(mins, t) {
   return `${Math.floor(mins / 1440)}d`;
 }
 
+// Bytes → "2.4 MB". Returns null (not "0 B") when the size is unknown, so a
+// caller can drop the whole badge rather than print a size that isn't true —
+// SizeBytes is nullable on the documents payload.
+export function fileSize(bytes) {
+  const n = Number(bytes);
+  if (!isFinite(n) || n <= 0) return null;
+  if (n < 1024) return `${Math.round(n)} B`;
+  const kb = n / 1024;
+  if (kb < 1024) return `${Math.round(kb)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+  return `${(mb / 1024).toFixed(1)} GB`;
+}
+
 // Minutes → "6h 12m"
 export function hm(mins) {
   if (mins == null || isNaN(mins)) return '—';

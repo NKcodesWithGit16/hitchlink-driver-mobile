@@ -41,17 +41,24 @@ const touchDistance = (touches) => {
 };
 
 export default function PhotoViewer({
-  uris, index = 0, msg, filename, captions, onClose,
+  uris, index = 0, msg, filename, captions, onClose, allowDownload = true,
   onSendReply, onReact, onSaveToDocs, onDelete, onEdit,
 }) {
   const t = useT();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const list = useMemo(() => (uris || []).filter(Boolean), [uris]);
-  // This viewer is used from the chat thread AND from load history, where there
-  // is no conversation to reply to and nothing to react to. Rather than ship a
-  // second viewer, the chat-only chrome is driven by whether its callbacks were
-  // passed — no props, no composer, no "…" opening an empty sheet.
+  // This viewer is used from the chat thread AND from load history AND from the
+  // Documents tab's inspection mode, where there is no conversation to reply to
+  // and nothing to react to. Rather than ship a second viewer, the chat-only
+  // chrome is driven by whether its callbacks were passed — no props, no
+  // composer, no "…" opening an empty sheet.
+  //
+  // `allowDownload` is the one piece that can't be inferred that way. Save and
+  // Share both route through downloadChatAttachment, which fetches a REMOTE
+  // url; inspection mode passes local file:// uris straight off the disk cache,
+  // where that fetch fails. Handing an officer a credential is also not a
+  // moment for a "save to camera roll" button.
   const hasComposer = !!(onSendReply || onReact);
   const hasSheet = !!(onEdit || onSaveToDocs || (onDelete && msg?.from === 'driver'));
   const [page, setPage] = useState(index);
@@ -235,30 +242,34 @@ export default function PhotoViewer({
           ) : <View />}
 
           <View style={styles.topActions}>
-            <Pressable
-              onPress={save}
-              disabled={!!busy}
-              style={[styles.iconBtn, busy === 'save' && styles.iconBtnBusy]}
-              hitSlop={10}
-              accessibilityRole="button"
-              accessibilityLabel={t('messages.savePhotoA11y')}
-            >
-              {busy === 'save'
-                ? <ActivityIndicator size="small" color="#FFFFFF" />
-                : <Icon name="download" size={22} color="#FFFFFF" />}
-            </Pressable>
-            <Pressable
-              onPress={share}
-              disabled={!!busy}
-              style={[styles.iconBtn, busy === 'share' && styles.iconBtnBusy]}
-              hitSlop={10}
-              accessibilityRole="button"
-              accessibilityLabel={t('messages.sharePhotoA11y')}
-            >
-              {busy === 'share'
-                ? <ActivityIndicator size="small" color="#FFFFFF" />
-                : <Icon name="share" size={21} color="#FFFFFF" />}
-            </Pressable>
+            {allowDownload && (
+              <>
+                <Pressable
+                  onPress={save}
+                  disabled={!!busy}
+                  style={[styles.iconBtn, busy === 'save' && styles.iconBtnBusy]}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('messages.savePhotoA11y')}
+                >
+                  {busy === 'save'
+                    ? <ActivityIndicator size="small" color="#FFFFFF" />
+                    : <Icon name="download" size={22} color="#FFFFFF" />}
+                </Pressable>
+                <Pressable
+                  onPress={share}
+                  disabled={!!busy}
+                  style={[styles.iconBtn, busy === 'share' && styles.iconBtnBusy]}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('messages.sharePhotoA11y')}
+                >
+                  {busy === 'share'
+                    ? <ActivityIndicator size="small" color="#FFFFFF" />
+                    : <Icon name="share" size={21} color="#FFFFFF" />}
+                </Pressable>
+              </>
+            )}
             {hasSheet ? (
               <Pressable
                 onPress={() => setMoreOpen(true)}

@@ -9,6 +9,7 @@ import { fetchDriver } from '../api/main';
 import { registerForPushNotifications, unregisterPushNotifications } from '../hooks/usePushNotifications';
 import { stopBackgroundTracking } from '../lib/backgroundLocation';
 import { cancelAllLocalReminders } from '../lib/localNotifications';
+import { clearAll as clearDocumentCache } from '../lib/docCache';
 import { onSessionExpired, refreshNow } from '../lib/session';
 import { identify } from '../lib/observability';
 import { useT } from '../i18n/LanguageContext';
@@ -98,6 +99,10 @@ export function AuthProvider({ children }) {
     // deactivating the push token doesn't stop them — a signed-out phone would
     // otherwise keep announcing the previous driver's break and CDL expiry.
     await cancelAllLocalReminders();
+    // Same reasoning for the offline document copies: a driver's CDL, medical
+    // card and insurance are sitting in this app's own storage, and a shared
+    // cab phone must not hand them to whoever signs in next.
+    await clearDocumentCache(userId);
     await clearToken();
     await clearRefreshToken();
     await AsyncStorage.multiRemove([NAME_KEY, EMAIL_KEY]);

@@ -19,14 +19,30 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useT } from '../../src/i18n/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import {
-  fetchDocuments, uploadDocument, deleteDocument, fetchDocumentContent,
+  uploadDocument, deleteDocument, fetchDocumentContent,
   extractDocumentFields, readDocumentBase64,
 } from '../../src/api/main';
-import { expiryStatus, fmtDate, daysUntil } from '../../src/lib/format';
+import {
+  loadDocuments, syncOfflineCopies, cachedFileFor, cachedIds, ensureCached,
+  sortDocuments, isCredential, cachedThumb, ensureThumb, CREDENTIAL_TYPES,
+} from '../../src/lib/docCache';
+import PhotoViewer from '../../src/components/driver/PhotoViewer';
+import { fileKind, baseMime } from '../../src/lib/imageMime';
+import { expiryStatus, fmtDate, daysUntil, fileSize } from '../../src/lib/format';
 import { scheduleDocumentExpiryReminders } from '../../src/lib/localNotifications';
 import { space, type, radius, toneOf, FONT, shadow } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 import { useCallBannerInset } from '../../src/components/call/CallOverlay';
+
+// How old the saved copy is, in compact units only. format.relativeMinutes
+// would be the obvious reuse, but it returns the words "now" and "Yesterday",
+// which don't survive being dropped into "…from {age} ago".
+const ageLabel = (ms) => {
+  const mins = Math.max(1, Math.round(ms / 60000));
+  if (mins < 60) return `${mins}m`;
+  if (mins < 1440) return `${Math.floor(mins / 60)}h`;
+  return `${Math.floor(mins / 1440)}d`;
+};
 
 export default function DocumentsScreen() {
   const insets = useSafeAreaInsets();
@@ -51,6 +67,16 @@ export default function DocumentsScreen() {
   const [error, setError]     = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [adding, setAdding]   = useState(false);
+  // Serving the last-known list because the network is unreachable. Not an
+  // error — the whole point of the offline cache — so it gets a banner rather
+  // than the error box that used to swallow the entire screen.
+  const [stale, setStale]     = useState(null);   // { savedAt } | null
+  // Which documents can be opened with no signal, for the card's offline dot.
+  const [offline, setOffline] = useState(() => new Set());
+  // Inspection mode: { uris, captions } while showing credentials to an officer.
+  const [inspection, setInspection] = useState(null);
+  const [opening, setOpening] = useState(false);
+  const [renewing, setRenewing] = useState(null);   // doc id mid-renewal
 
   // Add-document review flow: pick → (maybe) AI-extract → editable review
   // modal → save. The actual POST /documents happens inside the modal.
@@ -58,17 +84,42 @@ export default function DocumentsScreen() {
   const [reviewAsset, setReviewAsset]       = useState(null);
   const [reviewExtraction, setReviewExtraction]           = useState(null);
   const [reviewExtractionError, setReviewExtractionError] = useState(null);
+  // Seeds the form when the AI read nothing — a renewal already knows its type,
+  // label and number, so only the new expiry date is genuinely unknown.
+  const [reviewDefaults, setReviewDefaults] = useState(null);
+  // Set while the review modal holds the replacement for an existing document.
+  const [replacingId, setReplacingId]       = useState(null);
+
+  const refreshOfflineFlags = useCallback(async () => {
+    if (!userId) return;
+    try { setOffline(await cachedIds(userId)); } catch {}
+  }, [userId]);
 
   const loadData = useCallback(async () => {
     if (!userId) return;
     try {
-      const d = await fetchDocuments(userId);
+      // Network first, last good response as the fallback. Only a failure with
+      // nothing stored is a real error.
+      const { docs: d, fromCache, savedAt } = await loadDocuments(userId);
       setDocs(d || []);
+      setStale(fromCache ? { savedAt } : null);
       setError(false);
+      await refreshOfflineFlags();
+      if (!fromCache) {
+        // Bring the offline copies in line in the background. Failures are
+        // swallowed inside syncOfflineCopies — it's an optimization, and a
+        // driver should never see it fail.
+        syncOfflineCopies(userId, d || [], { onChange: refreshOfflineFlags })
+          .then(refreshOfflineFlags)
+          .catch(() => {});
+      }
     } catch {
+      // Unreachable AND nothing stored — the only case that's still a hard
+      // failure. Drop the banner so it can't sit above the error box.
+      setStale(null);
       setError(true);
     }
-  }, [userId]);
+  }, [userId, refreshOfflineFlags]);
 
   useEffect(() => {
     if (!userId) return;
@@ -103,24 +154,73 @@ export default function DocumentsScreen() {
     return c;
   }, [docs]);
 
-  const visible = useMemo(() =>
-    filter === 'all' ? docs : docs.filter(d => expiryStatus(d.expires).key === filter),
-    [docs, filter]);
+  const savedCount = useMemo(
+    () => docs.filter(d => offline.has(String(d.id))).length,
+    [docs, offline]);
+
+  /* Inspection mode. The real use of this screen is handing the phone to an
+     officer at a scale, which today costs a tap into a card, a tap to view, and
+     a download. This is that in one tap, off the offline copies, in the order a
+     DOT inspection asks for them.
+
+     Only image credentials can go in the viewer — a PDF is a different renderer
+     entirely — so readiness is reported HERE rather than as a placeholder slide
+     inside it. A driver needs to find out that their registration isn't on the
+     phone while they're still parked, not while an officer is waiting. */
+  const inspectable = useMemo(() => {
+    const creds = CREDENTIAL_TYPES.map(type => docs.find(d => d.type === type)).filter(Boolean);
+    const ready = creds.filter(d =>
+      offline.has(String(d.id)) && baseMime(d.contentType).startsWith('image/'));
+    return { creds, ready };
+  }, [docs, offline]);
+
+  const openInspection = async () => {
+    if (opening) return;
+    setOpening(true);
+    try {
+      const uris = [];
+      const captions = [];
+      for (const d of inspectable.ready) {
+        // Already offline by construction, so this is a disk read — but go
+        // through the same path so a file evicted since the last render still
+        // resolves rather than opening a dead uri.
+        const file = await cachedFileFor(userId, d.id).catch(() => null);
+        if (file?.uri) { uris.push(file.uri); captions.push(d.label); }
+      }
+      if (!uris.length) {
+        Alert.alert(t('documents.inspectionEmptyTitle'), t('documents.inspectionEmptyBody'));
+        return;
+      }
+      haptics.success();
+      setInspection({ uris, captions });
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  // Sorted for the job, not by upload date: what's lapsed, then what's about
+  // to, then the credentials in the order an inspection asks for them.
+  const visible = useMemo(() => {
+    const list = filter === 'all' ? docs : docs.filter(d => expiryStatus(d.expires).key === filter);
+    return sortDocuments(list);
+  }, [docs, filter]);
 
   // Picks a file, tries an AI read of it (images only, size-capped — see
   // extractDocumentFields), then always opens the review modal so the driver
   // confirms/corrects before anything is saved. Extraction failing is
   // expected (no quota left, AI not configured, non-image file) — it just
-  // means the review modal opens blank instead of pre-filled.
-  const addDoc = async () => {
-    if (adding) return;
-    try {
-      const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true, base64: true });
-      if (res.canceled) return;
-      const asset = res.assets?.[0];
-      if (!asset) return;
+  // means the review modal opens on `defaults` instead of on read fields.
+  //
+  // Shared by "Add" and by a card's "Renew": the two differ only in what the
+  // form starts from and whether an old document is retired afterwards.
+  const pickForReview = useCallback(async (defaults, replaceId, onBusy) => {
+    const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true, base64: true });
+    if (res.canceled) return false;
+    const asset = res.assets?.[0];
+    if (!asset) return false;
 
-      setAdding(true);
+    onBusy(true);
+    try {
       const base64 = await readDocumentBase64(asset.uri, asset.base64);
 
       let extraction = null;
@@ -138,23 +238,81 @@ export default function DocumentsScreen() {
       setReviewAsset({ ...asset, base64 });
       setReviewExtraction(extraction);
       setReviewExtractionError(extractionError);
+      setReviewDefaults(defaults || null);
+      setReplacingId(replaceId || null);
       setReviewVisible(true);
-    } catch {
-      Alert.alert(t('documents.couldNotAdd'), t('documents.pleaseTryAgain'));
+      return true;
     } finally {
+      onBusy(false);
+    }
+  }, []);
+
+  const addDoc = async () => {
+    if (adding) return;
+    try {
+      await pickForReview(null, null, setAdding);
+    } catch {
       setAdding(false);
+      Alert.alert(t('documents.couldNotAdd'), t('documents.pleaseTryAgain'));
     }
   };
+
+  /* Renewing a lapsed credential. Lives here rather than in the viewer so the
+     card can offer it directly — an expired document used to be a red card with
+     no way forward from it, and the only route to fixing it was buried a tap
+     deeper. Resolves true when a replacement was picked.
+
+     It goes through the SAME review flow as adding a document, rather than
+     uploading straight off the picker, and that is the point: a renewal's whole
+     purpose is a new expiry date. The old code carried `expiresAt: doc.expires`
+     forward, so a "renewed" CDL was saved still expired. Reading the new date
+     off the photo and letting the driver confirm it is exactly what the review
+     modal already does.
+
+     RENEWAL REPLACES: once the new document saves, the old one is retired (see
+     handleReviewSaved). Without that a driver ends up with two CDL cards, and
+     since the list now leads with what's expired, the stale one would sit at the
+     top of the screen immediately after they'd just fixed it. */
+  const renewDocument = useCallback(async (doc) => {
+    if (!doc || renewing) return false;
+    try {
+      return await pickForReview(
+        { type: doc.type, label: doc.label, documentNumber: doc.documentNumber || '' },
+        String(doc.id),
+        (busy) => setRenewing(busy ? String(doc.id) : null),
+      );
+    } catch {
+      setRenewing(null);
+      haptics.error();
+      Alert.alert(t('documents.couldNotAdd'), t('documents.pleaseTryAgain'));
+      return false;
+    }
+  }, [renewing, pickForReview, t]);
 
   const closeReview = () => {
     setReviewVisible(false);
     setReviewAsset(null);
     setReviewExtraction(null);
     setReviewExtractionError(null);
+    setReviewDefaults(null);
+    setReplacingId(null);
   };
 
   const handleReviewSaved = async () => {
+    // Read it before closing — closeReview() clears it.
+    const retiring = replacingId;
+    // Dismiss first, so the modal doesn't sit there through a network round
+    // trip after the driver has already tapped Save.
     closeReview();
+    // Retire the document this one replaces. DELETE /documents/{id} is a
+    // per-document soft delete (IsActive = false), so the old row survives for
+    // the dispatcher's records — it is NOT the global load delete that
+    // lib/hiddenLoads.js warns about.
+    //
+    // Best-effort on purpose: the replacement has already saved by this point,
+    // and failing here would tell the driver their new CDL didn't upload when
+    // it did. The worst case is the old card lingering until they remove it.
+    if (retiring) await deleteDocument(retiring).catch(() => {});
     await loadData();
   };
 
@@ -218,6 +376,50 @@ export default function DocumentsScreen() {
         })}
       </ScrollView>
 
+      {/* ── Inspection mode ── */}
+      {inspectable.ready.length > 0 && (
+        <Pressable
+          onPress={openInspection}
+          disabled={opening}
+          style={({ pressed }) => [
+            styles.inspectionBar,
+            { backgroundColor: colors.tealFill, borderColor: colors.teal + '55', opacity: pressed || opening ? 0.85 : 1 },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel={t('documents.inspectionA11y')}
+        >
+          <View style={[styles.alertIcon, { backgroundColor: colors.tealFill }]}>
+            <Icon name="shield" size={16} color={colors.teal} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[styles.inspectionTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+              {t('documents.inspectionTitle')}
+            </Text>
+            <Text style={[styles.inspectionSub, { color: colors.textMuted }]} numberOfLines={1}>
+              {t('documents.inspectionReady', {
+                n: inspectable.ready.length,
+                total: inspectable.creds.length,
+              })}
+            </Text>
+          </View>
+          <Icon name="chevron-right" size={16} color={colors.teal} />
+        </Pressable>
+      )}
+
+      {/* ── Offline banner ── */}
+      {/* Serving the stored list. Deliberately quiet: the driver has everything
+          they came for, so this reports provenance rather than raising alarm. */}
+      {stale && (
+        <View style={[styles.alertBanner, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
+          <View style={[styles.alertIcon, { backgroundColor: colors.surfaceHi }]}>
+            <Icon name="wifi-off" size={16} color={colors.textMuted} />
+          </View>
+          <Text style={[styles.alertText, { color: colors.textSecondary }]} numberOfLines={2}>
+            {t('documents.showingSaved', { age: ageLabel(Date.now() - stale.savedAt) })}
+          </Text>
+        </View>
+      )}
+
       {/* ── Alert banner (expiring docs only) ── */}
       {counts.expiring > 0 && (
         <View style={[styles.alertBanner, { backgroundColor: colors.cautionFill, borderColor: colors.caution + '66' }]}>
@@ -261,20 +463,63 @@ export default function DocumentsScreen() {
           <>
             {visible.map((doc, i) => (
               <FadeInView key={doc.id} delay={i * 70}>
-                <DocCard doc={doc} onPress={() => setOpen(doc)} colors={colors} styles={styles} />
+                <DocCard
+                  doc={doc}
+                  offline={offline.has(String(doc.id))}
+                  renewing={renewing === String(doc.id)}
+                  onRenew={() => renewDocument(doc)}
+                  onPress={() => setOpen(doc)}
+                  colors={colors}
+                  styles={styles}
+                />
               </FadeInView>
             ))}
-            {visible.length === 0 && (
+            {/* Two different nothings. A driver who has uploaded nothing at all
+                was being told "No all documents", which reads as a bug and
+                offers no way forward — they get an actual first-run prompt. */}
+            {visible.length === 0 && (docs.length === 0 ? (
+              <View style={styles.empty}>
+                <Icon name="folder-plus" size={40} color={colors.textMuted} />
+                <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>
+                  {t('documents.emptyTitle')}
+                </Text>
+                <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+                  {t('documents.emptyBody')}
+                </Text>
+                <Pressable
+                  onPress={addDoc}
+                  disabled={adding}
+                  style={[styles.retryBtn, { borderColor: colors.teal, opacity: adding ? 0.7 : 1 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('documents.addA11y')}
+                >
+                  <Icon name={adding ? 'loader' : 'plus'} size={15} color={colors.teal} />
+                  <Text style={[styles.retryText, { color: colors.teal }]}>
+                    {adding ? t('documents.adding') : t('documents.emptyAction')}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : (
               <View style={styles.empty}>
                 <Icon name="folder" size={40} color={colors.textMuted} />
                 <Text style={[styles.emptyText, { color: colors.textMuted }]}>
                   {t('documents.noFilteredDocs', { filter: FILTERS.find(f => f.key === filter)?.label.toLowerCase() })}
                 </Text>
               </View>
+            ))}
+            {/* Reports what is actually on the phone. This line used to claim
+                "Documents are cached offline" while nothing was cached at all,
+                which is the kind of promise a driver only discovers is false
+                at the scale house. */}
+            {docs.length > 0 && (
+              <Text style={[styles.hint, { color: colors.textMuted }]}>
+                {savedCount === 0
+                  ? t('documents.offlineNone')
+                  : savedCount >= docs.length
+                    ? t('documents.offlineAll')
+                    : t('documents.offlineSome', { n: savedCount, total: docs.length })}
+              </Text>
             )}
-            <Text style={[styles.hint, { color: colors.textMuted }]}>
-              {t('documents.offlineHint')}
-            </Text>
           </>
         )}
       </ScrollView>
@@ -287,13 +532,28 @@ export default function DocumentsScreen() {
         insets={insets}
         userId={userId}
         onUploaded={loadData}
+        onRenew={renewDocument}
       />
+
+      {/* Reuses the chat/load-history viewer — pinch, pan and swipe between
+          credentials are already solved there. No callbacks means no composer
+          and no ⋯ sheet; allowDownload=false drops Save/Share, which target
+          remote urls and would fail on these local files. */}
+      {inspection && (
+        <PhotoViewer
+          uris={inspection.uris}
+          captions={inspection.captions}
+          allowDownload={false}
+          onClose={() => setInspection(null)}
+        />
+      )}
 
       <DocumentReviewModal
         visible={reviewVisible}
         asset={reviewAsset}
         extraction={reviewExtraction}
         extractionError={reviewExtractionError}
+        defaults={reviewDefaults}
         driverId={userId}
         onSaved={handleReviewSaved}
         onCancel={closeReview}
@@ -305,12 +565,44 @@ export default function DocumentsScreen() {
 
 /* ─────────── Doc Card ─────────── */
 
-function DocCard({ doc, onPress, colors, styles }) {
+// Resolved thumbnails, kept module-level so re-rendering the list doesn't
+// re-request them. A stored `null` means "asked, this document has none" — a
+// PDF or anything uploaded before thumbnails existed — so it isn't asked again.
+const thumbUris = new Map();
+
+function useDocThumb(doc) {
+  const id = String(doc?.id ?? '');
+  const has = !!doc?.hasThumbnail;
+  const [uri, setUri] = useState(() => (has ? cachedThumb(id) || thumbUris.get(id) || null : null));
+
+  useEffect(() => {
+    if (!has || uri || thumbUris.get(id) === null) return;
+    let alive = true;
+    ensureThumb(id)
+      .then((u) => { thumbUris.set(id, u || null); if (alive && u) setUri(u); })
+      .catch(() => {});   // a missing preview is never worth surfacing
+    return () => { alive = false; };
+  }, [id, has, uri]);
+
+  return uri;
+}
+
+function DocCard({ doc, offline, renewing, onRenew, onPress, colors, styles }) {
   const reduce  = useReduceMotion();
   const t       = useT();
   const status  = expiryStatus(doc.expires);
   const days    = daysUntil(doc.expires);
   const tone    = toneOf(colors, status.tone);
+  // A credential keeps its own meaningful glyph (a licence looks like a card, a
+  // medical card like a pulse). Everything else used to fall back to one shared
+  // file-text icon, which is what made a list of driver-added documents
+  // indistinguishable — those get an icon for the actual file format instead.
+  const thumb   = useDocThumb(doc);
+  const kind    = fileKind(doc.contentType);
+  const glyph   = isCredential(doc)
+    ? { name: doc.icon || 'file-text', family: 'feather' }
+    : { name: kind.icon, family: kind.family };
+  const size    = fileSize(doc.sizeBytes);
   const barFill = Math.max(0, Math.min(1, (days ?? 0) / 365));
   const barAnim = useRef(new Animated.Value(0)).current;
 
@@ -333,6 +625,7 @@ function DocCard({ doc, onPress, colors, styles }) {
                     t('documents.yrLeft', { n: Math.round(days / 365 * 10) / 10 });
 
   const statusLabel = t(status.labelKey, status.labelParams);
+  const needsRenewal = status.key === 'expired' || status.key === 'expiring';
 
   return (
     <Pressable
@@ -350,8 +643,13 @@ function DocCard({ doc, onPress, colors, styles }) {
       <View style={styles.docBody}>
         {/* Top row: icon + label + badge */}
         <View style={styles.docTop}>
+          {/* The document's own first look when there is one, the file-type
+              glyph when there isn't. Same 44pt tile either way, so cards don't
+              jump as previews arrive. */}
           <View style={[styles.docIcon, { backgroundColor: tone.fill }]}>
-            <Icon name={doc.icon || 'file-text'} size={20} color={tone.solid} />
+            {thumb
+              ? <Image source={{ uri: thumb }} style={styles.docThumb} resizeMode="cover" />
+              : <Icon name={glyph.name} family={glyph.family} size={20} color={tone.solid} />}
           </View>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.docLabel, { color: colors.textPrimary }]} numberOfLines={1}>
@@ -367,10 +665,30 @@ function DocCard({ doc, onPress, colors, styles }) {
           </View>
         </View>
 
-        {/* Doc number */}
-        <View style={[styles.numberRow, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
-          <Icon name="hash" size={12} color={colors.textMuted} />
-          <Text style={[styles.docNumber, { color: colors.textSecondary }]}>{doc.number}</Text>
+        {/* Doc number + what the file actually is. The format and size are the
+            only fields that differ between two documents a driver labelled
+            similarly, and they were already on the payload, unused. */}
+        <View style={styles.metaRow}>
+          <View style={[styles.numberRow, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
+            <Icon name="hash" size={12} color={colors.textMuted} />
+            <Text style={[styles.docNumber, { color: colors.textSecondary }]}>{doc.number}</Text>
+          </View>
+          {(kind.ext || size) && (
+            <View style={[styles.filePill, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
+              <Text style={[styles.fileText, { color: colors.textMuted }]}>
+                {[kind.ext, size].filter(Boolean).join(' · ')}
+              </Text>
+            </View>
+          )}
+          {offline && (
+            <View
+              style={[styles.filePill, { backgroundColor: colors.goFill, borderColor: colors.go + '55' }]}
+              accessibilityLabel={t('documents.offlineReady')}
+            >
+              <Icon name="check-circle" size={11} color={colors.go} />
+              <Text style={[styles.fileText, { color: colors.go }]}>{t('documents.offlineReady')}</Text>
+            </View>
+          )}
         </View>
 
         {/* Expiry bar + meta */}
@@ -396,6 +714,28 @@ function DocCard({ doc, onPress, colors, styles }) {
             <Text style={[styles.daysLeft, { color: tone.solid }]}>{daysLabel}</Text>
           </View>
         </View>
+
+        {/* A lapsed or lapsing credential used to be a red card and nothing
+            else. The fix for it belongs on the card. */}
+        {needsRenewal && onRenew && (
+          <Pressable
+            onPress={onRenew}
+            disabled={renewing}
+            style={({ pressed }) => [
+              styles.renewBtn,
+              { borderColor: tone.solid, backgroundColor: tone.fill, opacity: pressed || renewing ? 0.7 : 1 },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={t('documents.renewA11y', { label: doc.label })}
+          >
+            <Icon name={renewing ? 'loader' : 'upload'} size={14} color={tone.solid} />
+            <Text style={[styles.renewText, { color: tone.solid }]}>
+              {/* Same phase as the Add button's "Adding…" — reading the file
+                  and running the AI over it. Nothing is uploading yet. */}
+              {renewing ? t('documents.adding') : t('documents.renewNow')}
+            </Text>
+          </Pressable>
+        )}
       </View>
 
       <Icon name="chevron-right" size={16} color={colors.textMuted} style={{ alignSelf: 'center', marginRight: space[3] }} />
@@ -426,8 +766,7 @@ function DocCardSkeleton({ colors, styles }) {
 
 /* ─────────── Doc Viewer ─────────── */
 
-function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded }) {
-  const [uploading, setUploading]   = useState(false);
+function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded, onRenew }) {
   const [viewing, setViewing]       = useState(false);
   const [deleting, setDeleting]     = useState(false);
   const [previewUri, setPreviewUri] = useState(null);
@@ -446,7 +785,19 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
         await Linking.openURL(doc.url);
         return;
       }
-      const result = await fetchDocumentContent(doc.id, doc.fileName || doc.label);
+      // Offline copy first — it opens instantly and it is the only thing that
+      // works with no signal. If refreshing it fails we fall back to whatever
+      // is already on disk: a slightly older CDL beats an error box at a
+      // weigh station.
+      let result = null;
+      try {
+        result = await ensureCached(userId, doc);
+      } catch {
+        result = await cachedFileFor(userId, doc.id);
+      }
+      // Web has no filesystem cache; so does a document that policy never
+      // stored. Fetch it the old way.
+      if (!result) result = await fetchDocumentContent(doc.id, doc.fileName || doc.label);
       if (!result) {
         Alert.alert(t('documents.notAvailableTitle'), t('documents.notAvailableBody'));
         return;
@@ -500,36 +851,16 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
     ]);
   };
 
-  const uploadRenewal = async () => {
-    if (uploading) return;
-    try {
-      const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true, base64: true });
-      if (res.canceled) return;
-      const asset = res.assets?.[0];
-      if (!asset) return;
-      setUploading(true);
-      await uploadDocument(userId, {
-        uri: asset.uri,
-        name: asset.name,
-        mimeType: asset.mimeType,
-        sizeBytes: asset.size,
-        base64: asset.base64,
-        type: doc.type,
-        expiresAt: doc.expires,
-      });
-      await onUploaded?.();
-      // No success Alert here: it would be presented on top of this Modal and
-      // then torn down by the onClose below before the driver could read it.
-      // The refreshed list behind us already shows the new expiry date, which
-      // is the confirmation that matters.
-      haptics.success();
-      onClose();
-    } catch {
-      // Safe: this one is raised while the Modal stays open.
-      Alert.alert(t('documents.couldNotUpload'), t('documents.pleaseTryAgain'));
-    } finally {
-      setUploading(false);
-    }
+  // Shares one implementation with the card's Renew button (the screen owns it)
+  // so the two can't drift.
+  //
+  // This Modal is stood down BEFORE the picker and the review modal open, not
+  // after. Presenting a second Modal over one that is about to unmount is the
+  // iOS presentation race this app has already been bitten by more than once —
+  // and the review modal is where the rest of the renewal now happens anyway.
+  const uploadRenewal = () => {
+    onClose();
+    onRenew?.(doc);
   };
 
   const daysLabel =
@@ -605,16 +936,15 @@ function DocViewer({ doc, onClose, colors, styles, insets, userId, onUploaded })
           {/* Action buttons */}
           <Pressable
             onPress={uploadRenewal}
-            disabled={uploading}
             style={({ pressed }) => [
               styles.actionBtn,
-              { backgroundColor: tone.solid, opacity: pressed || uploading ? 0.85 : 1 },
+              { backgroundColor: tone.solid, opacity: pressed ? 0.85 : 1 },
               shadow.glow(tone.solid),
             ]}
           >
-            <Icon name={uploading ? 'loader' : 'upload'} size={18} color={colors.onAccent} />
+            <Icon name="upload" size={18} color={colors.onAccent} />
             <Text style={[styles.actionBtnText, { color: colors.onAccent }]}>
-              {uploading ? t('documents.uploading') : t('documents.uploadRenewal')}
+              {t('documents.uploadRenewal')}
             </Text>
           </Pressable>
 
@@ -730,7 +1060,8 @@ const makeStyles = (c) => StyleSheet.create({
   stripe: { width: 5, alignSelf: 'stretch', flexShrink: 0 },
   docBody: { flex: 1, padding: space[4], gap: space[3] },
   docTop: { flexDirection: 'row', alignItems: 'center', gap: space[3] },
-  docIcon: { width: 44, height: 44, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  docIcon: { width: 44, height: 44, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden' },
+  docThumb: { width: '100%', height: '100%' },
   docLabel: { ...type.bodyStrong, fontSize: 15 },
   docSub: { ...type.caption, marginTop: 1 },
 
@@ -742,6 +1073,23 @@ const makeStyles = (c) => StyleSheet.create({
   statusDot: { width: 6, height: 6, borderRadius: 999 },
   statusText: { fontSize: 11, fontFamily: FONT.black },
 
+  inspectionBar: {
+    flexDirection: 'row', alignItems: 'center', gap: space[3],
+    marginHorizontal: space[4], marginBottom: space[3],
+    padding: space[3], borderRadius: radius.lg, borderWidth: 1,
+  },
+  inspectionTitle: { ...type.bodyStrong, fontSize: 14 },
+  inspectionSub: { ...type.caption, marginTop: 1 },
+
+  renewBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    borderRadius: radius.md, borderWidth: 1, paddingVertical: 10,
+  },
+  renewText: { fontSize: 13, fontFamily: FONT.bold },
+
+  // Wraps, because a document number, a format badge and the offline pill do
+  // not fit on one line on a small phone in Georgian.
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
   numberRow: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: c.surface2, borderRadius: radius.md,
@@ -749,6 +1097,13 @@ const makeStyles = (c) => StyleSheet.create({
     alignSelf: 'flex-start',
   },
   docNumber: { fontSize: 13, fontFamily: FONT.bold, letterSpacing: 0.5 },
+  filePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    borderRadius: radius.md, borderWidth: 1,
+    paddingHorizontal: 9, paddingVertical: 7,
+    alignSelf: 'flex-start',
+  },
+  fileText: { fontSize: 11, fontFamily: FONT.bold, letterSpacing: 0.3 },
 
   expirySection: { gap: 7 },
   barTrack: { height: 5, borderRadius: 999, overflow: 'hidden' },
@@ -759,7 +1114,8 @@ const makeStyles = (c) => StyleSheet.create({
 
   /* Empty state */
   empty: { alignItems: 'center', paddingVertical: space[10], gap: space[3] },
-  emptyText: { ...type.body },
+  emptyTitle: { ...type.bodyStrong, fontSize: 16 },
+  emptyText: { ...type.body, textAlign: 'center', paddingHorizontal: space[4], lineHeight: 20 },
 
   hint: { ...type.caption, textAlign: 'center', marginTop: space[3], lineHeight: 19 },
 

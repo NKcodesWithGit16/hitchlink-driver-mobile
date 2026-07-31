@@ -36,7 +36,11 @@ const extractionErrorMessage = (err, t) => {
   return t('documents.couldntReadAuto');
 };
 
-export default function DocumentReviewModal({ visible, asset, extraction, extractionError, driverId, onSaved, onCancel, colors }) {
+// `defaults` seeds the form for a RENEWAL, where the document being replaced
+// already tells us the type, label and number — only the new expiry date is
+// genuinely unknown, and that is the one field a renewal exists to change. What
+// the AI reads off the photo still wins over it, field by field.
+export default function DocumentReviewModal({ visible, asset, extraction, extractionError, defaults, driverId, onSaved, onCancel, colors }) {
   const insets = useSafeAreaInsets();
   const t = useT();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -51,16 +55,20 @@ export default function DocumentReviewModal({ visible, asset, extraction, extrac
   useEffect(() => {
     if (!visible) return;
     const f = extraction?.fields;
-    const nextType = TYPE_OPTIONS.includes(f?.documentType) ? f.documentType : 'Other';
+    const fallbackType = TYPE_OPTIONS.includes(defaults?.type) ? defaults.type : 'Other';
+    const nextType = TYPE_OPTIONS.includes(f?.documentType) ? f.documentType : fallbackType;
     setDocType(nextType);
     // Always start with a usable label, even when there's no AI extraction
     // (non-image file, AI unavailable, quota exhausted) — otherwise Save has
     // nothing to submit and the driver has no obvious next step.
-    setLabel(f?.label || t(TYPE_LABEL_KEYS[nextType]));
-    setDocumentNumber(f?.documentNumber || '');
+    setLabel(f?.label || defaults?.label || t(TYPE_LABEL_KEYS[nextType]));
+    setDocumentNumber(f?.documentNumber || defaults?.documentNumber || '');
+    // Never seeded from `defaults`: a renewal's old expiry date is precisely
+    // what must not carry over. Blank until the AI reads one or the driver
+    // types it.
     setExpiresAt(f?.expiresAt || '');
     setFormError('');
-  }, [visible, extraction, t]);
+  }, [visible, extraction, defaults, t]);
 
   if (!visible || !asset) return null;
 

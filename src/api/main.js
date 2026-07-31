@@ -800,12 +800,14 @@ export async function uploadDocument(driverId, { uri, name, mimeType, sizeBytes,
   if (!driverId || !uri) return null;
 
   const contentBase64 = await readDocumentBase64(uri, base64);
+  const thumbnailBase64 = await makeDocThumbnail(uri, mimeType);
 
   return apiFetch('/documents', {
     method: 'POST',
     body: JSON.stringify({
       type,
       contentBase64,
+      thumbnailBase64,
       fileName: name,
       contentType: mimeType,
       sizeBytes,
@@ -819,6 +821,63 @@ export async function uploadDocument(driverId, { uri, name, mimeType, sizeBytes,
   });
 }
 
+// A card-sized preview of a document, so the Documents list can show what each
+// one IS without downloading every full-size file — the bytes live in a Postgres
+// column, so a preview per row would otherwise mean reading every document out
+// of the database on every visit.
+//
+// The PHONE makes this, not the server: the app already has expo-image-manipulator
+// for photo normalization, so no image library has to be added to the API. Only
+// images can be rendered here; a PDF returns null and the card falls back to a
+// file-type icon. DOC_THUMB_MAX_BYTES mirrors the server's cap — it rejects
+// anything larger, and a rejected upload is worse than a missing preview.
+const DOC_THUMB_EDGE = 320;
+const DOC_THUMB_QUALITY = 0.6;
+const DOC_THUMB_MAX_BYTES = 64 * 1024;
+
+export async function makeDocThumbnail(uri, mimeType) {
+  if (!uri || !baseMime(mimeType).startsWith('image/')) return null;
+  try {
+    // Lazily required for the same reason as normalizePhoto above — see the
+    // note on loadImageManipulator.
+    const { ImageManipulator, SaveFormat } = loadImageManipulator();
+    const ctx = ImageManipulator.manipulate(uri);
+    let rendered = await ctx.renderAsync();
+    if (Math.max(rendered.width, rendered.height) > DOC_THUMB_EDGE) {
+      ctx.resize(rendered.width >= rendered.height
+        ? { width: DOC_THUMB_EDGE }
+        : { height: DOC_THUMB_EDGE });
+      rendered = await ctx.renderAsync();
+    }
+    const out = await rendered.saveAsync({
+      format: SaveFormat.JPEG,
+      compress: DOC_THUMB_QUALITY,
+      base64: true,
+    });
+    if (!out.base64) return null;
+    // base64 inflates by 4/3; compare the decoded size against the server's cap.
+    if ((out.base64.length * 3) / 4 > DOC_THUMB_MAX_BYTES) return null;
+    return out.base64;
+  } catch (err) {
+    // A preview is a nicety. Never fail an upload over one — the document
+    // itself is what the driver came to save.
+    console.warn('[Documents] Thumbnail generation failed, uploading without one:', err?.message || err);
+    return null;
+  }
+}
+
+// The stored preview for a document as raw JPEG bytes, or null when it has none
+// (a 404 — normal for PDFs and for anything uploaded before thumbnails existed,
+// so it is deliberately not an error). lib/docCache turns these into something
+// renderable: a file on native, an object URL on web.
+export async function fetchDocumentThumbnail(documentId) {
+  if (USE_MOCK) return null;
+  const res = await apiFetchRaw(`/documents/${documentId}/thumbnail`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`API ${res.status} — /documents/${documentId}/thumbnail`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
 export async function deleteDocument(documentId) {
   if (USE_MOCK) { await wait(150); return { ok: true }; }
   return apiFetch(`/documents/${documentId}`, { method: 'DELETE', allow404: true });
@@ -828,7 +887,13 @@ export async function deleteDocument(documentId) {
 // dir and returns a local file:// uri (for <Image> or Sharing.shareAsync). Web:
 // returns an object URL. No real file storage exists in mock mode, so mock
 // callers get null and the caller falls back to a "can't preview" message.
-export async function fetchDocumentContent(documentId, fileName = 'document') {
+// `directory` lets a caller choose where the file lands. lib/docCache.js passes
+// a per-document directory under Paths.document, because offline copies have to
+// survive: Paths.cache is documented as "files that can be deleted by the system
+// when the device runs low on storage", which is exactly wrong for a CDL a
+// driver expects to open at a weigh station. Left unset it still falls back to
+// the cache directory, which is right for a one-off view-and-forget download.
+export async function fetchDocumentContent(documentId, fileName = 'document', { directory } = {}) {
   if (USE_MOCK) return null;
   const res = await apiFetchRaw(`/documents/${documentId}/content`);
   if (!res.ok) throw new Error(`API ${res.status} — /documents/${documentId}/content`);
@@ -843,9 +908,9 @@ export async function fetchDocumentContent(documentId, fileName = 'document') {
   }
   const named = cacheFileName(fileName, contentType);
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const dest = new File(Paths.cache, named);
+  const dest = new File(directory || Paths.cache, named);
   if (dest.exists) dest.delete();
-  dest.create();
+  dest.create({ intermediates: true });
   dest.write(bytes);
   return { uri: dest.uri, contentType, fileName: named, uti: utiForContentType(contentType) };
 }

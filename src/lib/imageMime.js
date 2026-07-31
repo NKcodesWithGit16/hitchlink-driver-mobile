@@ -31,6 +31,28 @@ export const baseMime = (ct) => (ct || '').split(';')[0].trim().toLowerCase();
 /** File extension for a Content-Type, or null when we don't know one. */
 export const extForMime = (ct) => MIME_EXT[baseMime(ct)] || null;
 
+// Broad file family for a Content-Type, for anything that has to *show* what a
+// file is rather than decide what to do with it. `ext` is the uppercased
+// extension shown on a document card ("PDF", "JPG") — deliberately untranslated,
+// same treatment as the app's other compact abbreviations.
+//
+// Feather has no distinct glyph per office format, so the specific ones come
+// from MaterialCommunityIcons; `family` is passed straight to <Icon>.
+export function fileKind(ct) {
+  const mime = baseMime(ct);
+  const ext = extForMime(mime);
+  const label = ext ? ext.toUpperCase() : null;
+
+  if (mime.startsWith('image/')) return { key: 'image', icon: 'file-image', family: 'material-community', ext: label };
+  if (mime === 'application/pdf') return { key: 'pdf', icon: 'file-pdf-box', family: 'material-community', ext: label };
+  if (mime === 'application/msword' || mime.includes('wordprocessingml'))
+    return { key: 'word', icon: 'file-word-box', family: 'material-community', ext: label };
+  if (mime === 'application/vnd.ms-excel' || mime.includes('spreadsheetml'))
+    return { key: 'sheet', icon: 'file-excel-box', family: 'material-community', ext: label };
+  if (mime.startsWith('text/')) return { key: 'text', icon: 'file-document-outline', family: 'material-community', ext: label };
+  return { key: 'other', icon: 'file-outline', family: 'material-community', ext: label };
+}
+
 // What every browser a dispatcher might be running will decode. AVIF is
 // deliberately absent: current Chrome handles it, but this list is about what
 // is *safe*, not what *usually* works, and a photo that fails to render is

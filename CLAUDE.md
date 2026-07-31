@@ -332,6 +332,60 @@ Load status updates apply optimistically and queue to an AsyncStorage replay que
 (`src/lib/offlineQueue.js`, `enqueue`/`flush`/`queueCount`, wired into `app/(tabs)/index.js`) that flushes on
 reconnect (`src/hooks/useNetworkStatus.js`).
 
+## Documents are cached offline for real (`src/lib/docCache.js`)
+
+The Documents tab used to end with the line *"Documents are cached offline — accessible at weigh stations
+with no signal."* Nothing was cached: the list was refetched on every visit and kept only in component
+state, and opening a document downloaded it on the spot into `Paths.cache`, deleting any previous copy
+first. At a weigh station with no signal the driver got an error box — the one moment the tab exists for.
+
+`docCache.js` makes that true, and its shape mirrors `hiddenLoads.js`: a **pure policy half** that is unit
+tested (`__tests__/docCache.test.js`) and a storage half that isn't.
+
+- **Files live under `Paths.document`, never `Paths.cache`.** The cache directory is documented as
+  "files that can be deleted by the system when the device runs low on storage" — a phone that drops a CDL
+  to free space the night before an inspection is worse than no caching, because the driver believes it
+  works by then.
+- **One directory per document** (`documents/<docId>/<human name>`). Lookup goes through the manifest by
+  id, so it never depends on a display filename the dispatcher can change, but the file keeps its human
+  name because that is what the share sheet and QuickLook show. A flat directory forces one or the other —
+  two documents both called `license.jpg` collide.
+- **Keyed by driver**, and `clearAll()` runs on sign-out next to `cancelAllLocalReminders()`. Same
+  shared-cab-phone reason as `hiddenLoads`, with more at stake: these are someone's actual credentials.
+- **What gets cached**: the five DOT credential types whatever their size, plus anything under
+  `AUTO_CACHE_SIZE_CAP`. Deliberately **not** gated on Wi-Fi — drivers are rarely on it, so gating would
+  mean the feature never runs; the size cap is what protects the data plan. Staleness is `lastModifiedAt`
+  off the DTO. `evictionPlan` drops orphans first, then least-recently-opened, and **never a credential**.
+- `loadDocuments()` is network-first with the stored list as fallback, returning `{ docs, fromCache,
+  savedAt }`. `fromCache` shows a quiet banner; the old full-screen error box is now only for
+  "unreachable **and** nothing stored". Opening a document prefers the offline copy, and falls back to an
+  older cached copy if refreshing it fails — a slightly stale CDL beats an error at a scale.
+- On **web** the filesystem half no-ops (`fsReady()`), so the tab behaves exactly as it did before.
+
+**Thumbnails: the phone makes them, the server only stores them.** `makeDocThumbnail` (`src/api/main.js`,
+lazy `require` of `expo-image-manipulator` — see the boot-crash note above) sends a 320px JPEG with the
+upload; `HitchLink.Main` stores it in a nullable `Document.ThumbnailContent` bytea and serves
+`GET /documents/{id}/thumbnail`, with `hasThumbnail` on the list DTO. **No image library was added to the
+API** and none should be. PDFs get no thumbnail by design and fall back to the file-type icon from
+`fileKind()`; existing documents and anything uploaded from the dispatcher portal have none either, and a
+backfill would need server-side rendering.
+
+**Renewal replaces, and goes through the review modal.** `UpdateDocumentCommand` deliberately refuses to
+swap a document's file bytes ("that would be a delete-and-re-upload"), so renewing uploads a new document
+and then soft-deletes the old one (`DELETE /documents/{id}` → `IsActive = false`; the row survives for the
+dispatcher, and it is *not* the global load delete `hiddenLoads.js` warns about). Both steps matter: the
+old code uploaded straight off the picker carrying `expiresAt: doc.expires` forward, so a "renewed" CDL
+saved **still expired** — a renewal exists to change exactly that field, so it now runs through
+`DocumentReviewModal` like any other add, seeded by a `defaults` prop for type/label/number but never for
+the expiry date. Retiring the old document is best-effort: the replacement has already saved by then.
+
+**Inspection mode** reuses `PhotoViewer` rather than shipping a second viewer — passing no callbacks
+already strips the chat chrome. `allowDownload={false}` is the one thing that can't be inferred that way:
+Save and Share both route through `downloadChatAttachment`, which fetches a *remote* url, and inspection
+mode passes local `file://` uris. Only image credentials can go in the viewer, so readiness ("3 of 4 ready
+to show") is reported on the entry bar rather than as a placeholder slide — a driver needs to learn their
+registration isn't on the phone while still parked.
+
 ## "Delete from history" is a device-local hide, deliberately
 
 Long-pressing a card in the Pay tab's load history opens `HistoryFocusOverlay` and offers to delete it.
@@ -420,8 +474,9 @@ src/
                             standing (driver record from history), chatRows (day separators + grouping),
                             localNotifications (on-device reminders), observability (opt-in Sentry),
                             hiddenLoads (device-local "removed from my history" list),
-                            imageMime (web-safe image allowlist + MIME/extension table),
-                            editorGeom (photo-editor coordinate + crop math)
+                            imageMime (web-safe image allowlist + MIME/extension table + file-kind icons),
+                            editorGeom (photo-editor coordinate + crop math),
+                            docCache (offline copies of the driver's documents — see below)
   theme/tokens.js           dark + day theme tables, resolved through theme/ThemeContext — never hardcode hexes
   i18n/{en,ka}.js + LanguageContext.js   full English + Georgian coverage; new UI strings need both
   components/ui/            generic primitives (PrimaryAction, Card, IconButton, Skeleton, GlassView, …)
