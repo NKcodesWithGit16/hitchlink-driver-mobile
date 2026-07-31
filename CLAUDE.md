@@ -26,7 +26,7 @@ npx expo install --fix # align native package versions after touching package.js
 
 No eslint/prettier configured in this repo (unlike `hitchlink_mobileApp`). Tests live in `__tests__/` and
 only cover pure `src/lib` logic (`geo`, `loadStats`, `load`, `format`, `session`, `offlineQueue`,
-`jwtUtils`) — there is no UI/component test coverage, so verify screen changes by running the app.
+`jwtUtils`, `sun`) — there is no UI/component test coverage, so verify screen changes by running the app.
 
 ## Mock vs. live backend — one env var, and it does NOT gate auth
 
@@ -550,6 +550,7 @@ src/
                             hiddenLoads (device-local "removed from my history" list),
                             imageMime (web-safe image allowlist + MIME/extension table + file-kind icons),
                             editorGeom (photo-editor coordinate + crop math),
+                            sun (sunrise/sunset — what the Auto theme resolves against),
                             docCache (offline copies of the driver's documents — see below)
   theme/tokens.js           dark + day theme tables, resolved through theme/ThemeContext — never hardcode hexes
   i18n/{en,ka}.js + LanguageContext.js   full English + Georgian coverage; new UI strings need both
@@ -564,6 +565,32 @@ modules/hitchlink-quicklook/ local Expo native module: QLPreviewController (iOS 
 Design tokens (`src/theme/tokens.js`): near-black `#0A0E14` surfaces, near-white (never pure white) text,
 brand teal `#1FB6CE` / navy `#04285A`. Action colors are meaningful — teal = progress, green = completion,
 red = call/severe weather, amber = plan a stop. Primary actions are 64px tall with tabular-number stats.
+
+**"Auto" means the sun, not the phone's light/dark switch.** More › Appearance offers Auto / Day / Night,
+and Auto used to be a straight mirror of `useColorScheme()`. Its clock branch was dead code — `app.json`
+sets `userInterfaceStyle: "automatic"`, so on native that hook never returns null — which made Auto a third
+copy of Night for the many drivers who pinned their phone to dark years ago. It now resolves down a ladder
+in `src/theme/ThemeContext.js`:
+
+1. **The sun**, from `src/lib/sun.js` — the standard NOAA/Meeus sunrise equation (no dependency, ~1 min
+   accuracy), given the device's position. It compares `now` against the sunrise/sunset **instants** in
+   epoch ms, so time zones and DST never enter into it and a truck crossing into Central is right
+   immediately. Polar day/night are a reported state, not an error — Alaska runs freight all winter.
+2. The phone's scheme, when there is no position.
+3. The old fixed 06:00–19:00 *local hour* rule. Web, mainly; the only rung that reads a clock.
+
+Two things not to undo. **Position comes from `getLastKnownPositionAsync` behind a
+`getForegroundPermissionsAsync` check that never prompts** — a location dialog at boot, before the driver
+has seen the sign-in screen, to pick a colour scheme would be indefensible; the app already holds the
+permission while signed in for the heartbeat, so this is free in practice, and the last fix is mirrored into
+AsyncStorage so the first frame of a cold start is already sun-correct. And **a timer has to re-render at
+the boundary** — the scheme is derived during render, so without one it only ever changed when some other
+state did. It is capped at 6h (the truck moves; a timer armed in Denver is wrong by Chicago) and re-armed on
+`AppState` `active`, because timers don't fire while the phone sleeps and a rig parked overnight would
+otherwise wake to yesterday's scheme. Why the sun and not the OS setting: the buttons say Day and Night, the
+convention drivers know is the nav app's, and the thing being fought — glare at 2am, a dark screen against a
+bright windshield at noon — tracks the sun, not a toggle flipped once a year ago. Fixed 06:00–19:00 was
+never good enough for that: Seattle's day length swings past 15h in June and under 9h in December.
 
 Navigation deliberately hands off to the phone's own navigation app rather than rendering in-app
 turn-by-turn — a product decision, not a gap. **Which** app is a driver preference (More › Navigation app,

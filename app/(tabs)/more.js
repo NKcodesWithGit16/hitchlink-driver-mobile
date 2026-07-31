@@ -26,7 +26,7 @@ export default function MoreScreen() {
   const insets = useSafeAreaInsets();
   const callInset = useCallBannerInset();
   const router = useRouter();
-  const { colors, mode, setMode, accentKey, setAccent, bgKey, setBg, scheme } = useTheme();
+  const { colors, mode, setMode, accentKey, setAccent, bgKey, setBg, scheme, autoNextChangeAt } = useTheme();
   const t = useT();
   const { lang, setLang } = useLanguage();
   const { user, userId, signOut } = useAuth();
@@ -45,6 +45,16 @@ export default function MoreScreen() {
     { key: 'day',   label: t('more.themeDay'),   icon: 'sun'  },
     { key: 'night', label: t('more.themeNight'), icon: 'moon' },
   ];
+
+  // A setting that changes on its own has to say when, or the driver can't tell
+  // it apart from the app deciding things at random. No time means we had no
+  // position and fell back to mirroring the phone, which is worth saying too.
+  const autoCaption = useMemo(() => {
+    if (mode !== 'auto') return null;
+    if (!autoNextChangeAt) return t('more.themeAutoSystem');
+    const time = new Date(autoNextChangeAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return t(scheme === 'day' ? 'more.themeAutoDayUntil' : 'more.themeAutoNightUntil', { time });
+  }, [mode, autoNextChangeAt, scheme, t]);
 
   const QUICK_ACTIONS = [
     { icon: 'zap',            label: t('more.eld'),      sub: t('more.eldSub'),      tone: 'teal',
@@ -369,6 +379,9 @@ export default function MoreScreen() {
                   );
                 })}
               </View>
+              {!!autoCaption && (
+                <Text style={[styles.themeHint, { color: colors.textMuted }]}>{autoCaption}</Text>
+              )}
             </View>
 
             <View style={[styles.blockDivider, { backgroundColor: colors.border }]} />
@@ -789,6 +802,9 @@ const makeStyles = (c) => StyleSheet.create({
     gap: 6, height: 44, borderRadius: radius.md, borderWidth: 1.5,
   },
   themeBtnText: { fontSize: 13, fontFamily: FONT.bold },
+  // Spacing comes from settingBlock's gap; -4 pulls it back toward the buttons
+  // it describes so it reads as their caption rather than a new row.
+  themeHint: { fontSize: 11, fontFamily: FONT.medium, marginTop: -4 },
   accentRow: { flexDirection: 'row', justifyContent: 'space-between' },
   accentItem: { alignItems: 'center', gap: 6, flex: 1 },
   accentDot: { width: 32, height: 32, borderRadius: 999, borderWidth: 3, borderColor: 'transparent', alignItems: 'center', justifyContent: 'center' },
