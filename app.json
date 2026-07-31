@@ -3,7 +3,7 @@
     "name": "HitchLink Driver",
     "slug": "hitchlink-driver",
     "scheme": "hitchlinkdriver",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -37,6 +37,14 @@
       ],
       "expo-secure-store",
       "expo-audio",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "HitchLink needs your photo library to save photos from chat and your documents.",
+          "savePhotosPermission": "HitchLink saves photos from chat and your documents to your camera roll.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
       [
         "expo-location",
         {
@@ -72,6 +80,7 @@
           "audio"
         ],
         "NSMicrophoneUsageDescription": "HitchLink needs your microphone for in-app calls with your dispatcher.",
+        "NSCameraUsageDescription": "HitchLink needs your camera for video calls with your dispatcher, and to photograph documents and proof of delivery.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -84,6 +93,7 @@
         "backgroundColor": "#FFFFFF"
       },
       "permissions": [
+        "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.ACCESS_COARSE_LOCATION",

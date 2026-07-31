@@ -3,7 +3,26 @@
 // dispatcher web app's CallContext.js; the only real difference is this side
 // also has a `tel:` fallback (see Messages screen) for cellular dead zones.
 //
-// Audio-only MVP: never requests the camera.
+// Calls are audio or video. A call is PLACED as one or the other (the `video`
+// flag, which the backend stores as Call.IsVideo and echoes on IncomingCall),
+// but either side can turn its camera on or off at any point afterwards —
+// including turning an audio call into a video one. That upgrade travels over
+// Daily's own signalling between the two clients; the backend hears nothing
+// about it and has no endpoint for it. `video` therefore means "how this call
+// was placed" and is NOT a live view of whether anyone's camera is on — read
+// `cameraOn` / `remoteCameraOn` for that.
+//
+// The distinction matters at exactly one moment: the callee has to be told
+// before any media exists, because it decides what the ring screen says and
+// whether CallKit rings as a video call on a locked iPhone.
+//
+// ⚠️ The call object is created with `videoSource: true` even for an audio
+// call, and the camera is held off by `startVideoOff` at join instead. These
+// are NOT interchangeable: `videoSource: false` sets Daily's internal
+// `allowLocalVideo: false`, a hard gate that `setLocalVideo(true)` cannot lift
+// (only the private `_setAllowLocalVideo` can) — so an audio call configured
+// that way could never be upgraded. `startVideoOff` governs acquisition, so
+// the camera is still not touched until someone actually turns it on.
 //
 // iOS lock-screen ringing: a dispatcher-initiated call also triggers an APNs
 // VoIP push (see backend DriverCallPushService), which the local
@@ -88,6 +107,19 @@ const CallContext = createContext(null);
 const AUDIO_SPEAKER = 'SPEAKERPHONE';
 const AUDIO_EARPIECE = 'WIRED_OR_EARPIECE';
 
+// Every Daily event that can change who has a camera on. `participant-updated`
+// is the one that carries a mid-call camera toggle (ours or theirs);
+// `joined-meeting` seeds the initial state for a call placed as video, where
+// the tracks are already flowing by the time we start listening.
+const videoEvents = [
+  'joined-meeting',
+  'participant-joined',
+  'participant-updated',
+  'participant-left',
+  'track-started',
+  'track-stopped',
+];
+
 const initialState = {
   // idle | ringing-out | ringing-in | connecting | active | ended
   //
@@ -108,6 +140,18 @@ const initialState = {
   peerPhotoUrl: null,
   roomUrl: null,
   token: null,
+  // How the call was PLACED, not who has a camera on right now — see the note
+  // at the top of the file. Drives the ring screen's wording and CallKit.
+  video: false,
+  // Live camera state for each end. Both start false even on a video call and
+  // are only set true once Daily reports a track actually flowing, so the UI
+  // never shows a video tile that has nothing behind it.
+  cameraOn: false,
+  remoteCameraOn: false,
+  // MediaStreamTracks handed straight to <DailyMediaView>. Null whenever the
+  // corresponding camera is off.
+  localVideoTrack: null,
+  remoteVideoTrack: null,
   muted: false,
   // Speaker starts ON for every call. A driver taking a dispatch call has both
   // hands on the wheel and the phone in a mount — holding it to their ear isn't
@@ -258,25 +302,64 @@ export function CallProvider({ children }) {
     return Math.min(started, Date.now());
   };
 
-  const joinDailyRoom = useCallback(async (roomUrl, token, answeredAt = null, serverNow = null) => {
+  const joinDailyRoom = useCallback(async (roomUrl, token, answeredAt = null, serverNow = null, video = false) => {
     if (!Daily) {
       console.error('[Call] Daily native module unavailable — is this build using a dev client with @daily-co/react-native-daily-js linked?');
       setState((s) => ({ ...initialState, status: 'ended', error: t('call.callingUnavailable') }));
       return;
     }
-    const co = Daily.createCallObject({ audioSource: true, videoSource: false });
+    // videoSource: true even for an audio call — see the ⚠️ note at the top of
+    // this file. The camera is kept off by startVideoOff below, not by this.
+    const co = Daily.createCallObject({ audioSource: true, videoSource: true });
     callObjectRef.current = co;
+
+    // Camera state for both ends, off Daily's own participant tracking. This is
+    // the whole of the mid-call upgrade path: when either side calls
+    // setLocalVideo(true), Daily tells the other one here, and nothing has to
+    // go through our backend.
+    const syncVideoTracks = () => {
+      if (callObjectRef.current !== co) return; // torn down while an event was in flight
+      let participants;
+      try { participants = co.participants(); }
+      catch { return; } // destroyed underneath us
+      const local = participants?.local;
+      const remote = Object.values(participants || {}).find((p) => p && !p.local);
+      // `persistentTrack` survives a track being muted/unmuted, which is what
+      // DailyMediaView wants; `p.video` is the "is it actually playable" flag.
+      const localTrack = local?.tracks?.video?.persistentTrack ?? null;
+      const remoteTrack = remote?.tracks?.video?.persistentTrack ?? null;
+      const localOn = !!local?.video && !!localTrack;
+      const remoteOn = !!remote?.video && !!remoteTrack;
+      setState((s) => (
+        s.cameraOn === localOn && s.remoteCameraOn === remoteOn
+          && s.localVideoTrack === localTrack && s.remoteVideoTrack === remoteTrack
+          ? s
+          : {
+            ...s,
+            cameraOn: localOn,
+            remoteCameraOn: remoteOn,
+            localVideoTrack: localTrack,
+            remoteVideoTrack: remoteTrack,
+          }
+      ));
+    };
+    videoEvents.forEach((ev) => co.on(ev, syncVideoTracks));
     // Must be set BEFORE join — Daily reads the in-call audio mode as it brings
     // the native audio session up, and changing it afterwards doesn't re-route.
     // 'video' is the mode whose default route is the loudspeaker ('voice' means
     // earpiece-first, which is wrong for a driver); see DailyAudioManager's
     // defaultAudioDevice(). The runtime Speaker button below overrides it either
-    // way via setAudioDevice.
+    // way via setAudioDevice. Note this argument names an AUDIO MODE and has
+    // nothing to do with whether this is a video call — it was already 'video'
+    // when every call was audio-only, and it stays 'video' for both.
     try { co.setNativeInCallAudioMode('video'); }
     catch (err) { console.warn('[Call] setNativeInCallAudioMode failed, using the platform default route:', err); }
 
-    await co.join({ url: roomUrl, token, startVideoOff: true });
-    setState((s) => ({ ...s, status: 'active', startedAt: startedAtFrom(answeredAt, serverNow) }));
+    // This is what actually keeps an audio call's camera off (and is why
+    // videoSource can safely be true above).
+    await co.join({ url: roomUrl, token, startVideoOff: !video });
+    setState((s) => ({ ...s, status: 'active', video, startedAt: startedAtFrom(answeredAt, serverNow) }));
+    syncVideoTracks();
 
     // Assert the route explicitly once media is up. setNativeInCallAudioMode
     // decides the *default*, but a CallKit-answered call arrives with iOS's own
@@ -286,17 +369,18 @@ export function CallProvider({ children }) {
   }, [applyAudioRoute]);
 
   // ── Outgoing: driver taps Call on the Messages header ──────────────────
-  const startCall = useCallback(async () => {
+  const startCall = useCallback(async ({ video = false } = {}) => {
     if (!user?.id || stateRef.current.status !== 'idle') return;
     pendingResolutionRef.current = null;
     setState({
       ...initialState,
       status: 'ringing-out',
+      video,
       peerName: user?.dispatcher?.name || 'Dispatcher',
       peerPhotoUrl: user?.dispatcher?.photoUrl || null,
     });
     try {
-      const res = await apiStartCall(user.id);
+      const res = await apiStartCall(user.id, { video });
       const pending = pendingResolutionRef.current;
       pendingResolutionRef.current = null;
       if (stateRef.current.status !== 'ringing-out') return; // cancelled locally while /start was in flight
@@ -307,7 +391,7 @@ export function CallProvider({ children }) {
         // of sitting on "Calling…" for a resolution that already happened.
         console.info(`[Call] ${res.callId} was already accepted before we learned our own callId — joining now instead of waiting.`);
         setState((s) => ({ ...s, callId: res.callId, roomUrl: res.roomUrl, token: res.token }));
-        joinDailyRoom(res.roomUrl, res.token, pending.answeredAt, pending.serverNow).catch((err) => {
+        joinDailyRoom(res.roomUrl, res.token, pending.answeredAt, pending.serverNow, video).catch((err) => {
           console.error(`[Call] Join failed for ${res.callId} (early-accepted path):`, err);
           teardownCallObject();
           setState({ ...initialState, status: 'ended', error: t('call.couldNotConnect') });
@@ -342,6 +426,7 @@ export function CallProvider({ children }) {
       peerPhotoUrl: p.callerPhotoUrl || null,
       roomUrl: p.roomUrl,
       token: p.token,
+      video: !!p.video,
     });
   }, []);
 
@@ -417,6 +502,7 @@ export function CallProvider({ children }) {
         peerPhotoUrl: user?.dispatcher?.photoUrl || null,
         roomUrl: res.roomUrl,
         token: res.token,
+        video: !!res.video,
       });
     } catch {
       // Already answered/declined/expired — nothing to show.
@@ -431,7 +517,7 @@ export function CallProvider({ children }) {
     // /end and tears down the call the FIRST invocation just connected. A
     // React-state guard can't close this race; a ref can.
     if (acceptInFlightRef.current) return;
-    const { callId, roomUrl, token } = stateRef.current;
+    const { callId, roomUrl, token, video } = stateRef.current;
     if (!callId || !roomUrl) return;
     acceptInFlightRef.current = true;
     // Leave the ringing state immediately — the driver has answered, so the
@@ -440,7 +526,7 @@ export function CallProvider({ children }) {
     setState((s) => ({ ...s, status: 'connecting' }));
     try {
       const accepted = await apiAcceptCall(callId);
-      await joinDailyRoom(roomUrl, token, accepted?.answeredAt, accepted?.serverNow);
+      await joinDailyRoom(roomUrl, token, accepted?.answeredAt, accepted?.serverNow, video);
     } catch (err) {
       console.error('[Call] acceptCall failed:', err);
       endCallKitSession(callId);
@@ -494,6 +580,32 @@ export function CallProvider({ children }) {
     });
   }, []);
 
+  // Turn our own camera on or off. This is the ENTIRE mid-call upgrade path:
+  // on an audio call it is what makes it a video call, and Daily tells the
+  // other end by itself — nothing is sent to our backend, and `video` (how the
+  // call was placed) deliberately does not change.
+  //
+  // Unlike mute, the flag is not flipped here. Acquiring a camera is async and
+  // can fail (permission refused, another app holding it), so `cameraOn` is
+  // only ever set by syncVideoTracks once Daily reports a track actually
+  // flowing — otherwise the button would claim a camera that never came up.
+  const toggleCamera = useCallback(() => {
+    const co = callObjectRef.current;
+    if (!co) return;
+    const next = !stateRef.current.cameraOn;
+    try { co.setLocalVideo(next); }
+    catch (err) { console.warn('[Call] Could not toggle the camera:', err); }
+  }, []);
+
+  // Front <-> back. cycleCamera() owns which one is live, so there is no
+  // `facing` in state to drift out of step with the hardware.
+  const switchCamera = useCallback(async () => {
+    const co = callObjectRef.current;
+    if (!co) return;
+    try { await co.cycleCamera(); }
+    catch (err) { console.warn('[Call] Camera flip was refused, staying on the current one:', err); }
+  }, []);
+
   // Speaker <-> earpiece. Unlike mute, the route change is async and can be
   // refused by the OS (another app holding the session, a headset taking
   // priority), so the flag is only flipped once the switch actually lands —
@@ -527,7 +639,7 @@ export function CallProvider({ children }) {
     // why. Mirrors acceptCall()'s error handling, which was previously missing
     // on this caller-side path (an unhandled rejection that left the dispatcher
     // stranded until the ring timeout eventually fired).
-    joinDailyRoom(s.roomUrl, s.token, answeredAt, serverNow).catch((err) => {
+    joinDailyRoom(s.roomUrl, s.token, answeredAt, serverNow, s.video).catch((err) => {
       console.error(`[Call] Join failed for ${callId} after the dispatcher accepted:`, err);
       teardownCallObject();
       setState({ ...initialState, status: 'ended', error: t('call.couldNotConnect') });
@@ -657,10 +769,14 @@ export function CallProvider({ children }) {
         peerPhotoUrl: meta.callerPhotoUrl || dispatcherRef.current?.photoUrl || null,
         roomUrl: meta.roomUrl,
         token: meta.token,
+        // Straight off the VoIP push (hitchlink-voip caches it) — the same flag
+        // CallKit itself rang with, so the in-app UI can't disagree with the
+        // native screen the driver just answered on.
+        video: !!meta.hasVideo,
       });
       console.info(`[Call] Accepting ${meta.serverCallId} via CallKit — calling /accept then joining Daily.`);
       apiAcceptCall(meta.serverCallId)
-        .then((accepted) => { console.info(`[Call] /accept succeeded for ${meta.serverCallId} — dispatcher should now see CallAccepted.`); return joinDailyRoom(meta.roomUrl, meta.token, accepted?.answeredAt, accepted?.serverNow); })
+        .then((accepted) => { console.info(`[Call] /accept succeeded for ${meta.serverCallId} — dispatcher should now see CallAccepted.`); return joinDailyRoom(meta.roomUrl, meta.token, accepted?.answeredAt, accepted?.serverNow, !!meta.hasVideo); })
         .then(() => RNCallKeep.setCurrentCallActive(callUUID))
         .catch((err) => {
           console.error('[Call] CallKit accept failed:', err);
@@ -736,7 +852,10 @@ export function CallProvider({ children }) {
       RNCallKeep.addEventListener('didLoadWithEvents', onLoadWithEvents),
     ];
     RNCallKeep.setup({
-      ios: { appName: 'HitchLink', supportsVideo: false, includesCallsInRecents: true },
+      // supportsVideo is a capability declaration for the whole app, not a
+      // per-call flag — each call still rings as audio or video according to
+      // the hasVideo it was reported with (see HitchlinkVoipPushDelegate.m).
+      ios: { appName: 'HitchLink', supportsVideo: true, includesCallsInRecents: true },
       android: {},
     }).catch((err) => console.error('[Call] RNCallKeep.setup failed:', err));
 
@@ -785,7 +904,7 @@ export function CallProvider({ children }) {
   }, [teardownCallObject]);
 
   return (
-    <CallContext.Provider value={{ ...state, startCall, acceptCall, declineCall, hangUp, toggleMute, toggleSpeaker, minimize, expand, loadCallFallback }}>
+    <CallContext.Provider value={{ ...state, startCall, acceptCall, declineCall, hangUp, toggleMute, toggleSpeaker, toggleCamera, switchCamera, minimize, expand, loadCallFallback }}>
       {children}
     </CallContext.Provider>
   );

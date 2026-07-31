@@ -103,7 +103,23 @@ chat/load hooks re-join their room and force a re-fetch to catch anything missed
 ## In-app calling (Daily.co WebRTC + iOS CallKit)
 
 This is a fully-built feature, not a stub — `src/context/CallContext.js` is the state machine for it, mounted
-once at `app/_layout.js` so a call rings regardless of which tab is open. Audio-only (never requests camera).
+once at `app/_layout.js` so a call rings regardless of which tab is open. Audio **or video**.
+
+**A call is placed as one or the other; cameras move freely afterwards.** `Call.IsVideo` on the backend (and
+`video` in state) records only how the call was *placed* — it drives what the ring screen says and whether
+CallKit rings as a video call on a locked iPhone, both of which must be decided before any media exists.
+Turning a camera on or off during a call, **including upgrading an audio call to video**, travels over
+Daily's own signalling between the two clients: `setLocalVideo(true)` on one end surfaces as
+`participant-updated` on the other. There is deliberately **no backend endpoint for it**, and adding one
+would be duplicating what Daily already does. Read `cameraOn` / `remoteCameraOn` for what's actually on
+screen; `video` is not a live view of that.
+
+⚠️ **The call object is created with `videoSource: true` even for an audio call**, with the camera held off
+by `startVideoOff: !video` at join instead. These are not interchangeable, and the difference is not
+cosmetic: `videoSource: false` sets Daily's internal `allowLocalVideo: false`, a hard gate that
+`setLocalVideo(true)` **cannot lift** — only the private `_setAllowLocalVideo` can — so an audio call
+configured that way could never be upgraded. `startVideoOff` governs *acquisition*, so the camera (and its
+permission prompt) is still never touched until someone turns it on. Both clients do this the same way.
 
 - **Media**: `@daily-co/react-native-daily-js`. `CallContext` creates/joins a Daily "call object" per call;
   `roomUrl`/`token` come from the backend's `/calls/*` endpoints (`src/api/calls.js`).
@@ -136,19 +152,33 @@ once at `app/_layout.js` so a call rings regardless of which tab is open. Audio-
 - **Android has no CallKit equivalent.** An incoming call when the app is backgrounded/killed on Android
   arrives only as a regular Expo push notification (`type: "call"`, routed by
   `src/hooks/usePushNotifications.js` to `app/call/[callId].js`) — not a native full-screen ring.
-- **An active call can be minimized, and that is why the call UI is two components.**
-  `src/components/call/CallOverlay.js` renders either the full-screen takeover (a `Modal`, so it covers
-  the tabs) or — when `status === 'active' && minimized` — a thin green banner pinned under the status
-  bar ("Tap to return · 02:14"). The banner is deliberately **not** a `Modal`: an iOS `Modal` swallows
-  every touch beneath it, which is what made the whole app unusable during a call. `minimized` is
-  presentational only — the Daily call object and CallKit session are untouched — and is guarded to
-  `active`, so a *ringing* call can never be hidden behind a banner nobody notices. The takeover's `‹`
-  (top-left) and Android back both minimize; back is swallowed in every other state so it can't silently
-  decline a ringing call. **Screens must add `useCallBannerInset()` to their own top padding** — it
-  returns the banner's height while minimized and 0 otherwise. Every screen with a header already does
-  (the five tabs + `alerts.js`); a new one that skips it will have its header hidden mid-call. Full-screen
-  modals *inside* a screen (image/document viewers) deliberately don't, since a `Modal` renders above the
-  banner anyway.
+- **An active call can be minimized, and that is why the call UI is several components.**
+  `src/components/call/CallOverlay.js` renders the full-screen takeover (a `Modal`, so it covers the tabs)
+  or — when `status === 'active' && minimized` — one of two smaller forms. The takeover becomes a **video
+  stage** when a camera is live: remote feed full-bleed, a draggable corner-snapping local PiP, and chrome
+  that auto-hides after `CHROME_HIDE_MS` and returns on a tap. With no camera on it is exactly the audio
+  screen it has always been.
+  **Which minimized form appears follows `isVideoLive` — is either camera actually on — not how the call
+  was placed.** No video ⇒ the thin green banner ("Tap to return · 02:14"); video ⇒ `FloatingCallWindow`, a
+  small draggable window showing the feed. `useCallBannerInset()` and the renderer share that one
+  predicate, so they can't disagree about what's on screen.
+  Neither minimized form is a `Modal`: an iOS `Modal` swallows every touch beneath it, which is what made
+  the whole app unusable during a call. `minimized` is presentational only — the Daily call object and
+  CallKit session are untouched — and is guarded to `active`, so a *ringing* call can never be hidden
+  behind something nobody notices. The takeover's `‹` (top-left) and Android back both minimize; back is
+  swallowed in every other state so it can't silently decline a ringing call.
+  **Screens must add `useCallBannerInset()` to their own top padding** — it returns the banner's height for
+  the banner, and **0 for the floating window**, which overlays a corner rather than displacing anything.
+  Every screen with a header already calls it (the five tabs + `alerts.js`); a new one that skips it will
+  have its header hidden mid-call. Full-screen modals *inside* a screen (image/document viewers)
+  deliberately don't, since a `Modal` renders above it anyway.
+- **The local PiP is a sibling of the safe-area container, not a child of it.** An absolutely-positioned
+  child is laid out from its parent's *content* box, so inside that padded container `top: 0` would mean
+  "below the status bar and in from the side" — every position off by the padding and the right-hand
+  corners pushed off-screen. `src/lib/pipGeom.js` holds the pure corner-snap/clamp math (tested in
+  `__tests__/pipGeom.test.js`); the bounds it's given deliberately carve out the top bar and the control
+  strip so the tile can never come to rest on top of Hang up, and those carve-outs are **not** conditional
+  on the chrome being visible or the tile would drift every time the controls faded.
 - A synchronous ref (`acceptInFlightRef`), not React state, guards every accept path against double-fire
   (double tap, or CallKit's `onAnswered` racing the SignalR path) — a re-entrant `/accept` 409s and its
   catch block would otherwise tear down the call the first invocation just connected.
@@ -650,7 +680,17 @@ newly-added native module — or assumes a different RN architecture — **will*
 that lacks it and crash on launch. **So: bump `expo.version` in the same commit as any native change, and
 never publish an OTA across one.** Version history so far: `1.0.0` → `1.0.1` (expo-updates + Sentry landed)
 → `1.0.2` (added `modules/hitchlink-quicklook`, switched to the New Architecture) → `1.0.3` (TestFlight
-release; **JS-only** — bumped to cut a fresh build, not because anything native changed).
+release; **JS-only** — bumped to cut a fresh build, not because anything native changed) → `1.0.4` (video
+calling: `NSCameraUsageDescription`, the Android `CAMERA` permission, the `expo-media-library` plugin, and
+`hasVideo` in `HitchlinkVoipPushDelegate.m` — plus it clears three native packages added after 1.0.3 was
+submitted).
+
+⚠️ **Nothing between `1.0.3` and `1.0.4` may ship as an OTA.** `expo-image-manipulator`,
+`expo-media-library` and `react-native-svg` all landed after the 1.0.3 build was submitted, and
+`src/components/driver/PhotoEditor.js` imports `react-native-svg` at module scope while
+`app/(tabs)/messages.js` imports `PhotoEditor` at module scope — so an update carrying that JS to a 1.0.3
+binary **crashes the Messages tab**, and `runtimeVersion.policy: appVersion` would not stop it being
+delivered. 1.0.4 must be a new build.
 
 The rule cuts both ways, and the second half is easy to forget: a bump is *mandatory* for a native change
 but **not free otherwise**, because it strands every installed binary on the old runtime version. Every

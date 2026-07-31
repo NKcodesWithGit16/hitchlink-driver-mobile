@@ -64,11 +64,17 @@ withCompletionHandler:(void (^)(void))completion {
     NSDictionary *caller = incoming[@"caller"];
     NSString *callerName = caller[@"displayName"] ?: @"Dispatcher";
     NSDictionary *metadata = incoming[@"metadata"];
+    // Whether the dispatcher placed this as a video call. It has to come off
+    // the push itself: CallKit's screen is up before any JS is necessarily
+    // running, so there is nothing to ask. Absent (an older backend) reads as
+    // NO, which is the pre-video behaviour.
+    BOOL hasVideo = [incoming[@"hasVideo"] boolValue];
 
     NSString *uuidString = [[NSUUID UUID] UUIDString];
     NSMutableDictionary *stored = [NSMutableDictionary dictionary];
     stored[@"serverCallId"] = serverCallId;
     stored[@"callerName"] = callerName;
+    stored[@"hasVideo"] = @(hasVideo);
     if (metadata[@"roomUrl"]) stored[@"roomUrl"] = metadata[@"roomUrl"];
     if (metadata[@"token"]) stored[@"token"] = metadata[@"token"];
     if (metadata[@"driverId"]) stored[@"driverId"] = metadata[@"driverId"];
@@ -77,7 +83,7 @@ withCompletionHandler:(void (^)(void))completion {
     [RNCallKeep reportNewIncomingCall:uuidString
                                handle:serverCallId
                            handleType:@"generic"
-                             hasVideo:NO
+                             hasVideo:hasVideo
                   localizedCallerName:callerName
                       supportsHolding:NO
                          supportsDTMF:NO

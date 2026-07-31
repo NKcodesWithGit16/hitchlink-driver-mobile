@@ -4,8 +4,12 @@
 // surfaces that as "calling is unavailable" rather than pretending to connect.
 import { apiFetch } from './client';
 
-export function startCall(driverId) {
-  return apiFetch(`/calls/${driverId}/start`, { method: 'POST' });
+// `video` decides how the call is PLACED — what the dispatcher's ring screen
+// says, and whether CallKit rings as a video call. Turning a camera on later
+// (including upgrading an audio call) goes over Daily between the two clients
+// and never comes back through here.
+export function startCall(driverId, { video = false } = {}) {
+  return apiFetch(`/calls/${driverId}/start`, { method: 'POST', body: JSON.stringify({ video }) });
 }
 
 export function getCall(callId) {

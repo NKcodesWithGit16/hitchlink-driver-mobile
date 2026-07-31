@@ -116,7 +116,14 @@ export default function MessagesScreen() {
   // this screen mid-call — and startCall() bails on any non-idle status, so
   // the Call button would look broken. Reopen the call instead.
   const onCallPress = useCallback(() => {
-    if (callStatus === 'idle') startCall();
+    if (callStatus === 'idle') startCall({ video: false });
+    else expandCall();
+  }, [callStatus, startCall, expandCall]);
+  // Video gets its own button rather than sharing the phone one's long press:
+  // that gesture is already the carrier-phone fallback, and a long press
+  // advertises nothing to a driver who doesn't know it's there.
+  const onVideoCallPress = useCallback(() => {
+    if (callStatus === 'idle') startCall({ video: true });
     else expandCall();
   }, [callStatus, startCall, expandCall]);
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -840,6 +847,20 @@ export default function MessagesScreen() {
           </View>
         </View>
         <View style={styles.headerActions}>
+          {/* Video is the secondary affordance and is styled as one — a driver
+              reaches for audio far more often, and two filled green circles
+              would be two competing primaries. It carries the accent fill
+              rather than green, because green here means "call" (the phone-UI
+              convention answer/hang-up rests on) and is not a colour to spend
+              on a second button. */}
+          <Pressable
+            onPress={onVideoCallPress}
+            style={styles.videoBtn}
+            accessibilityRole="button"
+            accessibilityLabel={t('call.videoCallA11y', { name: dispatcher?.name || t('messages.dispatcherFallback') })}
+          >
+            <Icon family="material-community" name="video" size={19} color={colors.tealBright} />
+          </Pressable>
           <Pressable
             onPress={onCallPress}
             onLongPress={() => dispatcher?.phone && Linking.openURL(`tel:${dispatcher.phone}`).catch(() => {})}
@@ -2316,6 +2337,12 @@ const makeStyles = (c) => StyleSheet.create({
   headerActions: { flexDirection: 'row', gap: space[2], marginLeft: space[3] },
   callBtn: { width: 44, height: 44, flexShrink: 0 },
   callBtnFill: { flex: 1, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
+  videoBtn: {
+    width: 44, height: 44, flexShrink: 0, borderRadius: 999,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: c.tealFill,
+    borderWidth: 1, borderColor: c.border,
+  },
 
   /* Load banner */
   loadBanner: {
