@@ -114,6 +114,13 @@ Daily's own signalling between the two clients: `setLocalVideo(true)` on one end
 would be duplicating what Daily already does. Read `cameraOn` / `remoteCameraOn` for what's actually on
 screen; `video` is not a live view of that.
 
+⚠️ **Every `VideoTile` must gate its `track` on the matching camera flag**, never on the track merely being
+non-null. `CallContext` hands out Daily's `persistentTrack`, which deliberately *survives* being muted — so a
+camera turned off leaves a valid track object that has stopped producing frames, and `DailyMediaView` goes on
+showing the last one it decoded. Ungated, the far end appears to **freeze mid-call** instead of falling back
+to the camera-off placeholder. `VideoTile` cannot detect this itself: a live track and a muted one are the
+same object.
+
 ⚠️ **The call object is created with `videoSource: true` even for an audio call**, with the camera held off
 by `startVideoOff: !video` at join instead. These are not interchangeable, and the difference is not
 cosmetic: `videoSource: false` sets Daily's internal `allowLocalVideo: false`, a hard gate that

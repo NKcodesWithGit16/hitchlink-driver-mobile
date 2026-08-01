@@ -443,8 +443,15 @@ function CallScreen({ call }) {
             mock/dev accounts hit). */}
         {videoStage ? (
           <>
+            {/* ⚠️ Gated on remoteCameraOn, not just on the track existing. The
+                track is Daily's `persistentTrack`, which deliberately SURVIVES
+                being muted — so when they turn their camera off it is still a
+                perfectly valid track object that has simply stopped producing
+                frames, and DailyMediaView goes on showing the last one it
+                decoded. That looked exactly like the call had frozen. Passing
+                null is what gets the camera-off placeholder instead. */}
             <VideoTile
-              track={remoteVideoTrack}
+              track={remoteCameraOn ? remoteVideoTrack : null}
               name={peerName}
               photoUrl={hasPhoto ? peerPhotoUrl : null}
               objectFit="cover"
@@ -508,8 +515,11 @@ function CallScreen({ call }) {
             style={[styles.pip, { transform: pip.pos.getTranslateTransform() }]}
           >
             <View style={styles.pipClip}>
+              {/* Gated for the same reason as the stage above, even though the
+                  enclosing `cameraOn` check already covers it today — a muted
+                  persistentTrack must never reach a media view. */}
               <VideoTile
-                track={localVideoTrack}
+                track={cameraOn ? localVideoTrack : null}
                 mirror
                 zOrder={1}
                 compact
@@ -772,7 +782,7 @@ function FloatingCallWindow({ call }) {
   const insets = useSafeAreaInsets();
   const reduceMotion = useReduceMotion();
   const { width: winW, height: winH } = useWindowDimensions();
-  const { expand, remoteCameraOn, remoteVideoTrack, localVideoTrack, peerName, peerPhotoUrl, startedAt } = call;
+  const { expand, remoteCameraOn, remoteVideoTrack, cameraOn, localVideoTrack, peerName, peerPhotoUrl, startedAt } = call;
   const duration = useElapsed(startedAt);
 
   const bounds = useMemo(() => ({
@@ -788,7 +798,10 @@ function FloatingCallWindow({ call }) {
   // Prefer their camera; fall back to ours so a driver who turned their own on
   // while the dispatcher's is off still sees video rather than a placeholder.
   const showRemote = remoteCameraOn && !!remoteVideoTrack;
-  const track = showRemote ? remoteVideoTrack : localVideoTrack;
+  // Both halves gated on their camera flag: a persistentTrack outlives being
+  // muted, so an ungated fallback would freeze on its last frame rather than
+  // showing the placeholder. See the ⚠️ on the stage's VideoTile.
+  const track = showRemote ? remoteVideoTrack : (cameraOn ? localVideoTrack : null);
 
   return (
     <Animated.View

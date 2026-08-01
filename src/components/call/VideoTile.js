@@ -34,6 +34,17 @@ function initials(name) {
 
 /**
  * @param track     MediaStreamTrack | null — null renders the placeholder.
+ *                  ⚠️ CALLERS MUST GATE THIS ON THE CAMERA FLAG
+ *                  (`remoteCameraOn` / `cameraOn`), not merely on the track
+ *                  being non-null. CallContext hands out Daily's
+ *                  `persistentTrack`, which deliberately survives being muted:
+ *                  turning a camera off leaves a valid track object that has
+ *                  simply stopped producing frames, and DailyMediaView keeps
+ *                  displaying the last one it decoded. Passed through
+ *                  ungated, the far end appears to FREEZE mid-call instead of
+ *                  falling back to the placeholder below. This component
+ *                  cannot detect that itself — a live track and a muted one
+ *                  are the same object.
  * @param mirror    Front-facing local video is mirrored, remote video never is:
  *                  people expect their own image to behave like a mirror, and
  *                  expect everyone else's to read the right way round.
