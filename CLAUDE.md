@@ -585,6 +585,56 @@ the load on the next fetch, the opposite of a permanent delete. `unhideLoad` ref
 when called directly, and "Restore all" (`clearHidden`) leaves tombstones alone. Expiry is enforced lazily
 on every read, since there is no background job and the app can sit closed for months.
 
+## Editing a profile, and what a form owes the keyboard (`app/edit-profile.js`)
+
+The only real form in the app, and the reason it is worth a section is that almost none of it is about
+profiles. **A field is one 68px block that focuses from anywhere inside it** — icon, label, padding, all of
+it. The original was a label-left / value-right row about 43px tall, so the one thing that opened the
+keyboard was the width of the text itself: a target that moved as the value changed, under the 56px this
+app uses everywhere else, and hopeless with gloves on. Values are left-aligned, the label doubles as the
+focus indicator (it turns teal, so nothing resizes when the keyboard opens), and each block owns its own
+error line. Save is the standard 64px `PrimaryAction` pinned above the keyboard, not a link in the header.
+
+Four things about the keyboard, in the order they bit:
+
+- ⚠️ **`KeyboardAvoidingView` in `padding` mode works the overlap out from its own `onLayout` frame, and
+  that frame's `y` is relative to its PARENT's content box.** So it must be the full-height child with the
+  safe-area inset applied *inside* it (here, on the header) — the arrangement `(auth)/sign-in.js` also uses.
+  Nested under a container padded by `insets.top`, or placed as a sibling below the header, it under-shifts
+  by exactly what it can't see and the keyboard sits on the bottom fields. A `keyboardVerticalOffset` fixes
+  it too, and is worse: it's a second copy of the header's height, wrong the moment the header changes.
+- **Not being covered is not the same as being visible.** Shrinking the scroll view only stops the overlap;
+  the field just tapped can still be below the fold. So the focused **block** (not its input — the input
+  sits ~12px above the block's bottom and an error line grows it further) is measured with
+  `measureInWindow` against the keyboard's own reported top edge minus the save bar's measured height, and
+  scrolled by the **minimum** that clears it. Minimum because yanking the form to the top on every focus is
+  its own annoyance. Window coordinates, so it assumes nothing about insets or how tall any given keyboard
+  (or its autofill/emoji bar) happens to be.
+- **Everything it measures against is still moving when the keyboard event lands**, so a single pass lands
+  short: the keyboard is animating, the save bar is re-laying out as it drops its home-indicator inset, and
+  a scroll from the previously-focused field may still be running. Hence `ensureVisibleSettled` — one pass
+  now, one after `SETTLE_MS`. The second re-measures, so a pass that already landed computes ~0 and moves
+  nothing. The save bar's `onLayout` re-checks too, because a failed save grows it by the error banner.
+- **The last field needs slack beneath it or it cannot be helped at all.** A scroll view clamps at
+  `contentHeight - viewportHeight`, so the bottom-most field can be asked to rise clear of the save bar and
+  have nowhere left to scroll to — the scroll succeeds and moves nothing. Every field above it has the rest
+  of the form behind it and never hits that wall, which is why this presented as "only Email".
+
+Two smaller ones, both already settled — don't reopen them:
+
+- **iOS floats its own "Done" pill above a phone pad**, labelled from `returnKeyType`. It looks like a
+  stray button between the save bar and the keys and it is not ours. It is also the *only* way to dismiss
+  that keyboard, which has no return key; losing it means giving up `phone-pad` and its big digits. Leave it.
+- **Return-key chaining (`next` → `next` → `done`) was built and removed.** Four fields is not a form worth
+  stepping through, and Save is above the keyboard the whole time.
+
+The photo source is an `ActionSheet`, not `Alert.alert`, for the reason the Documents tab already
+documents: with a photo set it is three options plus Cancel, and Android renders at most three buttons —
+"Remove photo" silently vanished — while RN-web has no `Alert` at all. It stands down before the picker
+launches (`MODAL_HANDOFF_MS`). Leaving with unsaved edits asks first, Android hardware back included, and
+the form seeds itself if the driver record lands after mount — guarded, since that fetch can return
+mid-keystroke.
+
 ## Structure
 
 ```
@@ -599,6 +649,8 @@ app/                       expo-router — file = route
   hidden-loads.js           Restore anything removed from Pay history (also reachable from More)
   (tabs)/documents.js       CDL/Medical/Registration/Insurance, expiry alerts, offline viewer
   (tabs)/more.js            HOS detail, truck info, theme, notifications, sign out
+  edit-profile.js           Name/phone/email + avatar (from More › Profile and the home header).
+                            The app's only real form — see the keyboard section above before touching it.
   call/[callId].js          Deep-link target for a tapped call push notification
   alerts.js                 Notification inbox (AlertContext)
 src/
