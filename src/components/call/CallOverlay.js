@@ -218,25 +218,47 @@ function useDraggableTile({ bounds, size, margin = PIP_MARGIN, onTap, reduceMoti
  * currently interactive, and a `poke` to call on any interaction.
  *
  * `active` gates the whole thing: chrome must never auto-hide while a call is
- * ringing or connecting, where the buttons are the only thing on screen that
- * matters.
+ * ringing or connecting, or on the audio screen, where the buttons are the only
+ * thing on screen that matters.
+ *
+ * ⚠️ `active` is answered HERE, and the returned opacity must be bound to its
+ * view unconditionally — never `active && { opacity }` at the call site. It was
+ * written that way and it lost the driver their buttons: with the dispatcher's
+ * camera the only one on, the chrome would auto-hide to opacity 0, and the
+ * moment the dispatcher turned that camera off `isVideoLive` flipped false and
+ * the animated value was pulled out of the style array while still sitting at
+ * 0. The value is native-driven (useNativeDriver below), so detaching it left
+ * the native view at 0 with nothing able to put it back — animating it to 1
+ * afterwards did nothing, because it was no longer attached to anything. The
+ * controls were still there and still tappable, just invisible.
+ *
+ * Hence `hidden` (the timer's opinion) and `visible` (what actually renders)
+ * being separate: only the stage may hide chrome, so anywhere else `visible` is
+ * true regardless of what the timer last did, and the value animates back to 1
+ * through a node that is still connected.
  */
 function useAutoHideChrome(active, reduceMotion) {
-  const [visible, setVisible] = useState(true);
+  const [hidden, setHidden] = useState(false);
   const opacity = useRef(new Animated.Value(1)).current;
   const timer = useRef(null);
 
+  // A stale `hidden` from a previous video stage can never leak into the audio
+  // screen: off the stage, chrome is always shown.
+  const visible = !active || !hidden;
+
   const poke = useCallback(() => {
-    setVisible(true);
+    setHidden(false);
     if (timer.current) clearTimeout(timer.current);
     if (!active) return;
-    timer.current = setTimeout(() => setVisible(false), CHROME_HIDE_MS);
+    timer.current = setTimeout(() => setHidden(true), CHROME_HIDE_MS);
   }, [active]);
 
   const toggle = useCallback(() => {
+    // Only meaningful on the stage — `visible` ignores `hidden` elsewhere, so
+    // this can't hide the audio screen's controls.
     if (visible) {
       if (timer.current) clearTimeout(timer.current);
-      setVisible(false);
+      setHidden(true);
     } else {
       poke();
     }
@@ -505,9 +527,11 @@ function CallScreen({ call }) {
           {/* ‹ — leaves the call running and hands the app back. Only on an
               active call: a ringing one must not be dismissable to a banner
               the driver might never notice. */}
+          {/* opacity is bound unconditionally — see the ⚠️ on useAutoHideChrome.
+              The hook already holds it at 1 off the video stage. */}
           <Animated.View
-            style={[styles.topBar, videoStage && { opacity: chrome.opacity }]}
-            pointerEvents={videoStage && !chrome.visible ? 'none' : 'box-none'}
+            style={[styles.topBar, { opacity: chrome.opacity }]}
+            pointerEvents={chrome.visible ? 'box-none' : 'none'}
           >
             {active ? (
               <Pressable
@@ -614,8 +638,8 @@ function CallScreen({ call }) {
             // the "bring the controls back" catcher rather than hitting an
             // invisible Mute.
             <Animated.View
-              style={[styles.controlRow, videoStage && { opacity: chrome.opacity }]}
-              pointerEvents={videoStage && !chrome.visible ? 'none' : 'auto'}
+              style={[styles.controlRow, { opacity: chrome.opacity }]}
+              pointerEvents={chrome.visible ? 'auto' : 'none'}
             >
               {active && (
                 <ControlButton

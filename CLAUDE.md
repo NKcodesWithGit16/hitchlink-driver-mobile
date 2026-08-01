@@ -158,6 +158,14 @@ permission prompt) is still never touched until someone turns it on. Both client
   stage** when a camera is live: remote feed full-bleed, a draggable corner-snapping local PiP, and chrome
   that auto-hides after `CHROME_HIDE_MS` and returns on a tap. With no camera on it is exactly the audio
   screen it has always been.
+  ⚠️ **The auto-hiding chrome's opacity must be bound to its views unconditionally** — never
+  `videoStage && { opacity: chrome.opacity }`. `useAutoHideChrome` answers "may this hide?" itself. Written
+  the other way it lost the driver their buttons: with the dispatcher's camera the only one on, the chrome
+  would fade to opacity 0, and the moment they turned it off `isVideoLive` flipped false and the animated
+  value was pulled out of the style array *while still at 0*. It is native-driven, so detaching it left the
+  view at 0 with nothing able to restore it — animating it back to 1 did nothing, since it was no longer
+  attached to anything. The controls stayed tappable, just invisible. Hence `hidden` (the timer's opinion)
+  and `visible` (what renders) being separate values in that hook.
   **Which minimized form appears follows `isVideoLive` — is either camera actually on — not how the call
   was placed.** No video ⇒ the thin green banner ("Tap to return · 02:14"); video ⇒ `FloatingCallWindow`, a
   small draggable window showing the feed. `useCallBannerInset()` and the renderer share that one
