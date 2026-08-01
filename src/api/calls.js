@@ -16,6 +16,16 @@ export function getCall(callId) {
   return apiFetch(`/calls/${callId}`, { allow404: true });
 }
 
+// Any call still ringing FOR THIS DRIVER right now, or null. The "IncomingCall"
+// SignalR event is not replayed, so a call placed while this phone's socket was
+// down (backgrounded, tunnel, dead zone) would otherwise never be seen at all.
+// The call socket asks for this on every (re)connection and whenever the app
+// returns to the foreground; the payload is the same shape as the event, so it
+// feeds the same handler. See CallsController.Pending.
+export function getPendingCall() {
+  return apiFetch('/calls/pending', { allow404: true });
+}
+
 export function acceptCall(callId) {
   return apiFetch(`/calls/${callId}/accept`, { method: 'POST' });
 }

@@ -179,6 +179,22 @@ permission prompt) is still never touched until someone turns it on. Both client
   `__tests__/pipGeom.test.js`); the bounds it's given deliberately carve out the top bar and the control
   strip so the tile can never come to rest on top of Hang up, and those carve-outs are **not** conditional
   on the chrome being visible or the tile would drift every time the controls faded.
+- **Ring delivery does not trust the socket.** `useCallSocket` uses a retry policy that never gives up (the
+  bare `withAutomaticReconnect()` default stops after 4 tries over ~30s and never reconnects — on a phone,
+  which drops its socket every time it's pocketed, that means a driver silently unreachable until they
+  restart the app), an `onclose` restart loop, and an `AppState` foreground kick. On every (re)connection
+  and every return to the foreground it also sweeps `GET /calls/pending` for a call that started ringing
+  while the socket was down, and feeds it through the ordinary `onIncomingCall` with `recovered: true` —
+  which skips the `CALLKIT_GRACE_MS` wait, since a `CallRingPath` only ever follows a *live* event and will
+  never arrive for a recovered one. `handledCallIdsRef` stops a sweep re-ringing a call this session just
+  declined (still `Ringing` server-side until that POST lands).
+- **`connecting` is entered by both ends at the same moment** — the callee on Accept, the caller on
+  `CallAccepted` — so the ringback stops the instant someone picks up rather than playing on over them, and
+  both timers start from the server's `AnsweredAt`. It has its own `CONNECT_TIMEOUT_MS` (20s), separate from
+  the 45s ring timeout, or a join that never completes would sit on "Connecting…" forever.
+- **Video quality is set explicitly** (`applyVideoQuality`: `updateSendSettings`/`updateReceiveSettings` at
+  `high`, plus 720p `userMediaVideoConstraints`). Daily's defaults pick a simulcast layer from the rendered
+  size, which is why an unpinned browser feed arrived here looking much worse than this app's own.
 - A synchronous ref (`acceptInFlightRef`), not React state, guards every accept path against double-fire
   (double tap, or CallKit's `onAnswered` racing the SignalR path) — a re-entrant `/accept` 409s and its
   catch block would otherwise tear down the call the first invocation just connected.

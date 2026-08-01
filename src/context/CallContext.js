@@ -120,6 +120,32 @@ const videoEvents = [
   'track-stopped',
 ];
 
+// Pins both directions of the video to Daily's top quality.
+//
+// By default Daily sends several simulcast layers and the RECEIVER picks one
+// based on how large the feed is rendered — so a browser sending into a small
+// dispatcher dock settles on the bottom layer and stays there, which is why a
+// laptop's video could look markedly worse than this phone's on the same call
+// despite the camera being fine. A call here is always 1-to-1, so there is
+// never a reason to send or accept a degraded layer.
+//
+// Best-effort on both counts: an older daily-js build without these APIs should
+// mean "video looks like it used to", never a broken call.
+function applyVideoQuality(callObject) {
+  try {
+    callObject.updateSendSettings({ video: { maxQuality: 'high' } })
+      ?.catch?.((err) => console.warn('[Call] updateSendSettings failed:', err));
+  } catch (err) {
+    console.warn('[Call] updateSendSettings unsupported by this daily-js build:', err);
+  }
+  try {
+    callObject.updateReceiveSettings({ '*': { video: { quality: 'high' } } })
+      ?.catch?.((err) => console.warn('[Call] updateReceiveSettings failed:', err));
+  } catch (err) {
+    console.warn('[Call] updateReceiveSettings unsupported by this daily-js build:', err);
+  }
+}
+
 const initialState = {
   // idle | ringing-out | ringing-in | connecting | active | ended
   //
@@ -222,6 +248,21 @@ export function CallProvider({ children }) {
   // rather than let the call die at the 45s timeout. On Android there is no
   // CallKit at all, so none of this applies and the overlay always shows.
   const pendingSignalRIncomingRef = useRef(null); // { callId, timer, payload } | null
+  // Calls this session has already answered, declined or ended, so the
+  // /calls/pending recovery sweep can't re-ring one in the moment between the
+  // local state resetting and the server hearing about it. callId -> when;
+  // pruned on insert, since the server stops offering a call after its ring
+  // window anyway.
+  const handledCallIdsRef = useRef(new Map());
+  const HANDLED_TTL_MS = 120000;
+  const markCallHandled = useCallback((callId) => {
+    if (!callId) return;
+    const now = Date.now();
+    handledCallIdsRef.current.forEach((at, id) => {
+      if (now - at > HANDLED_TTL_MS) handledCallIdsRef.current.delete(id);
+    });
+    handledCallIdsRef.current.set(String(callId), now);
+  }, []);
   // How long to wait for CallKit when we DON'T know whether a push is coming.
   const CALLKIT_GRACE_MS = 3000;
   // How long to wait when we've been told one was accepted. Longer, because
@@ -310,7 +351,17 @@ export function CallProvider({ children }) {
     }
     // videoSource: true even for an audio call — see the ⚠️ note at the top of
     // this file. The camera is kept off by startVideoOff below, not by this.
-    const co = Daily.createCallObject({ audioSource: true, videoSource: true });
+    const co = Daily.createCallObject({
+      audioSource: true,
+      videoSource: true,
+      // Capture at 720p rather than whatever the platform picks by default. No
+      // encoder setting can recover detail that was never captured.
+      userMediaVideoConstraints: {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30 },
+      },
+    });
     callObjectRef.current = co;
 
     // Camera state for both ends, off Daily's own participant tracking. This is
@@ -360,6 +411,7 @@ export function CallProvider({ children }) {
     await co.join({ url: roomUrl, token, startVideoOff: !video });
     setState((s) => ({ ...s, status: 'active', video, startedAt: startedAtFrom(answeredAt, serverNow) }));
     syncVideoTracks();
+    applyVideoQuality(co);
 
     // Assert the route explicitly once media is up. setNativeInCallAudioMode
     // decides the *default*, but a CallKit-answered call arrives with iOS's own
@@ -390,7 +442,7 @@ export function CallProvider({ children }) {
         // callId (see pendingResolutionRef above) — join right away instead
         // of sitting on "Calling…" for a resolution that already happened.
         console.info(`[Call] ${res.callId} was already accepted before we learned our own callId — joining now instead of waiting.`);
-        setState((s) => ({ ...s, callId: res.callId, roomUrl: res.roomUrl, token: res.token }));
+        setState((s) => ({ ...s, status: 'connecting', callId: res.callId, roomUrl: res.roomUrl, token: res.token }));
         joinDailyRoom(res.roomUrl, res.token, pending.answeredAt, pending.serverNow, video).catch((err) => {
           console.error(`[Call] Join failed for ${res.callId} (early-accepted path):`, err);
           teardownCallObject();
@@ -451,6 +503,26 @@ export function CallProvider({ children }) {
     // screen/ringtone own it instead of also showing our JS overlay + ringtone
     // on top of it.
     if (callKitCallIdsRef.current.has(String(p.callId))) return;
+    // Guards the /calls/pending recovery sweep only: a call this session just
+    // declined or hung up stays Ringing server-side for the moment it takes
+    // that POST to land, and a sweep in that window would ring it straight
+    // back. The live event can't hit this — the server stops sending
+    // IncomingCall once a call leaves Ringing.
+    if (p.callId && handledCallIdsRef.current.has(String(p.callId))) {
+      console.info(`[Call] Ignoring ${p.callId} — this session already handled it.`);
+      return;
+    }
+
+    // A call recovered by the pending sweep (rather than the live event) will
+    // never be followed by a CallRingPath — that only goes out at /start. So
+    // there is nothing to wait for: if CallKit were going to ring this call it
+    // already would have, and the guard above would have caught it. Waiting out
+    // the grace window here would just delay the ring by three seconds of a
+    // ring window that is already partly spent.
+    if (p.recovered) {
+      showIncomingOverlay(p);
+      return;
+    }
 
     if (RNCallKeep && Voip) {
       // Hold off until CallRingPath tells us whether a native ring is coming.
@@ -460,7 +532,7 @@ export function CallProvider({ children }) {
     }
 
     showIncomingOverlay(p);
-  }, [showIncomingOverlay, armInAppFallback]);
+  }, [showIncomingOverlay, armInAppFallback, markCallHandled]);
 
   // ── The backend's verdict on which UI should ring ──────────────────────
   const onCallRingPath = useCallback(({ callId, native }) => {
@@ -520,6 +592,7 @@ export function CallProvider({ children }) {
     const { callId, roomUrl, token, video } = stateRef.current;
     if (!callId || !roomUrl) return;
     acceptInFlightRef.current = true;
+    markCallHandled(callId);
     // Leave the ringing state immediately — the driver has answered, so the
     // Accept/Decline buttons and the ringtone must both stop now, not when
     // media finishes coming up a second or two later.
@@ -543,20 +616,22 @@ export function CallProvider({ children }) {
     } finally {
       acceptInFlightRef.current = false;
     }
-  }, [joinDailyRoom, teardownCallObject, endCallKitSession]);
+  }, [joinDailyRoom, teardownCallObject, endCallKitSession, markCallHandled]);
 
   const declineCall = useCallback(() => {
     const { callId } = stateRef.current;
+    markCallHandled(callId);
     reset();
     if (callId) apiDeclineCall(callId).catch(() => {});
-  }, [reset]);
+  }, [reset, markCallHandled]);
 
   const hangUp = useCallback(() => {
     const { callId, status } = stateRef.current;
     const reason = status === 'ringing-out' ? 'cancelled' : undefined;
+    markCallHandled(callId);
     reset();
     if (callId) apiEndCall(callId, reason).catch(() => {});
-  }, [reset]);
+  }, [reset, markCallHandled]);
 
   // Collapse/restore the call UI. Guarded on `active` so a ringing or
   // still-connecting call can never be hidden behind a pill the driver might
@@ -634,6 +709,12 @@ export function CallProvider({ children }) {
       return;
     }
     if (s.callId !== callId) return;
+    // Leave "Calling…" the instant they pick up, not when our own join
+    // finishes. This is the same moment the answering side enters `connecting`,
+    // so both ends of the call now transition together — and it is what stops
+    // the ringback (the ringing effect below keys off status), which otherwise
+    // played on for a second or two over someone who had already answered.
+    setState((cur) => (cur.callId === callId ? { ...cur, status: 'connecting' } : cur));
     // The dispatcher answered — join our own side. If *our* join fails, end the
     // call so they're not left alone in an already-connected room, and surface
     // why. Mirrors acceptCall()'s error handling, which was previously missing
@@ -775,6 +856,7 @@ export function CallProvider({ children }) {
         video: !!meta.hasVideo,
       });
       console.info(`[Call] Accepting ${meta.serverCallId} via CallKit — calling /accept then joining Daily.`);
+      markCallHandled(meta.serverCallId);
       apiAcceptCall(meta.serverCallId)
         .then((accepted) => { console.info(`[Call] /accept succeeded for ${meta.serverCallId} — dispatcher should now see CallAccepted.`); return joinDailyRoom(meta.roomUrl, meta.token, accepted?.answeredAt, accepted?.serverNow, !!meta.hasVideo); })
         .then(() => RNCallKeep.setCurrentCallActive(callUUID))
@@ -860,7 +942,7 @@ export function CallProvider({ children }) {
     }).catch((err) => console.error('[Call] RNCallKeep.setup failed:', err));
 
     return () => subs.forEach((s) => s.remove());
-  }, [joinDailyRoom, reset, applyAudioRoute]);
+  }, [joinDailyRoom, reset, applyAudioRoute, markCallHandled]);
 
   // Ring for as long as the call is waiting on either side — ringtone for an
   // incoming call, a quieter ringback tone while our own call rings out.
@@ -878,22 +960,36 @@ export function CallProvider({ children }) {
   // whenever status/callId change, and torn down the moment either does
   // (accept, decline, hang up, or a remote CallAccepted/Declined/Ended event).
   const RING_TIMEOUT_MS = 45000;
+  // `connecting` gets its own, much shorter budget. The call is answered by
+  // then, so this only covers a Daily join that never completes — a driver in a
+  // dead zone, media servers unreachable, mic acquisition hanging. Without it
+  // there is a way to sit on "Connecting…" indefinitely, since the ring timeout
+  // no longer applies once the call has been answered.
+  const CONNECT_TIMEOUT_MS = 20000;
   useEffect(() => {
-    if (state.status !== 'ringing-in' && state.status !== 'ringing-out') return undefined;
+    const waiting = state.status === 'ringing-in' || state.status === 'ringing-out' || state.status === 'connecting';
+    if (!waiting) return undefined;
     const { status, callId } = state;
     const timer = setTimeout(() => {
       const s = stateRef.current;
       if (s.status !== status || s.callId !== callId) return; // already resolved elsewhere
       endCallKitSession(callId);
       teardownCallObject();
-      if (status === 'ringing-out') {
-        setState({ ...initialState, status: 'ended', error: t('call.noAnswer') });
-        setTimeout(() => setState((cur) => (cur.status === 'ended' ? initialState : cur)), 2500);
-      } else {
+      if (status === 'ringing-in') {
         setState(initialState);
+      } else {
+        setState({
+          ...initialState,
+          status: 'ended',
+          error: status === 'connecting' ? t('call.couldNotConnect') : t('call.noAnswer'),
+        });
+        setTimeout(() => setState((cur) => (cur.status === 'ended' ? initialState : cur)), 2500);
       }
-      if (callId) apiEndCall(callId, 'timeout').catch(() => {});
-    }, RING_TIMEOUT_MS);
+      // "timeout" records a Missed call, which only makes sense for a call
+      // nobody answered — one that failed to connect after being answered is
+      // just an end.
+      if (callId) apiEndCall(callId, status === 'connecting' ? 'failed' : 'timeout').catch(() => {});
+    }, state.status === 'connecting' ? CONNECT_TIMEOUT_MS : RING_TIMEOUT_MS);
     return () => clearTimeout(timer);
   }, [state.status, state.callId, teardownCallObject, endCallKitSession]);
 
