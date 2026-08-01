@@ -344,6 +344,27 @@ export function CallProvider({ children }) {
   };
 
   const joinDailyRoom = useCallback(async (roomUrl, token, answeredAt = null, serverNow = null, video = false) => {
+    // ⚠️ Silence the ring HERE, before anything below touches the audio
+    // session — not from the status effect at the bottom of this file.
+    //
+    // That effect is the natural place for it and it does not work reliably.
+    // Every caller sets status to `connecting` and then calls this function
+    // synchronously, so React has not committed that render yet: the whole
+    // prefix below (createCallObject, the listeners, and crucially
+    // setNativeInCallAudioMode) runs FIRST, and the effect only fires once we
+    // yield at `await co.join(...)`. By then Daily owns the native audio
+    // session, and stopping an expo-audio player through a session that has
+    // been reconfigured underneath it can fail — silently, since the failure
+    // was swallowed. The result was a looping ringback playing over a
+    // perfectly connected call, with the module's only reference to that
+    // player already dropped so nothing could ever stop it. Intermittent,
+    // because it depended on whether the reconfiguration landed first.
+    //
+    // This runs while the session is still ours, so it cannot race. The effect
+    // below stays as the backstop for paths that never join (decline, cancel,
+    // timeout).
+    stopRinging();
+
     if (!Daily) {
       console.error('[Call] Daily native module unavailable — is this build using a dev client with @daily-co/react-native-daily-js linked?');
       setState((s) => ({ ...initialState, status: 'ended', error: t('call.callingUnavailable') }));
