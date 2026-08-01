@@ -763,17 +763,27 @@ newly-added native module — or assumes a different RN architecture — **will*
 that lacks it and crash on launch. **So: bump `expo.version` in the same commit as any native change, and
 never publish an OTA across one.** Version history so far: `1.0.0` → `1.0.1` (expo-updates + Sentry landed)
 → `1.0.2` (added `modules/hitchlink-quicklook`, switched to the New Architecture) → `1.0.3` (TestFlight
-release; **JS-only** — bumped to cut a fresh build, not because anything native changed) → `1.0.4` (video
+release; **JS-only** — bumped to cut a fresh build, not because anything native changed) → `1.1.0` (video
 calling: `NSCameraUsageDescription`, the Android `CAMERA` permission, the `expo-media-library` plugin, and
 `hasVideo` in `HitchlinkVoipPushDelegate.m` — plus it clears three native packages added after 1.0.3 was
 submitted).
 
-⚠️ **Nothing between `1.0.3` and `1.0.4` may ship as an OTA.** `expo-image-manipulator`,
+**Minor vs. patch is a labelling decision and nothing else.** Because the policy is `appVersion`, this
+string's real job is to key OTA compatibility — `1.0.5` and `1.1.0` behave identically, strand exactly the
+same installs, and cost exactly the same. So pick by what the number *says*: a release that adds a feature
+a driver would notice takes the minor, a fix-only rebuild takes the patch. That release was `1.0.4` for a
+day and became `1.1.0` on 2026-08-01, on the grounds that it adds video calling. **Renaming was only free
+because no shipped build carried `1.0.4`** — it existed as one iOS *development* build, with TestFlight
+still on `1.0.3`. Once a version reaches a tester, its number is frozen: changing it costs a fresh build
+and leaves everyone on the old one unreachable by OTA until they install the new one.
+
+⚠️ **Nothing between `1.0.3` and `1.1.0` may ship as an OTA.** `expo-image-manipulator`,
 `expo-media-library` and `react-native-svg` all landed after the 1.0.3 build was submitted, and
 `src/components/driver/PhotoEditor.js` imports `react-native-svg` at module scope while
 `app/(tabs)/messages.js` imports `PhotoEditor` at module scope — so an update carrying that JS to a 1.0.3
-binary **crashes the Messages tab**, and `runtimeVersion.policy: appVersion` would not stop it being
-delivered. 1.0.4 must be a new build.
+binary **crashes the Messages tab**. `runtimeVersion.policy: appVersion` does hold the line here (an update
+published from this checkout is stamped `1.1.0` and a 1.0.3 binary asks for `1.0.3`), but do not defeat it
+by hand-setting a runtime version. 1.1.0 must be a new build.
 
 The rule cuts both ways, and the second half is easy to forget: a bump is *mandatory* for a native change
 but **not free otherwise**, because it strands every installed binary on the old runtime version. Every
