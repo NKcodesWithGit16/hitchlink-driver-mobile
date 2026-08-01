@@ -497,6 +497,12 @@ export default function EditProfileScreen() {
           <FadeInView delay={motion.stagger * 2}>
             <SectionLabel>{t('editProfile.sectionContact')}</SectionLabel>
             <View style={styles.group}>
+              {/* iOS floats its own "Done" pill above a phone pad, labelled
+                  from returnKeyType. It looks like a stray button and isn't
+                  ours — but it is the ONLY way to dismiss this keyboard,
+                  which has no return key. Losing it means switching to
+                  numbers-and-punctuation and giving up the big digits, which
+                  is the wrong trade in a truck. Leave it. */}
               <ProfileField
                 {...fieldProps('phone')}
                 label={t('editProfile.phone')}
