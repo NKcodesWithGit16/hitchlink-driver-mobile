@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, TextInput, Pressable, StyleSheet, ScrollView, Image, Alert,
-  KeyboardAvoidingView, ActivityIndicator, Platform, BackHandler,
+  KeyboardAvoidingView, ActivityIndicator, Platform, BackHandler, Keyboard,
+  useWindowDimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -31,6 +32,11 @@ const MODAL_HANDOFF_MS = 320;
 // Tab order, which is also the order a failed save picks a field to focus.
 const ORDER = ['firstName', 'lastName', 'phone', 'email'];
 
+// Breathing room left between a focused field and whatever the keyboard (plus
+// the save bar sitting on top of it) has taken over. Roughly covers the rest
+// of the field block below the input's own baseline.
+const KEYBOARD_GAP = 28;
+
 /* Edit profile.
  *
  * The fields are big, left-aligned and tappable across their whole width on
@@ -47,6 +53,7 @@ const ORDER = ['firstName', 'lastName', 'phone', 'email'];
 export default function EditProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { height: winH } = useWindowDimensions();
   const callInset = useCallBannerInset();
   const { colors } = useTheme();
   const t = useT();
@@ -71,6 +78,7 @@ export default function EditProfileScreen() {
 
   const [photoUrl,  setPhotoUrl]  = useState(driverProfile?.photoUrl || user?.photoUrl || null);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [kbUp,      setKbUp]      = useState(false);
 
   const inputs = {
     firstName: useRef(null),
@@ -78,6 +86,56 @@ export default function EditProfileScreen() {
     phone:     useRef(null),
     email:     useRef(null),
   };
+
+  const scrollRef  = useRef(null);
+  const offsetRef  = useRef(0);   // live scroll position
+  const footerRef  = useRef(0);   // measured height of the save bar
+  const keyboardY  = useRef(0);   // top edge of the keyboard, 0 when hidden
+  const focusedRef = useRef(null);
+
+  /* Shrinking the scroll view is only half the job: it stops the keyboard
+     covering anything, but the field the driver just tapped can still be below
+     the fold — Phone and Email are the bottom two, which is exactly where the
+     overlap was reported. So scroll it back into view, and by the MINIMUM
+     amount: yanking the form to the top on every focus is its own annoyance.
+
+     Measured in window coordinates against the keyboard's own reported top
+     edge, so it needs no assumptions about insets, the header, or how tall a
+     particular keyboard (or its autofill/emoji bar) happens to be. */
+  const ensureVisible = useCallback((kbTop) => {
+    const key = focusedRef.current;
+    const node = key ? inputs[key].current : null;
+    if (!node?.measureInWindow || !kbTop) return;
+    node.measureInWindow((x, y, w, h) => {
+      if (typeof y !== 'number' || typeof h !== 'number') return;
+      const limit = kbTop - footerRef.current - KEYBOARD_GAP;
+      const delta = (y + h) - limit;
+      if (delta > 1) scrollRef.current?.scrollTo({ y: offsetRef.current + delta, animated: true });
+    });
+  }, []);
+
+  useEffect(() => {
+    // iOS reports the frame before it animates, so the scroll rides along with
+    // the keyboard instead of chasing it; Android only reports once it's up.
+    // WillChangeFrame rather than WillShow so switching to emoji/autofill —
+    // which changes the height without a fresh "show" — is picked up too.
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow';
+    const show = Keyboard.addListener(showEvt, (e) => {
+      const top = e?.endCoordinates?.screenY;
+      if (typeof top !== 'number') return;
+      // On iOS that same event fires as it leaves, with the frame parked just
+      // off the bottom of the window — which is "hidden", not a 0-height one.
+      const up = top < winH - 1;
+      keyboardY.current = up ? top : 0;
+      setKbUp(up);
+      if (up) ensureVisible(top);
+    });
+    const hide = Keyboard.addListener('keyboardDidHide', () => {
+      keyboardY.current = 0;
+      setKbUp(false);
+    });
+    return () => { show.remove(); hide.remove(); };
+  }, [ensureVisible, winH]);
 
   // The profile can land after this screen mounts (a cold start straight into
   // More › Profile), and useState only reads its initial value once. Seed the
@@ -288,7 +346,13 @@ export default function EditProfileScreen() {
     inputRef: inputs[key],
     value: form[key],
     onChangeText: (v) => setField(key, v),
-    onFocus: () => setFocused(key),
+    onFocus: () => {
+      setFocused(key);
+      focusedRef.current = key;
+      // Moving between fields with the keyboard already up fires no keyboard
+      // event, so nothing else would bring the new one into view.
+      if (keyboardY.current) requestAnimationFrame(() => ensureVisible(keyboardY.current));
+    },
     onBlur: () => onBlurField(key),
     focused: focused === key,
     error: errors[key],
@@ -310,33 +374,42 @@ export default function EditProfileScreen() {
   const initialLetter = (form.firstName || t('more.driver')).slice(0, 1).toUpperCase();
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top + callInset }]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Pressable
-          onPress={attemptLeave}
-          style={({ pressed }) => [
-            styles.backBtn,
-            { backgroundColor: colors.surface, borderColor: colors.border, transform: [{ scale: pressed ? motion.press : 1 }] },
-          ]}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel={t('common.back')}
-        >
-          <Icon name="chevron-left" size={22} color={colors.textPrimary} />
-        </Pressable>
-        <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>{t('editProfile.editProfileTitle')}</Text>
-        {/* Balances the back button so the title stays optically centred.
-            Save lives at the bottom, as a full-size action. */}
-        <View style={styles.headerSpacer} />
-      </View>
-
+    <View style={styles.screen}>
+      {/* The KAV has to be the full-height child, with the top inset applied
+          INSIDE it — not to a padded parent. `padding` mode works out the
+          overlap from its own onLayout frame, and that frame's y is relative
+          to its parent's content box, so any padding above it is invisible to
+          the calculation: it under-shifts by exactly the inset + header and
+          the keyboard covers the bottom fields. Same arrangement as sign-in. */}
       <KeyboardAvoidingView behavior="padding" style={styles.kav}>
+        {/* Header */}
+        <View style={[styles.header, { paddingTop: insets.top + callInset + space[3] }]}>
+          <Pressable
+            onPress={attemptLeave}
+            style={({ pressed }) => [
+              styles.backBtn,
+              { backgroundColor: colors.surface, borderColor: colors.border, transform: [{ scale: pressed ? motion.press : 1 }] },
+            ]}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel={t('common.back')}
+          >
+            <Icon name="chevron-left" size={22} color={colors.textPrimary} />
+          </Pressable>
+          <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>{t('editProfile.editProfileTitle')}</Text>
+          {/* Balances the back button so the title stays optically centred.
+              Save lives at the bottom, as a full-size action. */}
+          <View style={styles.headerSpacer} />
+        </View>
+
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
+          scrollEventThrottle={16}
+          onScroll={(e) => { offsetRef.current = e.nativeEvent.contentOffset.y; }}
         >
           {/* Avatar */}
           <FadeInView style={styles.avatarWrap}>
@@ -435,11 +508,19 @@ export default function EditProfileScreen() {
           </Text>
         </ScrollView>
 
-        {/* Save rides above the keyboard — inside the KAV, outside the scroll. */}
+        {/* Save rides above the keyboard — inside the KAV, outside the scroll.
+            Its measured height is what ensureVisible has to clear as well. */}
         <View
+          onLayout={(e) => { footerRef.current = e.nativeEvent.layout.height; }}
           style={[
             styles.footer,
-            { backgroundColor: colors.bg, borderTopColor: colors.border, paddingBottom: insets.bottom + space[3] },
+            {
+              backgroundColor: colors.bg,
+              borderTopColor: colors.border,
+              // The home-indicator inset is the keyboard's problem while it's
+              // up — keeping it would float the button on a band of empty bg.
+              paddingBottom: (kbUp ? 0 : insets.bottom) + space[3],
+            },
           ]}
         >
           {formError ? (
