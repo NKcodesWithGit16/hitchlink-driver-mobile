@@ -377,8 +377,10 @@ export default function EditProfileScreen() {
       setFocused(key);
       focusedRef.current = key;
       // Moving between fields with the keyboard already up fires no keyboard
-      // event, so nothing else would bring the new one into view.
-      if (keyboardY.current) requestAnimationFrame(() => ensureVisible(keyboardY.current));
+      // event, so nothing else would bring the new one into view. Settled,
+      // because a scroll from the previous field can still be animating —
+      // measuring a moving target is how this lands short.
+      if (keyboardY.current) requestAnimationFrame(() => ensureVisibleSettled(keyboardY.current));
     },
     onBlur: () => onBlurField(key),
     focused: focused === key,
@@ -425,7 +427,14 @@ export default function EditProfileScreen() {
 
         <ScrollView
           ref={scrollRef}
-          contentContainerStyle={styles.scroll}
+          /* Slack under the last field while the keyboard is up. Without it
+             Email cannot be helped: a scroll view clamps at
+             contentHeight - viewportHeight, so the bottom-most field can be
+             asked to rise above the save bar and simply have nowhere left to
+             scroll to. Every field above it has the rest of the form behind
+             it and never hits that wall — which is why this only ever showed
+             on Email. */
+          contentContainerStyle={[styles.scroll, kbUp && styles.scrollKb]}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
@@ -679,6 +688,7 @@ const makeStyles = (colors) => StyleSheet.create({
 
   kav: { flex: 1 },
   scroll: { paddingHorizontal: space[5], paddingBottom: space[6] },
+  scrollKb: { paddingBottom: space[20] },
 
   avatarWrap: { alignItems: 'center', marginTop: space[2], marginBottom: space[4], gap: space[3] },
   avatarPress: { padding: 3 },
