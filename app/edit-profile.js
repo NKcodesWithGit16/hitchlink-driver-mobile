@@ -29,13 +29,16 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // instead. Same constant and same reason as documents.js / messages.js.
 const MODAL_HANDOFF_MS = 320;
 
-// Tab order, which is also the order a failed save picks a field to focus.
+// Field order, which is also the order a failed save picks one to focus.
 const ORDER = ['firstName', 'lastName', 'phone', 'email'];
 
-// Breathing room left between a focused field and whatever the keyboard (plus
-// the save bar sitting on top of it) has taken over. Roughly covers the rest
-// of the field block below the input's own baseline.
-const KEYBOARD_GAP = 28;
+// Breathing room between the bottom of a focused field block and whatever the
+// keyboard — plus the save bar riding on top of it — has taken over.
+const KEYBOARD_GAP = 16;
+
+// Long enough for the keyboard's own animation and the save bar's relayout to
+// finish, so the correcting pass measures the geometry that actually landed.
+const SETTLE_MS = 340;
 
 /* Edit profile.
  *
@@ -87,11 +90,21 @@ export default function EditProfileScreen() {
     email:     useRef(null),
   };
 
+  // The whole field block, not just its input: the block carries padding below
+  // the text and grows an error line, and both have to clear the save bar.
+  const blocks = {
+    firstName: useRef(null),
+    lastName:  useRef(null),
+    phone:     useRef(null),
+    email:     useRef(null),
+  };
+
   const scrollRef  = useRef(null);
   const offsetRef  = useRef(0);   // live scroll position
   const footerRef  = useRef(0);   // measured height of the save bar
   const keyboardY  = useRef(0);   // top edge of the keyboard, 0 when hidden
   const focusedRef = useRef(null);
+  const settleRef  = useRef(null);
 
   /* Shrinking the scroll view is only half the job: it stops the keyboard
      covering anything, but the field the driver just tapped can still be below
@@ -104,7 +117,7 @@ export default function EditProfileScreen() {
      particular keyboard (or its autofill/emoji bar) happens to be. */
   const ensureVisible = useCallback((kbTop) => {
     const key = focusedRef.current;
-    const node = key ? inputs[key].current : null;
+    const node = key ? (blocks[key].current || inputs[key].current) : null;
     if (!node?.measureInWindow || !kbTop) return;
     node.measureInWindow((x, y, w, h) => {
       if (typeof y !== 'number' || typeof h !== 'number') return;
@@ -113,6 +126,19 @@ export default function EditProfileScreen() {
       if (delta > 1) scrollRef.current?.scrollTo({ y: offsetRef.current + delta, animated: true });
     });
   }, []);
+
+  /* Everything this measures against is still moving when the keyboard event
+     lands — the keyboard is animating, the save bar is re-laying out without
+     its home-indicator inset. One more pass once that has settled corrects a
+     scroll that came up short; it re-measures, so a pass that already landed
+     computes a delta of ~0 and moves nothing. */
+  const ensureVisibleSettled = useCallback((kbTop) => {
+    ensureVisible(kbTop);
+    clearTimeout(settleRef.current);
+    settleRef.current = setTimeout(() => ensureVisible(keyboardY.current), SETTLE_MS);
+  }, [ensureVisible]);
+
+  useEffect(() => () => clearTimeout(settleRef.current), []);
 
   useEffect(() => {
     // iOS reports the frame before it animates, so the scroll rides along with
@@ -128,14 +154,14 @@ export default function EditProfileScreen() {
       const up = top < winH - 1;
       keyboardY.current = up ? top : 0;
       setKbUp(up);
-      if (up) ensureVisible(top);
+      if (up) ensureVisibleSettled(top);
     });
     const hide = Keyboard.addListener('keyboardDidHide', () => {
       keyboardY.current = 0;
       setKbUp(false);
     });
     return () => { show.remove(); hide.remove(); };
-  }, [ensureVisible, winH]);
+  }, [ensureVisibleSettled, winH]);
 
   // The profile can land after this screen mounts (a cold start straight into
   // More › Profile), and useState only reads its initial value once. Seed the
@@ -344,6 +370,7 @@ export default function EditProfileScreen() {
 
   const fieldProps = (key) => ({
     inputRef: inputs[key],
+    blockRef: blocks[key],
     value: form[key],
     onChangeText: (v) => setField(key, v),
     onFocus: () => {
@@ -356,20 +383,14 @@ export default function EditProfileScreen() {
     onBlur: () => onBlurField(key),
     focused: focused === key,
     error: errors[key],
+    // Every field returns "Done" and simply closes the keyboard. Chaining the
+    // return key through the fields was tried and dropped: four fields is not
+    // a form worth stepping through, and Save is right there above the
+    // keyboard the whole time.
+    returnKeyType: 'done',
     colors,
     styles,
   });
-
-  const next = (key) => {
-    const i = ORDER.indexOf(key);
-    return i >= 0 && i < ORDER.length - 1 ? ORDER[i + 1] : null;
-  };
-  const chain = (key) => {
-    const n = next(key);
-    return n
-      ? { returnKeyType: 'next', submitBehavior: 'submit', onSubmitEditing: () => inputs[n].current?.focus() }
-      : { returnKeyType: 'done', onSubmitEditing: onSave };
-  };
 
   const initialLetter = (form.firstName || t('more.driver')).slice(0, 1).toUpperCase();
 
@@ -453,7 +474,6 @@ export default function EditProfileScreen() {
             <View style={styles.group}>
               <ProfileField
                 {...fieldProps('firstName')}
-                {...chain('firstName')}
                 label={t('editProfile.firstName')}
                 icon="user"
                 placeholder={t('editProfile.firstNamePlaceholder')}
@@ -463,7 +483,6 @@ export default function EditProfileScreen() {
               />
               <ProfileField
                 {...fieldProps('lastName')}
-                {...chain('lastName')}
                 label={t('editProfile.lastName')}
                 icon="user"
                 placeholder={t('editProfile.lastNamePlaceholder')}
@@ -480,7 +499,6 @@ export default function EditProfileScreen() {
             <View style={styles.group}>
               <ProfileField
                 {...fieldProps('phone')}
-                {...chain('phone')}
                 label={t('editProfile.phone')}
                 icon="phone"
                 placeholder={t('editProfile.phoneNumberPlaceholder')}
@@ -490,7 +508,6 @@ export default function EditProfileScreen() {
               />
               <ProfileField
                 {...fieldProps('email')}
-                {...chain('email')}
                 label={t('editProfile.email')}
                 icon="mail"
                 placeholder={t('editProfile.emailAddressPlaceholder')}
@@ -511,7 +528,14 @@ export default function EditProfileScreen() {
         {/* Save rides above the keyboard — inside the KAV, outside the scroll.
             Its measured height is what ensureVisible has to clear as well. */}
         <View
-          onLayout={(e) => { footerRef.current = e.nativeEvent.layout.height; }}
+          onLayout={(e) => {
+            const h = e.nativeEvent.layout.height;
+            if (Math.abs(h - footerRef.current) < 1) return;
+            footerRef.current = h;
+            // It just got taller or shorter — a failed save adds the error
+            // banner — so what was clear of it may not be any more.
+            if (keyboardY.current) ensureVisible(keyboardY.current);
+          }}
           style={[
             styles.footer,
             {
@@ -567,14 +591,14 @@ export default function EditProfileScreen() {
    text inside it. The label doubles as the focus indicator (it turns teal), so
    nothing has to move or resize when the keyboard opens. */
 function ProfileField({
-  label, icon, inputRef, value, onChangeText, onFocus, onBlur,
+  label, icon, inputRef, blockRef, value, onChangeText, onFocus, onBlur,
   focused, error, placeholder, colors, styles, ...inputProps
 }) {
   const t = useT();
   const accent = error ? colors.danger : focused ? colors.teal : null;
 
   return (
-    <View>
+    <View ref={blockRef} collapsable={false}>
       <Pressable
         onPress={() => inputRef.current?.focus()}
         accessible={false}
