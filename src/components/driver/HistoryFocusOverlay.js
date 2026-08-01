@@ -194,7 +194,6 @@ export default function HistoryFocusOverlay({ load, when, miles, unit, onClose, 
                 <Icon name="eye-off" size={20} color={colors.textPrimary} />
                 <Text style={[styles.hideText, { color: colors.textPrimary }]}>{t('earnings.hideFromHistory')}</Text>
               </Pressable>
-              <Text style={[styles.hint, { color: colors.textSecondary }]}>{t('earnings.hideHint')}</Text>
 
               <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
@@ -211,7 +210,6 @@ export default function HistoryFocusOverlay({ load, when, miles, unit, onClose, 
                 <Icon name="trash-2" size={18} color={danger.solid} />
                 <Text style={[styles.deleteText, { color: danger.solid }]}>{t('earnings.deleteFromHistory')}</Text>
               </Pressable>
-              <Text style={[styles.hint, { color: colors.textSecondary }]}>{t('earnings.deleteHint')}</Text>
 
               <Pressable
                 onPress={onClose}
@@ -261,7 +259,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: space[5],
   },
   deleteText: { fontSize: 15, fontFamily: FONT.bold },
-  hint: { ...type.caption, textAlign: 'center', lineHeight: 19, paddingHorizontal: space[3] },
   cancelBtn: { minHeight: tap.icon, alignItems: 'center', justifyContent: 'center' },
   cancelText: { fontSize: 15, fontFamily: FONT.bold },
 

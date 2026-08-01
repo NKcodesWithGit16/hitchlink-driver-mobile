@@ -492,11 +492,11 @@ rather than keeping a second copy of that logic, and stands its own Modal down f
 
 Renew and Delete moved to `DocFocusOverlay` (long press), modelled on `HistoryFocusOverlay` down to the
 armed-in-place delete confirm — an `Alert` can't render the document it's talking about, and RN-web has no
-`Alert` at all. It parts company with that overlay in one way: **the two actions are a grouped menu with no
-caption under either row.** "Upload renewal" and "Delete document" are self-evident. The Pay tab keeps its
-captions because there the two actions *sound* alike and the difference (hide is reversible for three
-weeks, delete isn't) is exactly what the captions carry — that is information, not a restatement of the
-button. Don't add captions back here on consistency grounds.
+`Alert` at all. **Neither overlay captions its actions**: "Upload renewal" / "Delete document" and
+"Hide from history" / "Delete permanently" are self-evident, and the Pay tab's captions were removed on
+2026-08-01 as restatements of their buttons. The reversible-vs-permanent difference is still spelled out
+where it decides something — the delete confirm names Hide as the alternative, and the Hidden loads screen
+counts down each entry's remaining days.
 
 Two things about how it's built. **The document is solid, the menu is glass** — `GlassView` is the material
 `tokens.js` reserves for overlay chrome, and the split makes the hierarchy readable before a word is: the
