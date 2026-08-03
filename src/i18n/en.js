@@ -669,6 +669,81 @@ export const en = {
     signIn: 'Sign in',
     troubleSigningIn: 'Trouble signing in? Call your dispatcher.',
     sessionExpired: 'Your session expired — please sign in again.',
+    haveInvite: 'Invited by a dispatcher? Open your invite',
+  },
+
+  invite: {
+    title: 'Set up your account',
+    subtitle: 'Fill in your details to get started.',
+    invitedBy: '{company} invited you to join their fleet.',
+    checking: 'Checking your invite…',
+    retry: 'Try again',
+    backToSignIn: 'Back to sign in',
+    submit: 'Create account',
+
+    expired: {
+      title: 'This invite has expired',
+      body: 'Invites are good for 14 days. Ask your dispatcher to send a new one.',
+    },
+    used: {
+      title: 'This invite is already used',
+      body: 'Your account is set up — sign in with the username and password you chose.',
+    },
+    notFound: {
+      title: "We couldn't find this invite",
+      body: 'Check the link or code and try again, or ask your dispatcher to resend it.',
+    },
+
+    needLink: {
+      title: 'Open your invite',
+      body: 'Paste the link your dispatcher sent, or type the 8-character code from the message.',
+      placeholder: 'Invite link or code',
+      action: 'Continue',
+    },
+
+    field: {
+      firstName: 'First name',
+      lastName: 'Last name',
+      email: 'Email',
+      phone: 'Phone (optional)',
+      username: 'Username',
+      password: 'Password',
+      confirmPassword: 'Confirm password',
+    },
+    hint: {
+      emailLocked: 'Your dispatcher invited this address.',
+      username: "Letters, numbers and underscores. You'll sign in with this.",
+    },
+    err: {
+      firstName: 'Enter your first name.',
+      lastName: 'Enter your last name.',
+      email: 'Enter a valid email address.',
+      usernameShort: 'At least 3 characters.',
+      usernameLong: 'At most 20 characters.',
+      usernameChars: 'Letters, numbers and underscores only.',
+      password: 'At least 8 characters.',
+      passwordMatch: 'Passwords do not match.',
+    },
+
+    created: {
+      title: 'Account created',
+      body: "You're all set — sign in with your new username and password.",
+      action: 'Sign in',
+    },
+    signedIn: {
+      title: "You're already signed in",
+      body: "You're signed in as {current}. This invite is for {invited}.",
+      switch: 'Sign out and continue',
+      stay: 'Stay signed in',
+    },
+
+    hidePasswordA11y: 'Hide password',
+    showPasswordA11y: 'Show password',
+
+    error: {
+      generic: 'Something went wrong. Please try again.',
+      offlineTitle: "Couldn't reach the server",
+    },
   },
 
   editProfile: {

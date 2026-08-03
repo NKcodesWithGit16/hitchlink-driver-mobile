@@ -1,6 +1,7 @@
-import { useEffect, Component } from 'react';
+import { useEffect, useRef, Component } from 'react';
 import { View, useWindowDimensions, Text, Pressable } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
+import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
@@ -94,6 +95,44 @@ function VoipPushRegistrar() {
   return null;
 }
 
+// Turns an invite URL into a route. Two delivery paths, both landing on
+// app/(auth)/driver-register.js:
+//   https://app.gethitchlink.com/driver-register?token=…  (Universal/App Links)
+//   hitchlinkdriver://driver-register?token=…             (custom scheme)
+// Expo-router maps the second for free from app.json's `scheme`; whether it also
+// registers the https prefix is version-dependent, so this handles both rather
+// than guessing. Double-handling is harmless — the destination is idempotent.
+function DeepLinkRouter() {
+  const { ready } = useAuth();
+  const router = useRouter();
+  // Deduped on the URL string, not a "has run" flag: a driver can legitimately
+  // receive a second, different invite while the app is still warm.
+  const lastUrl = useRef(null);
+
+  useEffect(() => {
+    // Gated on `ready` so it can't race RouteGate's first pass and get undone.
+    if (!ready) return;
+    let alive = true;
+
+    const handle = (url) => {
+      if (!url || !alive || url === lastUrl.current) return;
+      let parsed;
+      try { parsed = Linking.parse(url); } catch { return; }
+      const path = parsed?.path || '';
+      const token = parsed?.queryParams?.token;
+      if (!path.replace(/^\//, '').startsWith('driver-register') || !token) return;
+      lastUrl.current = url;
+      router.replace({ pathname: '/(auth)/driver-register', params: { token: String(token) } });
+    };
+
+    Linking.getInitialURL().then(handle).catch(() => {});
+    const sub = Linking.addEventListener('url', (e) => handle(e?.url));
+    return () => { alive = false; sub.remove(); };
+  }, [ready, router]);
+
+  return null;
+}
+
 function RouteGate() {
   const { ready, signedIn, onboarded } = useAuth();
   const segments = useSegments();
@@ -106,8 +145,14 @@ function RouteGate() {
     const inOnboarding = seg0 === 'onboarding';
     const inWelcome = seg0 === 'welcome';
     const inIntro = inWelcome || inOnboarding;
+    // The one (auth) screen a signed-in driver may legitimately be on: an invite
+    // for someone else (shared cab phone, or a driver moving carrier). The screen
+    // itself explains and offers to sign out; bouncing them here would make the
+    // link look broken. It sends an already-registered driver back to (tabs) on
+    // its own, so "tapped my own link again" stays invisible.
+    const onInvite = inAuth && segments[1] === 'driver-register';
     if (signedIn) {
-      if (inAuth || inIntro) router.replace('/(tabs)');
+      if ((inAuth && !onInvite) || inIntro) router.replace('/(tabs)');
     } else if (!onboarded) {
       // First run: land on the cinematic welcome; the tour + sign-in are reachable from there.
       if (!inIntro && !inAuth) router.replace('/welcome');
@@ -126,6 +171,7 @@ function ThemedShell() {
     <View style={{ flex: 1, width, alignSelf: 'center', overflow: 'hidden', backgroundColor: colors.bg }}>
       <StatusBar style={scheme === 'day' ? 'dark' : 'light'} />
       <RouteGate />
+      <DeepLinkRouter />
       <LocationReporter />
       <PushRouter />
       <VoipPushRegistrar />
