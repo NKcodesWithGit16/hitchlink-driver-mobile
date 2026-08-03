@@ -3,6 +3,7 @@ import { View, useWindowDimensions, Text, Pressable } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
+import { parseInviteUrl } from '../src/lib/inviteLink';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
 import { setAudioModeAsync } from 'expo-audio';
@@ -116,13 +117,10 @@ function DeepLinkRouter() {
 
     const handle = (url) => {
       if (!url || !alive || url === lastUrl.current) return;
-      let parsed;
-      try { parsed = Linking.parse(url); } catch { return; }
-      const path = parsed?.path || '';
-      const token = parsed?.queryParams?.token;
-      if (!path.replace(/^\//, '').startsWith('driver-register') || !token) return;
+      const token = parseInviteUrl(url);
+      if (!token) return;
       lastUrl.current = url;
-      router.replace({ pathname: '/(auth)/driver-register', params: { token: String(token) } });
+      router.replace({ pathname: '/(auth)/driver-register', params: { token } });
     };
 
     Linking.getInitialURL().then(handle).catch(() => {});

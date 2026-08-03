@@ -6,7 +6,6 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Linking from 'expo-linking';
 import BrandLogo from '../../src/components/BrandLogo';
 import Icon from '../../src/components/ui/Icon';
 import PrimaryAction from '../../src/components/ui/PrimaryAction';
@@ -18,6 +17,7 @@ import { useEnsureVisible } from '../../src/hooks/useEnsureVisible';
 import { login } from '../../src/api/auth';
 import { getInvitePreview, completeDriverRegistration } from '../../src/api/invites';
 import { haptics } from '../../src/lib/haptics';
+import { extractToken } from '../../src/lib/inviteLink';
 import { space, type, radius, FONT, elevation } from '../../src/theme/tokens';
 
 // Reached three ways: an https invite link the OS handed us (Universal/App
@@ -45,21 +45,6 @@ function splitName(full) {
   const parts = (full ?? '').trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return { firstName: '', lastName: '' };
   return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
-}
-
-/** Pulls a token out of a pasted invite link, or accepts a bare typed code. */
-function extractToken(raw) {
-  const value = (raw ?? '').trim();
-  if (!value) return '';
-  if (value.includes('://') || value.includes('/driver-register')) {
-    try {
-      const parsed = Linking.parse(value);
-      if (parsed?.queryParams?.token) return String(parsed.queryParams.token);
-    } catch {
-      // Not a URL after all — fall through and treat it as a code.
-    }
-  }
-  return value;
 }
 
 /* ── Module-scope pieces ──────────────────────────────────────────────────
