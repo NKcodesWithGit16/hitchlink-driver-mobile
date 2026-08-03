@@ -3,7 +3,7 @@ import {
   View, Text, TextInput, Pressable, StyleSheet,
   KeyboardAvoidingView, ScrollView,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import BrandLogo from '../../src/components/BrandLogo';
@@ -29,7 +29,10 @@ export default function SignIn() {
   const styles = makeStyles(colors);
   const bandH = insets.top + 158;
 
-  const [email,    setEmail]    = useState('');
+  // Prefilled when registration succeeded but the automatic sign-in that follows
+  // it didn't — the account exists, so the driver only needs their password.
+  const params = useLocalSearchParams();
+  const [email,    setEmail]    = useState(params.username ? String(params.username) : '');
   const [password, setPassword] = useState('');
   const [showPw,   setShowPw]   = useState(false);
   const [loading,  setLoading]  = useState(false);
@@ -132,6 +135,20 @@ export default function SignIn() {
             <PrimaryAction label={t('auth.signIn')} icon="arrow-right" onPress={onSubmit} loading={loading} />
           </FadeInView>
 
+          {/* For the driver whose invite link didn't open the app — they
+              installed it, opened it from the home screen, and are now looking
+              at a login they have no credentials for. This is where they land,
+              so this is where the way out belongs. */}
+          <Pressable
+            onPress={() => router.push('/(auth)/driver-register')}
+            hitSlop={8}
+            style={styles.inviteRow}
+            accessibilityRole="button"
+          >
+            <Icon name="mail" size={15} color={colors.teal} />
+            <Text style={styles.inviteLink}>{t('auth.haveInvite')}</Text>
+          </Pressable>
+
           <Text style={styles.help}>{t('auth.troubleSigningIn')}</Text>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -173,5 +190,11 @@ const makeStyles = (colors) => StyleSheet.create({
   },
   errorText: { ...type.caption, fontFamily: FONT.bold, color: colors.danger, flex: 1 },
 
-  help: { ...type.caption, color: colors.textMuted, textAlign: 'center', marginTop: space[6] },
+  inviteRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, marginTop: space[5], paddingVertical: space[2],
+  },
+  inviteLink: { ...type.caption, fontFamily: FONT.bold, color: colors.teal },
+
+  help: { ...type.caption, color: colors.textMuted, textAlign: 'center', marginTop: space[4] },
 });
