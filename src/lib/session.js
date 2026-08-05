@@ -36,14 +36,26 @@ const EXPIRY_MARGIN_SEC = 60;
 let inflightRefresh = null;
 const expiredListeners = new Set();
 
+/**
+ * Why the session ended, passed to every sessionExpired listener.
+ *
+ * `deactivated` means Identity refused the refresh because the account itself
+ * was disabled — a dispatcher removed this driver. It is terminal in a way an
+ * expiry is not: signing in again cannot work, so the app has to say so instead
+ * of dropping the driver on a sign-in screen with no explanation. Anything
+ * unrecognised (including an older Identity that sends no code) is `expired`.
+ */
+export const SESSION_END_EXPIRED = 'expired';
+export const SESSION_END_DEACTIVATED = 'deactivated';
+
 /** AuthContext subscribes to learn when the session is unrecoverable. */
 export function onSessionExpired(listener) {
   expiredListeners.add(listener);
   return () => expiredListeners.delete(listener);
 }
 
-function emitSessionExpired() {
-  expiredListeners.forEach((l) => { try { l(); } catch {} });
+function emitSessionExpired(reason = SESSION_END_EXPIRED) {
+  expiredListeners.forEach((l) => { try { l(reason); } catch {} });
 }
 
 function isExpiring(token) {
@@ -98,8 +110,11 @@ export function refreshNow() {
         // 5xx, unparseable body, incomplete token pair — as `transient`; the
         // TypeError check additionally covers a network failure thrown before
         // that classification can happen.
-        if (!isTransient(e)) emitSessionExpired();
-        else console.warn('[Session] Refresh failed transiently, session kept:', e?.message || e);
+        if (!isTransient(e)) {
+          emitSessionExpired(
+            e?.code === 'account_deactivated' ? SESSION_END_DEACTIVATED : SESSION_END_EXPIRED,
+          );
+        } else console.warn('[Session] Refresh failed transiently, session kept:', e?.message || e);
         return null;
       } finally {
         inflightRefresh = null;

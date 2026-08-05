@@ -669,6 +669,7 @@ export const en = {
     signIn: 'Sign in',
     troubleSigningIn: 'Trouble signing in? Call your dispatcher.',
     sessionExpired: 'Your session expired — please sign in again.',
+    accountRemoved: 'Your dispatcher removed you from this fleet. Contact them if this is a mistake.',
     haveInvite: 'Invited by a dispatcher? Open your invite',
   },
 

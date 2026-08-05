@@ -109,6 +109,45 @@ describe('session expiry semantics', () => {
     expect(expired).toHaveBeenCalledTimes(1);
   });
 
+  test('a plain rejection reports the reason as expired', async () => {
+    storage.readRefreshTokenStrict.mockResolvedValue('rt-dead');
+    authApi.refreshSession.mockRejectedValue(new Error('Invalid or expired refresh token'));
+    const expired = jest.fn();
+    session.onSessionExpired(expired);
+
+    await session.refreshNow();
+    expect(expired).toHaveBeenCalledWith(session.SESSION_END_EXPIRED);
+  });
+
+  // A dispatcher removing a driver has to reach a phone that is already signed
+  // in, and it arrives as this code on the refresh rejection — the app shows
+  // "your dispatcher removed you" off the back of it rather than inviting them
+  // to sign in again with a password that can no longer work.
+  test('a deactivated account reports a distinct reason', async () => {
+    storage.readRefreshTokenStrict.mockResolvedValue('rt-live');
+    const err = new Error('This account has been disabled. Contact your dispatcher.');
+    err.code = 'account_deactivated';
+    authApi.refreshSession.mockRejectedValue(err);
+    const expired = jest.fn();
+    session.onSessionExpired(expired);
+
+    await expect(session.refreshNow()).resolves.toBeNull();
+    expect(expired).toHaveBeenCalledWith(session.SESSION_END_DEACTIVATED);
+  });
+
+  // An Identity that predates the code must not be read as a removal.
+  test('an unrecognised code falls back to a plain expiry', async () => {
+    storage.readRefreshTokenStrict.mockResolvedValue('rt-live');
+    const err = new Error('Refresh token rejected');
+    err.code = 'something_new';
+    authApi.refreshSession.mockRejectedValue(err);
+    const expired = jest.fn();
+    session.onSessionExpired(expired);
+
+    await session.refreshNow();
+    expect(expired).toHaveBeenCalledWith(session.SESSION_END_EXPIRED);
+  });
+
   test('missing refresh token is terminal too', async () => {
     storage.readRefreshTokenStrict.mockResolvedValue(null);
     const expired = jest.fn();

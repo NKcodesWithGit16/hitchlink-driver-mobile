@@ -55,8 +55,15 @@ export async function refreshSession(refreshToken) {
     throw transientError(`Session refresh returned an unreadable body: ${e?.message || e}`);
   }
 
-  // The one genuinely terminal case.
-  if (data?.isAccepted === false) throw new Error(data?.message || 'Refresh token rejected');
+  // The one genuinely terminal case. `code` distinguishes "your dispatcher
+  // removed you" from an ordinary expiry — the difference between telling the
+  // driver why they're out and letting them retype a password forever. Absent
+  // on older Identity deploys, which is handled as a plain expiry.
+  if (data?.isAccepted === false) {
+    const err = new Error(data?.message || 'Refresh token rejected');
+    if (data?.code) err.code = data.code;
+    throw err;
+  }
 
   // A 200 carrying no usable pair is a server-side anomaly, not a rejection.
   // Accepting a blank refreshToken here would also wipe the stored one (see

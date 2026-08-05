@@ -10,7 +10,7 @@ import { registerForPushNotifications, unregisterPushNotifications } from '../ho
 import { stopBackgroundTracking } from '../lib/backgroundLocation';
 import { cancelAllLocalReminders } from '../lib/localNotifications';
 import { clearAll as clearDocumentCache } from '../lib/docCache';
-import { onSessionExpired, refreshNow } from '../lib/session';
+import { onSessionExpired, refreshNow, SESSION_END_DEACTIVATED } from '../lib/session';
 import { identify } from '../lib/observability';
 import { useT } from '../i18n/LanguageContext';
 
@@ -123,8 +123,16 @@ export function AuthProvider({ children }) {
   // leave a notice for the sign-in screen so the logout isn't mysterious.
   const signOutRef = useRef(signOut);
   signOutRef.current = signOut;
-  useEffect(() => onSessionExpired(() => {
-    setSessionNotice(t('auth.sessionExpired'));
+  // A removed driver gets told why. "Session expired" would send them round the
+  // sign-in screen retyping a password that Identity will never accept again,
+  // and leave them assuming the app is broken rather than that their dispatcher
+  // ended their access.
+  useEffect(() => onSessionExpired((reason) => {
+    setSessionNotice(
+      reason === SESSION_END_DEACTIVATED
+        ? t('auth.accountRemoved')
+        : t('auth.sessionExpired'),
+    );
     signOutRef.current();
   }), [t]);
 
