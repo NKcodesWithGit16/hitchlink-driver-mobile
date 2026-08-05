@@ -766,7 +766,20 @@ never publish an OTA across one.** Version history so far: `1.0.0` → `1.0.1` (
 release; **JS-only** — bumped to cut a fresh build, not because anything native changed) → `1.1.0` (video
 calling: `NSCameraUsageDescription`, the Android `CAMERA` permission, the `expo-media-library` plugin, and
 `hasVideo` in `HitchlinkVoipPushDelegate.m` — plus it clears three native packages added after 1.0.3 was
-submitted).
+submitted) → `1.2.0` (invite deep links: iOS `associatedDomains` + the Android App Links intent filter,
+and the white splash screen) → `1.2.1` (adds `staging.gethitchlink.com` to both — see below).
+
+⚠️ **Every host an invite link can be served from must be listed in BOTH `ios.associatedDomains` and the
+Android `intentFilters`, and that is a native change.** This is the way the feature failed first: staging
+`HitchLink.Main` builds invite URLs from its own `Email:FrontendBaseUrl`, which is
+`https://staging.gethitchlink.com` — a different host from the `https://app.gethitchlink.com` that 1.2.0
+declared. Nothing on the server side was wrong (both domains serve a correct
+`apple-app-site-association` and `assetlinks.json`, because the two are the same frontend build), and
+nothing logs an error: an undeclared host simply never consults the OS link handler, so the link opens in
+the browser exactly as if the app were not installed. Both platforms fail identically, which is
+misleading — iOS and Android verify domains through completely independent systems, so identical failure
+is the signature of the URL not matching rather than of verification. **Check the host in the browser's
+address bar before debugging anything else.**
 
 **Minor vs. patch is a labelling decision and nothing else.** Because the policy is `appVersion`, this
 string's real job is to key OTA compatibility — `1.0.5` and `1.1.0` behave identically, strand exactly the
