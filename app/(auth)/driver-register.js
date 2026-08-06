@@ -9,6 +9,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import BrandLogo from '../../src/components/BrandLogo';
 import Icon from '../../src/components/ui/Icon';
 import PrimaryAction from '../../src/components/ui/PrimaryAction';
+import PhoneField from '../../src/components/ui/PhoneField';
 import FadeInView from '../../src/components/ui/FadeInView';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useT } from '../../src/i18n/LanguageContext';
@@ -18,6 +19,7 @@ import { login } from '../../src/api/auth';
 import { getInvitePreview, completeDriverRegistration } from '../../src/api/invites';
 import { haptics } from '../../src/lib/haptics';
 import { extractToken } from '../../src/lib/inviteLink';
+import { DEFAULT_COUNTRY, isValidPhone, splitE164, toE164 } from '../../src/lib/phone';
 import { space, type, radius, FONT, elevation } from '../../src/theme/tokens';
 
 // Reached three ways: an https invite link the OS handed us (Universal/App
@@ -54,7 +56,7 @@ function getClipboard() {
 const ORDER = ['firstName', 'lastName', 'email', 'phone', 'username', 'password', 'confirmPassword'];
 
 const EMPTY = {
-  firstName: '', lastName: '', email: '', phone: '',
+  firstName: '', lastName: '', email: '', phone: '', phoneCountry: DEFAULT_COUNTRY,
   username: '', password: '', confirmPassword: '',
 };
 
@@ -183,12 +185,17 @@ export default function DriverRegister() {
       setPhase('ready');
       if (data?.status === 'Valid') {
         const { firstName, lastName } = splitName(data.name);
+        // A WhatsApp invite carries the number the dispatcher dialled, with its
+        // country code. Split it so the picker opens on the right flag rather
+        // than defaulting to US and mangling a foreign number.
+        const { country, national } = splitE164(data.phoneNumber);
         setForm({
           ...EMPTY,
           firstName,
           lastName,
           email: data.email ?? '',
-          phone: data.phoneNumber ?? '',
+          phone: national,
+          phoneCountry: country,
         });
       }
     } catch (e) {
@@ -224,7 +231,10 @@ export default function DriverRegister() {
       case 'firstName': return v ? null : t('invite.err.firstName');
       case 'lastName':  return v ? null : t('invite.err.lastName');
       case 'email':     return EMAIL_RE.test(v) ? null : t('invite.err.email');
-      case 'phone':     return null;   // optional
+      // Optional — an email invite may never have asked for a number. But a
+      // number that IS given has to be real for the country selected: a
+      // dispatcher will try to call it.
+      case 'phone':     return !v || isValidPhone(current.phoneCountry, v) ? null : t('invite.err.phone');
       case 'username':
         if (v.length < 3)  return t('invite.err.usernameShort');
         if (v.length > 20) return t('invite.err.usernameLong');
@@ -277,7 +287,8 @@ export default function DriverRegister() {
         token,
         firstName:   form.firstName.trim(),
         lastName:    form.lastName.trim(),
-        phoneNumber: form.phone.trim(),
+        // E.164, not the formatted display value.
+        phoneNumber: toE164(form.phoneCountry, form.phone),
         email:       form.email.trim(),
         username:    form.username.trim(),
         password:    form.password,
@@ -568,12 +579,23 @@ export default function DriverRegister() {
           editable={!emailLocked}
         />
 
-        <Field
-          {...fieldProps('phone')}
-          label={t('invite.field.phone')}
-          icon="phone"
-          keyboardType="phone-pad"
-        />
+        {/* Not a Field: the country picker has no icon slot and owns half the
+            row. The label and error line are reproduced here so the block still
+            matches its neighbours. */}
+        <View style={styles.block} ref={registerBlock('phone')} collapsable={false}>
+          <Text style={styles.label}>{t('invite.field.phone')}</Text>
+          <PhoneField
+            country={form.phoneCountry}
+            onCountryChange={(code) => setField('phoneCountry', code)}
+            value={form.phone}
+            onChange={(v) => setField('phone', v)}
+            onFocus={() => onFocusField('phone')}
+            onBlur={() => blurField('phone')}
+            error={errors.phone}
+            inputRef={inputs.phone}
+            countryLabel={t('invite.field.phone')}
+          />
+        </View>
 
         {/* textContentType is what makes iOS offer to save this to the Keychain
             on submit, and to autofill it at sign-in later. It only works because

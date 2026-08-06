@@ -20,6 +20,8 @@ import { useT } from '../src/i18n/LanguageContext';
 import { useAuth } from '../src/context/AuthContext';
 import { useCallBannerInset } from '../src/components/call/CallOverlay';
 import { updateDriver, uploadDriverPhoto, removeDriverPhoto } from '../src/api/main';
+import PhoneField from '../src/components/ui/PhoneField';
+import { isValidPhone, splitE164, toE164 } from '../src/lib/phone';
 import { space, radius, type, FONT, tap, elevation, motion } from '../src/theme/tokens';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -65,12 +67,19 @@ export default function EditProfileScreen() {
 
   // Prefer the raw driver record (camelCase phoneNumber) over the mapped
   // `user` object — this form writes straight back to those same fields.
-  const initial = useMemo(() => ({
-    firstName: driverProfile?.firstName   || user?.firstName || '',
-    lastName:  driverProfile?.lastName    || user?.lastName  || '',
-    phone:     driverProfile?.phoneNumber || user?.phone     || '',
-    email:     driverProfile?.email       || user?.email     || '',
-  }), [driverProfile, user]);
+  const initial = useMemo(() => {
+    // The stored number is E.164 (or bare digits on older rows). Split it so
+    // the picker opens on the driver's own country rather than defaulting to
+    // US and reporting their real number as invalid.
+    const { country, national } = splitE164(driverProfile?.phoneNumber || user?.phone);
+    return {
+      firstName: driverProfile?.firstName || user?.firstName || '',
+      lastName:  driverProfile?.lastName  || user?.lastName  || '',
+      phone:     national,
+      phoneCountry: country,
+      email:     driverProfile?.email     || user?.email     || '',
+    };
+  }, [driverProfile, user]);
 
   const [form,      setForm]      = useState(initial);
   const [errors,    setErrors]    = useState({});
@@ -191,10 +200,18 @@ export default function EditProfileScreen() {
     const v = (value ?? '').trim();
     if (key === 'firstName') return v ? null : t('editProfile.firstNameRequired');
     if (key === 'lastName')  return v ? null : t('editProfile.lastNameRequired');
-    if (key === 'phone')     return v ? null : t('editProfile.enterPhone');
+    // Required here (unlike registration) — this form exists partly so a driver
+    // can correct the number their dispatcher calls. Now checked against the
+    // selected country rather than merely being non-empty.
+    if (key === 'phone') {
+      if (!v) return t('editProfile.enterPhone');
+      return isValidPhone(form.phoneCountry, v) ? null : t('editProfile.invalidPhone');
+    }
     if (key === 'email')     return EMAIL_RE.test(v) ? null : t('editProfile.enterValidEmail');
     return null;
-  }, [t]);
+    // phoneCountry is read above, so a country change has to rebuild this or
+    // the number keeps being judged against the previous country's rules.
+  }, [t, form.phoneCountry]);
 
   // Validate on blur so a mistake is flagged as the driver leaves the field,
   // not only when they reach the bottom of the screen. An empty field they
@@ -222,7 +239,7 @@ export default function EditProfileScreen() {
     const payload = {
       firstName:   form.firstName.trim(),
       lastName:    form.lastName.trim(),
-      phoneNumber: form.phone.trim(),
+      phoneNumber: toE164(form.phoneCountry, form.phone),
       email:       form.email.trim(),
     };
 
@@ -512,15 +529,35 @@ export default function EditProfileScreen() {
                   which has no return key. Losing it means switching to
                   numbers-and-punctuation and giving up the big digits, which
                   is the wrong trade in a truck. Leave it. */}
-              <ProfileField
-                {...fieldProps('phone')}
-                label={t('editProfile.phone')}
-                icon="phone"
-                placeholder={t('editProfile.phoneNumberPlaceholder')}
-                keyboardType="phone-pad"
-                autoComplete="tel"
-                textContentType="telephoneNumber"
-              />
+              {/* Not a ProfileField: the country picker takes the icon's place
+                  and owns a third of the row. The label sits above instead of
+                  inside, and PhoneField renders its own error line. */}
+              <View ref={blocks.phone} collapsable={false} style={styles.phoneBlock}>
+                <Text style={[
+                  styles.fieldLabel,
+                  { color: errors.phone ? colors.danger : focused === 'phone' ? colors.teal : colors.textMuted },
+                ]}>
+                  {t('editProfile.phone')}
+                </Text>
+                <PhoneField
+                  country={form.phoneCountry}
+                  onCountryChange={(code) => setField('phoneCountry', code)}
+                  value={form.phone}
+                  onChange={(v) => setField('phone', v)}
+                  onFocus={() => {
+                    setFocused('phone');
+                    focusedRef.current = 'phone';
+                    if (keyboardY.current) {
+                      requestAnimationFrame(() => ensureVisibleSettled(keyboardY.current));
+                    }
+                  }}
+                  onBlur={() => onBlurField('phone')}
+                  error={errors.phone}
+                  inputRef={inputs.phone}
+                  placeholder={t('editProfile.phoneNumberPlaceholder')}
+                  countryLabel={t('editProfile.phone')}
+                />
+              </View>
               <ProfileField
                 {...fieldProps('email')}
                 label={t('editProfile.email')}
@@ -739,6 +776,9 @@ const makeStyles = (colors) => StyleSheet.create({
   photoLink: { fontSize: 15, fontFamily: FONT.bold, letterSpacing: -0.2 },
 
   group: { gap: space[3] },
+  // The phone row's label sits above the controls rather than inside a field
+  // shell, so it needs the gap the shell would otherwise provide.
+  phoneBlock: { gap: space[2] },
 
   // Matches `field`'s geometry so the username sits on the same rhythm as the
   // editable rows above it, but with a hairline border rather than the 1.5px

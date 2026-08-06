@@ -52,6 +52,7 @@
     "expo-updates": "~55.0.26",
     "hitchlink-quicklook": "file:./modules/hitchlink-quicklook",
     "hitchlink-voip": "file:./modules/hitchlink-voip",
+    "libphonenumber-js": "^1.13.10",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-native": "0.83.6",

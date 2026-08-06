@@ -769,6 +769,7 @@ export const en = {
       usernameChars: 'Letters, numbers and underscores only.',
       password: 'At least 8 characters.',
       passwordMatch: 'Passwords do not match.',
+      phone: 'Not a valid number for the country selected.',
     },
 
     created: {
@@ -804,6 +805,7 @@ export const en = {
     firstNameRequired: 'Enter your first name.',
     lastNameRequired: 'Enter your last name.',
     enterPhone: 'Enter a phone number.',
+    invalidPhone: 'Not a valid number for the country selected.',
     enterValidEmail: 'Enter a valid email address.',
     emailPhoneInUse: 'That email or phone number is already in use.',
     saveFailedError: "Couldn't save — check your connection and try again.",

@@ -762,6 +762,7 @@ export const ka = {
       usernameChars: 'მხოლოდ ლათინური ასოები, ციფრები და ქვედა ტირე.',
       password: 'მინიმუმ 8 სიმბოლო.',
       passwordMatch: 'პაროლები არ ემთხვევა.',
+      phone: 'არჩეული ქვეყნისთვის ნომერი არასწორია.',
     },
 
     created: {
@@ -797,6 +798,7 @@ export const ka = {
     firstNameRequired: 'შეიყვანეთ სახელი.',
     lastNameRequired: 'შეიყვანეთ გვარი.',
     enterPhone: 'შეიყვანეთ ტელეფონის ნომერი.',
+    invalidPhone: 'არჩეული ქვეყნისთვის ნომერი არასწორია.',
     enterValidEmail: 'შეიყვანეთ სწორი ელფოსტა.',
     emailPhoneInUse: 'ეს ელფოსტა ან ტელეფონის ნომერი უკვე გამოიყენება.',
     saveFailedError: 'ვერ შეინახა — შეამოწმეთ კავშირი და სცადეთ თავიდან.',
