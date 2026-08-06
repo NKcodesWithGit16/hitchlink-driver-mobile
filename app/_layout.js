@@ -148,6 +148,11 @@ function RouteGate() {
     // itself explains and offers to sign out; bouncing them here would make the
     // link look broken. It sends an already-registered driver back to (tabs) on
     // its own, so "tapped my own link again" stays invisible.
+    //
+    // ⚠️ The exemption cuts both ways: this route does NOT get moved into the app
+    // when it signs a driver in, so it must navigate itself. Registration used to
+    // assume RouteGate would do it and left the driver sitting on a Continue
+    // button that ran but appeared dead.
     const onInvite = inAuth && segments[1] === 'driver-register';
     if (signedIn) {
       if ((inAuth && !onInvite) || inIntro) router.replace('/(tabs)');

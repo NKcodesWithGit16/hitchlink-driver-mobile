@@ -303,11 +303,10 @@ export default function DriverRegister() {
       const authToken = data?.token || data?.accessToken;
       if (!authToken || typeof authToken !== 'string') throw new Error('No token in response');
 
-      // Hold the session rather than starting it. signIn flips `signedIn` and
-      // RouteGate replaces to (tabs) on the next render, so anything shown after
-      // it is gone before it can be read — and the one moment a driver will ever
-      // see the username they just chose is right here. They confirm, then we
-      // sign them in.
+      // Hold the session rather than starting it. This is the one moment a driver
+      // will ever see the username they just chose — there is no "forgot
+      // username" flow — so the confirmation screen goes up first and signs them
+      // in when they continue.
       setPending({ authToken, refreshToken: data?.refreshToken || null });
       haptics.success();
       setPhase('saved');
@@ -420,8 +419,20 @@ export default function DriverRegister() {
                   form.email.trim(),
                   pending.refreshToken,
                 );
-                // RouteGate owns the move to (tabs) once signedIn flips —
-                // replacing here as well would race it.
+
+                // Navigate explicitly. RouteGate does NOT move a signed-in driver
+                // off this route — it exempts it by name, so that a driver holding
+                // someone else's invite isn't bounced out of the screen that
+                // explains it. Every other (auth) screen can leave the move to
+                // RouteGate; this one is the exception, and assuming otherwise is
+                // what made this button look dead.
+                router.replace('/(tabs)');
+              } catch {
+                // The account exists and the password works — only the session
+                // handoff failed. Send them to sign in by hand rather than
+                // leaving them on a button that appears to do nothing.
+                haptics.warning();
+                setPhase('created');
               } finally {
                 setSaving(false);
               }
