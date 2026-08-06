@@ -1,4 +1,4 @@
-import { AsYouType, parsePhoneNumberFromString } from "libphonenumber-js";
+import { AsYouType, Metadata, parsePhoneNumberFromString } from "libphonenumber-js";
 import { dialFor } from "../data/countries";
 
 /**
@@ -6,7 +6,7 @@ import { dialFor } from "../data/countries";
  *
  * Mirrors HitchLink_frontend/src/lib/phone.js. Separate repos, no shared
  * package — keep the two in step by hand, and if the rules ever diverge the
- * server is the one that decides (see Identity's PhoneNumber validation).
+ * server is the one that decides (see Identity PhoneNumberRules).
  *
  * Everything here works in two halves — an ISO country code ("US", "GE") and the
  * national number as the user typed it — because that is what the UI shows. The
@@ -21,17 +21,88 @@ import { dialFor } from "../data/countries";
 /** Sensible default for a US trucking platform, and what the old 10-digit rule assumed. */
 export const DEFAULT_COUNTRY = "US";
 
+/** Cheap, and called on every keystroke — the answer per country never changes. */
+const maxLengthCache = new Map();
+
+/**
+ * The most digits a national number can have in this country: 9 for Georgia,
+ * 10 for the US, 10 for the UK (which also allows 7 and 9).
+ *
+ * Falls back to E.164's own ceiling of 15 for anything the metadata doesn't
+ * cover, so an unrecognised country still gets a bound rather than none.
+ */
+export function maxNationalDigits(country) {
+    const key = country || DEFAULT_COUNTRY;
+    if (maxLengthCache.has(key)) return maxLengthCache.get(key);
+
+    let max = 15;
+    try {
+        const metadata = new Metadata();
+        metadata.selectNumberingPlan(key);
+        const lengths = metadata.numberingPlan?.possibleLengths();
+        // Ascending, and a country can have several — take the longest, since a
+        // shorter one is still a number someone might be part-way through.
+        if (lengths?.length) max = lengths[lengths.length - 1];
+    } catch {
+        // Unknown numbering plan. 15 stands.
+    }
+
+    maxLengthCache.set(key, max);
+    return max;
+}
+
+/**
+ * Drops anything typed past the country's longest valid national number, so a
+ * Georgian number stops accepting digits at 9 instead of quietly building an
+ * invalid one and only complaining at submit.
+ *
+ * Length is measured on the *national significant number*, not on the raw
+ * digits, which is the whole reason this walks the string instead of calling
+ * slice(). A US caller typing their trunk prefix — "1" then 202… — has typed 11
+ * digits for a 10-digit number, and truncating raw digits would eat the last
+ * one. AsYouType strips the prefix, so what gets counted is what counts.
+ *
+ * A paste that is too long keeps the valid prefix rather than being rejected
+ * whole.
+ */
+export function clampToCountry(country, digits) {
+    const max = maxNationalDigits(country);
+
+    let kept = "";
+    for (const digit of digits) {
+        const next = kept + digit;
+        const asYouType = new AsYouType(country || DEFAULT_COUNTRY);
+        asYouType.input(next);
+
+        // Undefined before the formatter has resolved a plan — count the raw
+        // digits then; at that length nothing is near the limit anyway.
+        const significant = asYouType.getNationalNumber() || next;
+        if (significant.length > max) break;
+
+        kept = next;
+    }
+
+    return kept;
+}
+
 /**
  * Formats as the user types — "(202) 456-1111" for the US, "555 12 34 56" for
  * Georgia. Punctuation is cosmetic and never reaches the server.
  *
  * AsYouType is fed only digits, so deleting a character can't get stuck on a
  * bracket the formatter itself inserted.
+ *
+ * Since every field runs its input through here on each keystroke, the clamp
+ * above is what enforces the per-country length everywhere — there is no
+ * maxLength on the inputs, because a formatted number is longer than its digits
+ * and by a different amount per country.
  */
 export function formatNational(country, raw) {
     const digits = String(raw ?? "").replace(/\D/g, "");
     if (!digits) return "";
-    return new AsYouType(country || DEFAULT_COUNTRY).input(digits);
+
+    const clamped = clampToCountry(country || DEFAULT_COUNTRY, digits);
+    return new AsYouType(country || DEFAULT_COUNTRY).input(clamped);
 }
 
 /** The submit value: `+15551234567`, or "" if there is nothing usable. */

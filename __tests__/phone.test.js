@@ -1,6 +1,43 @@
 import {
-  DEFAULT_COUNTRY, digitCount, formatNational, isValidPhone, splitE164, toE164,
+  clampToCountry, DEFAULT_COUNTRY, digitCount, formatNational, isValidPhone,
+  maxNationalDigits, splitE164, toE164,
 } from '../src/lib/phone';
+
+describe('maxNationalDigits', () => {
+  it('knows each country\'s longest national number', () => {
+    expect(maxNationalDigits('GE')).toBe(9);
+    expect(maxNationalDigits('US')).toBe(10);
+    // The UK allows 7, 9 and 10 — the cap has to be the longest, or a valid
+    // 10-digit mobile could never be finished.
+    expect(maxNationalDigits('GB')).toBe(10);
+  });
+
+  it('falls back to the E.164 ceiling for an unknown plan', () => {
+    expect(maxNationalDigits('ZZ')).toBe(15);
+  });
+});
+
+describe('clampToCountry', () => {
+  it('stops at the country length', () => {
+    expect(clampToCountry('GE', '5991231231')).toBe('599123123');
+    expect(clampToCountry('US', '20245611119999')).toBe('2024561111');
+  });
+
+  it('leaves a number that fits alone', () => {
+    expect(clampToCountry('GE', '599123123')).toBe('599123123');
+    expect(clampToCountry('GE', '5991')).toBe('5991');
+  });
+
+  it('does not count a national trunk prefix against the limit', () => {
+    // A US caller typing 1-202-456-1111 has typed 11 digits for a 10-digit
+    // number. Truncating raw digits would eat the last one.
+    expect(clampToCountry('US', '12024561111')).toBe('12024561111');
+  });
+
+  it('keeps the valid prefix of an over-long paste', () => {
+    expect(clampToCountry('GE', '599123123456789')).toBe('599123123');
+  });
+});
 
 describe('formatNational', () => {
   it('formats per country, not per a single hardcoded shape', () => {
@@ -19,6 +56,19 @@ describe('formatNational', () => {
     expect(formatNational('US', '')).toBe('');
     expect(formatNational('US', null)).toBe('');
     expect(formatNational('US', 'abc')).toBe('');
+  });
+
+  it('refuses to grow past the country length', () => {
+    // The reported case: Georgia is 9 digits, so a 10th must not appear.
+    expect(formatNational('GE', '5991231231')).toBe(formatNational('GE', '599123123'));
+    expect(digitCount(formatNational('GE', '5991231231'))).toBe(9);
+  });
+
+  it('re-clamps when the country changes under an existing number', () => {
+    // 10 US digits moved to Georgia can only keep 9 — the 10th was never part
+    // of a valid Georgian number.
+    const asUs = formatNational('US', '2024561111');
+    expect(digitCount(formatNational('GE', asUs))).toBe(9);
   });
 });
 
