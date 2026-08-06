@@ -26,6 +26,9 @@ export function AuthProvider({ children }) {
   const [userRole,      setUserRole]      = useState(null);
   const [userName,      setUserName]      = useState('');
   const [userEmail,     setUserEmail]     = useState('');
+  // Read off the access token, never stored: see readUserFromToken. Surfaced in
+  // More > Profile because a driver who forgets it has no self-service recovery.
+  const [userUsername,  setUserUsername]  = useState('');
   const [driverProfile, setDriverProfile] = useState(null);
   const [onboarded,     setOnboarded]     = useState(false);
   const [ready,         setReady]         = useState(false);
@@ -58,6 +61,7 @@ export function AuthProvider({ children }) {
           setUserRole(claims.role);
           setUserName(name || '');
           setUserEmail(email || '');
+          setUserUsername(claims.username || '');
           // Fetch driver profile in background — screens handle null gracefully
           fetchDriver(claims.userId).then(setDriverProfile).catch(() => {});
           // Re-register push on every boot: the Expo token can rotate, and the
@@ -85,6 +89,7 @@ export function AuthProvider({ children }) {
     setUserRole(claims.role);
     setUserName(name  || '');
     setUserEmail(email || '');
+    setUserUsername(claims.username || '');
     fetchDriver(claims.userId).then(setDriverProfile).catch(() => {});
     registerForPushNotifications(claims.userId);
   };
@@ -110,6 +115,7 @@ export function AuthProvider({ children }) {
     setUserRole(null);
     setUserName('');
     setUserEmail('');
+    setUserUsername('');
     setDriverProfile(null);
   };
 
@@ -168,12 +174,15 @@ export function AuthProvider({ children }) {
       firstName: p.firstName  || (userName.split(' ')[0]) || 'Driver',
       lastName:  p.lastName   || '',
       email:     p.email      || userEmail,
+      // The login name, not the display name. Only the token knows it — the
+      // driver record in Main has no copy, since credentials live in Identity.
+      username:  userUsername,
       phone:     p.phoneNumber || p.phone || '',
       photoUrl:  p.photoUrl    || null,
       truck:     p.truck      || p.truckInfo     || p.vehicleInfo || '',
       dispatcher: p.dispatcher || null,
     };
-  }, [userId, userRole, userName, userEmail, driverProfile]);
+  }, [userId, userRole, userName, userEmail, userUsername, driverProfile]);
 
   const value = useMemo(() => ({
     user,

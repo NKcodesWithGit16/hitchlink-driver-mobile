@@ -5,7 +5,7 @@
    Layered surfaces · soft directional shadows · glass overlays.
    Brand: navy #04285A + teal #0193AB.
    ============================================================ */
-import { Easing } from 'react-native';
+import { Easing, Platform } from 'react-native';
 
 // ── Theme-independent scales ─────────────────────────────────────────
 export const space = {
@@ -23,6 +23,13 @@ export const FONT = {
   bold: 'Lexend_700Bold',
   extrabold: 'Lexend_800ExtraBold',
   black: 'Lexend_900Black',
+
+  // The platform's own monospace, for the few strings a driver has to read
+  // character by character — a username dictated down a phone line, an invite
+  // code typed off a message. Lexend is a reading face and renders l/1 and 0/O
+  // close enough to be misheard. Not a Lexend weight, so it is deliberately the
+  // one family here that varies by platform.
+  mono: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
 };
 
 // Type carries size/weight only — never color.

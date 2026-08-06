@@ -27,7 +27,19 @@ describe('decodeJwt', () => {
 describe('readUserFromToken', () => {
   test('extracts userId from sub and normalizes a string role', () => {
     const u = readUserFromToken(makeToken({ sub: 'driver-1', role: 'Driver', exp: future }));
-    expect(u).toEqual({ userId: 'driver-1', role: 'driver', exp: future });
+    expect(u).toEqual({ userId: 'driver-1', role: 'driver', username: null, exp: future });
+  });
+
+  // The username is what More > Profile shows a driver who has forgotten it,
+  // and it is read from the token rather than stored so it cannot drift from
+  // the account. Identity issues it as `unique_name`.
+  test('reads the username from unique_name', () => {
+    const u = readUserFromToken(makeToken({ sub: 'x', unique_name: 'nika_k', exp: future }));
+    expect(u.username).toBe('nika_k');
+  });
+
+  test('a token with no username claim reports null, not a crash', () => {
+    expect(readUserFromToken(makeToken({ sub: 'x', exp: future })).username).toBeNull();
   });
 
   test('normalizes numeric role codes (3 = driver)', () => {

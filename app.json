@@ -3,7 +3,7 @@
     "name": "HitchLink Driver",
     "slug": "hitchlink-driver",
     "scheme": "hitchlinkdriver",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -74,7 +74,9 @@
       "bundleIdentifier": "com.nk16.hitchlinkdriver",
       "associatedDomains": [
         "applinks:app.gethitchlink.com",
-        "applinks:staging.gethitchlink.com"
+        "applinks:staging.gethitchlink.com",
+        "webcredentials:app.gethitchlink.com",
+        "webcredentials:staging.gethitchlink.com"
       ],
       "infoPlist": {
         "UIBackgroundModes": [

@@ -43,5 +43,19 @@ export function readUserFromToken(token) {
     claims.sub ?? claims.userId ?? claims.nameid ??
     claims['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier'] ?? null;
 
-  return { userId: userId != null ? String(userId) : null, role, exp: claims.exp ?? null };
+  // The username the driver signs in with. Taken from the token rather than
+  // stored alongside the name/email, so it cannot drift from the account it
+  // describes and is available for sessions that predate anyone thinking to
+  // save it. Identity puts it in `unique_name` (JwtRegisteredClaimNames.UniqueName);
+  // the long-form URI is the same claim after ASP.NET's inbound mapping.
+  const username =
+    claims.unique_name ?? claims.username ?? claims.preferred_username ??
+    claims['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name'] ?? null;
+
+  return {
+    userId: userId != null ? String(userId) : null,
+    role,
+    username: username != null ? String(username) : null,
+    exp: claims.exp ?? null,
+  };
 }

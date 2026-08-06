@@ -731,6 +731,14 @@ export const en = {
       body: "You're all set — sign in with your new username and password.",
       action: 'Sign in',
     },
+    saved: {
+      title: "You're in, {name}",
+      body: 'Save your username somewhere safe. There is no way to look it up yourself — you would have to ask your dispatcher.',
+      password: "Your password is the one you just chose. We can't show it again.",
+      copy: 'Copy',
+      copied: 'Copied',
+      action: 'Continue',
+    },
     signedIn: {
       title: "You're already signed in",
       body: "You're signed in as {current}. This invite is for {invited}.",
@@ -791,6 +799,9 @@ export const en = {
     email: 'Email',
     emailAddressPlaceholder: 'Email address',
     managedByDispatcher: 'Truck and dispatcher info are managed by your dispatcher.',
+    sectionLogin: 'Sign-in',
+    username: 'Username',
+    usernameHint: "This is what you sign in with. Ask your dispatcher if you need it changed or reset.",
   },
 
   call: {

@@ -3,6 +3,7 @@ import {
   View, Text, TextInput, Pressable, StyleSheet,
   KeyboardAvoidingView, ScrollView, ActivityIndicator,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -130,6 +131,9 @@ export default function DriverRegister() {
   const [formError, setFormError] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [saving, setSaving] = useState(false);
+  // The signed-in session, held back until the driver has seen their username.
+  const [pending, setPending] = useState(null);
+  const [copied, setCopied] = useState(false);
   const [switching, setSwitching] = useState(false);
 
   const inputs = {
@@ -280,19 +284,14 @@ export default function DriverRegister() {
       const authToken = data?.token || data?.accessToken;
       if (!authToken || typeof authToken !== 'string') throw new Error('No token in response');
 
-      // A driver who arrived by link has never seen welcome/onboarding, so the
-      // flag has to be set here or the next cold start routes them back to it.
-      if (!onboarded) await completeOnboarding();
-
-      await signIn(
-        authToken,
-        `${form.firstName.trim()} ${form.lastName.trim()}`.trim(),
-        form.email.trim(),
-        data?.refreshToken || null,
-      );
+      // Hold the session rather than starting it. signIn flips `signedIn` and
+      // RouteGate replaces to (tabs) on the next render, so anything shown after
+      // it is gone before it can be read — and the one moment a driver will ever
+      // see the username they just chose is right here. They confirm, then we
+      // sign them in.
+      setPending({ authToken, refreshToken: data?.refreshToken || null });
       haptics.success();
-      // RouteGate owns the move to (tabs) once signedIn flips — replacing here
-      // as well would race it.
+      setPhase('saved');
     } catch {
       haptics.warning();
       setPhase('created');
@@ -333,6 +332,83 @@ export default function DriverRegister() {
       actionLabel: t('invite.retry'),
       onAction: () => load(token),
     });
+  }
+
+  // Registered AND signed in — but held here on purpose. This is the only
+  // moment the driver is guaranteed to see the username they just chose, and a
+  // driver who loses it has no self-service way back in: there is no "forgot
+  // username" flow, only a call to their dispatcher.
+  if (phase === 'saved') {
+    const username = form.username.trim();
+
+    return (
+      <Frame {...frameProps}>
+        <FadeInView style={[styles.card, elevation[3]]}>
+          <Icon name="check-circle" size={28} color={colors.go} />
+          <Text style={styles.title}>
+            {t('invite.saved.title', { name: form.firstName.trim() })}
+          </Text>
+          <Text style={styles.sub}>{t('invite.saved.body')}</Text>
+
+          <View style={[styles.credential, { borderColor: colors.border }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.credentialLabel}>{t('invite.field.username')}</Text>
+              {/* selectable as well as copyable: the copy button is faster, but a
+                  driver reading it aloud to their dispatcher wants to highlight it. */}
+              <Text style={styles.credentialValue} selectable>{username}</Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('invite.saved.copy')}
+              hitSlop={8}
+              onPress={async () => {
+                try {
+                  await Clipboard.setStringAsync(username);
+                  haptics.success();
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                } catch {
+                  haptics.error();
+                }
+              }}
+              style={styles.copyBtn}
+            >
+              <Icon name={copied ? 'check' : 'copy'} size={18} color={copied ? colors.go : colors.teal} />
+              <Text style={[styles.copyText, { color: copied ? colors.go : colors.teal }]}>
+                {copied ? t('invite.saved.copied') : t('invite.saved.copy')}
+              </Text>
+            </Pressable>
+          </View>
+
+          <Text style={styles.sub}>{t('invite.saved.password')}</Text>
+
+          <PrimaryAction
+            label={t('invite.saved.action')}
+            icon="arrow-right"
+            loading={saving}
+            onPress={async () => {
+              setSaving(true);
+              try {
+                // A driver who arrived by link has never seen welcome/onboarding,
+                // so the flag has to be set here or the next cold start routes
+                // them back to it.
+                if (!onboarded) await completeOnboarding();
+                await signIn(
+                  pending.authToken,
+                  `${form.firstName.trim()} ${form.lastName.trim()}`.trim(),
+                  form.email.trim(),
+                  pending.refreshToken,
+                );
+                // RouteGate owns the move to (tabs) once signedIn flips —
+                // replacing here as well would race it.
+              } finally {
+                setSaving(false);
+              }
+            }}
+          />
+        </FadeInView>
+      </Frame>
+    );
   }
 
   if (phase === 'created') {
@@ -467,6 +543,12 @@ export default function DriverRegister() {
           keyboardType="phone-pad"
         />
 
+        {/* textContentType is what makes iOS offer to save this to the Keychain
+            on submit, and to autofill it at sign-in later. It only works because
+            the app declares webcredentials: for these domains in app.json and
+            the site serves a matching apple-app-site-association — without both,
+            these props are inert. This is the whole mitigation for a driver who
+            forgets what they chose: there is no "forgot username" flow. */}
         <Field
           {...fieldProps('username')}
           label={t('invite.field.username')}
@@ -474,6 +556,8 @@ export default function DriverRegister() {
           hint={t('invite.hint.username')}
           autoCapitalize="none"
           autoCorrect={false}
+          textContentType="username"
+          autoComplete="username-new"
         />
 
         <Field
@@ -482,6 +566,8 @@ export default function DriverRegister() {
           icon="lock"
           secureTextEntry={!showPw}
           autoCapitalize="none"
+          textContentType="newPassword"
+          autoComplete="password-new"
           trailing={
             <Pressable
               onPress={() => setShowPw((p) => !p)}
@@ -500,6 +586,8 @@ export default function DriverRegister() {
           icon="lock"
           secureTextEntry={!showPw}
           autoCapitalize="none"
+          textContentType="newPassword"
+          autoComplete="password-new"
         />
 
         {formError ? (
@@ -547,6 +635,26 @@ const makeStyles = (colors) => StyleSheet.create({
   },
   input: { flex: 1, paddingVertical: space[4], ...type.body, color: colors.textPrimary },
   hint: { ...type.caption, color: colors.textMuted },
+
+  // The username on the confirmation screen. Deliberately louder than a form
+  // field — it is the one thing on that screen worth remembering.
+  credential: {
+    flexDirection: 'row', alignItems: 'center', gap: space[3],
+    backgroundColor: colors.surface2,
+    borderWidth: 1, borderRadius: radius.lg,
+    paddingHorizontal: space[4], paddingVertical: space[3],
+  },
+  credentialLabel: { ...type.caption, color: colors.textMuted },
+  credentialValue: {
+    ...type.body,
+    color: colors.textPrimary,
+    fontFamily: FONT.mono,
+    // l/1/0/O have to be tellable apart: a driver reads this to a dispatcher
+    // down a phone line, or types it into a second device.
+    letterSpacing: 0.5,
+  },
+  copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: space[2] },
+  copyText: { ...type.caption, fontWeight: '600' },
   fieldError: { ...type.caption, color: colors.danger },
 
   errorRow: {

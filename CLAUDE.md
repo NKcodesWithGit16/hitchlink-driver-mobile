@@ -767,7 +767,9 @@ release; **JS-only** — bumped to cut a fresh build, not because anything nativ
 calling: `NSCameraUsageDescription`, the Android `CAMERA` permission, the `expo-media-library` plugin, and
 `hasVideo` in `HitchlinkVoipPushDelegate.m` — plus it clears three native packages added after 1.0.3 was
 submitted) → `1.2.0` (invite deep links: iOS `associatedDomains` + the Android App Links intent filter,
-and the white splash screen) → `1.2.1` (adds `staging.gethitchlink.com` to both — see below).
+and the white splash screen) → `1.2.1` (adds `staging.gethitchlink.com` to both — see below)
+→ `1.2.2` (`webcredentials:` on both hosts + `expo-clipboard`, so iOS can save the username and
+password to the Keychain at registration and autofill them back at sign-in).
 
 ⚠️ **Every host an invite link can be served from must be listed in BOTH `ios.associatedDomains` and the
 Android `intentFilters`, and that is a native change.** This is the way the feature failed first: staging

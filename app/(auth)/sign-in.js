@@ -100,6 +100,10 @@ export default function SignIn() {
                 autoCapitalize="none"
                 autoCorrect={false}
                 autoComplete="username"
+                // The iOS half of autoComplete. Without it the Keychain entry
+                // saved at registration is never offered back here, which is the
+                // only reason saving it was worth doing.
+                textContentType="username"
                 style={styles.input}
               />
             </View>
@@ -114,6 +118,7 @@ export default function SignIn() {
                 placeholderTextColor={colors.textMuted}
                 secureTextEntry={!showPw}
                 autoComplete="password"
+                textContentType="password"
                 style={styles.input}
                 onSubmitEditing={onSubmit}
                 returnKeyType="done"

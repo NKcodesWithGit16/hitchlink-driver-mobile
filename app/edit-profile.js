@@ -535,6 +535,35 @@ export default function EditProfileScreen() {
             </View>
           </FadeInView>
 
+          {/* Read-only, and deliberately not a field. The username lives in
+              HitchLink.Identity and changing it would mean re-authenticating and
+              re-checking uniqueness — but a driver who has forgotten it while
+              still signed in has nowhere else to look, so it has to be visible
+              somewhere. Rendered from the access token; see readUserFromToken. */}
+          {user?.username ? (
+            <FadeInView delay={motion.stagger * 2}>
+              <SectionLabel>{t('editProfile.sectionLogin')}</SectionLabel>
+              <View style={[styles.readOnlyRow, { borderColor: colors.border }]}>
+                <Icon name="at-sign" size={18} color={colors.textMuted} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={[styles.readOnlyLabel, { color: colors.textMuted }]}>
+                    {t('editProfile.username')}
+                  </Text>
+                  <Text
+                    style={[styles.readOnlyValue, { color: colors.textPrimary }]}
+                    numberOfLines={1}
+                    selectable
+                  >
+                    {user.username}
+                  </Text>
+                </View>
+              </View>
+              <Text style={[styles.hint, { color: colors.textMuted }]}>
+                {t('editProfile.usernameHint')}
+              </Text>
+            </FadeInView>
+          ) : null}
+
           <Text style={[styles.hint, { color: colors.textMuted }]}>
             {t('editProfile.managedByDispatcher')}
           </Text>
@@ -710,6 +739,17 @@ const makeStyles = (colors) => StyleSheet.create({
   photoLink: { fontSize: 15, fontFamily: FONT.bold, letterSpacing: -0.2 },
 
   group: { gap: space[3] },
+
+  // Matches `field`'s geometry so the username sits on the same rhythm as the
+  // editable rows above it, but with a hairline border rather than the 1.5px
+  // focusable one — it reads as information, not as something to tap.
+  readOnlyRow: {
+    minHeight: 68, borderRadius: radius.lg, borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center', gap: space[3],
+    paddingHorizontal: space[4], paddingVertical: space[2],
+  },
+  readOnlyLabel: { ...type.caption },
+  readOnlyValue: { ...type.body, fontFamily: FONT.mono, letterSpacing: 0.5 },
 
   field: {
     minHeight: 68, borderRadius: radius.lg, borderWidth: 1.5,
