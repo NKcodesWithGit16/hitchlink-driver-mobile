@@ -1,4 +1,4 @@
-import { AsYouType, Metadata, parsePhoneNumberFromString } from "libphonenumber-js";
+import { AsYouType, Metadata, parsePhoneNumberFromString } from "libphonenumber-js/min";
 import { dialFor } from "../data/countries";
 
 /**
@@ -7,6 +7,16 @@ import { dialFor } from "../data/countries";
  * Mirrors HitchLink_frontend/src/lib/phone.js. Separate repos, no shared
  * package — keep the two in step by hand, and if the rules ever diverge the
  * server is the one that decides (see Identity PhoneNumberRules).
+ *
+ * Imported from "libphonenumber-js/min" rather than the bare package name, and
+ * that is not a size optimisation — the two are the same code. The root entry
+ * re-exports these very modules from ./min/exports/, then adds a block of
+ * deprecated aliases (getNumberType, parseNumber, isValidNumber …) from a
+ * directory called index.es6.exports, which Metro cannot resolve — iOS bundling
+ * fails outright with "Unable to resolve ./index.es6.exports/getNumberType.js".
+ * Nothing here uses those aliases, so the subpath is the same library minus the
+ * part that doesn't bundle. Metadata is identical ("min" is what the root uses),
+ * so validation results are unchanged.
  *
  * Everything here works in two halves — an ISO country code ("US", "GE") and the
  * national number as the user typed it — because that is what the UI shows. The
