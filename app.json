@@ -3,7 +3,7 @@
     "name": "HitchLink Driver",
     "slug": "hitchlink-driver",
     "scheme": "hitchlinkdriver",
-    "version": "1.2.2",
+    "version": "1.2.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -125,6 +125,16 @@
               "scheme": "https",
               "host": "staging.gethitchlink.com",
               "pathPrefix": "/driver-register"
+            },
+            {
+              "scheme": "https",
+              "host": "app.gethitchlink.com",
+              "pathPrefix": "/driver-reset"
+            },
+            {
+              "scheme": "https",
+              "host": "staging.gethitchlink.com",
+              "pathPrefix": "/driver-reset"
             }
           ],
           "category": ["BROWSABLE", "DEFAULT"]

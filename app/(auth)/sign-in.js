@@ -154,6 +154,19 @@ export default function SignIn() {
             <Text style={styles.inviteLink}>{t('auth.haveInvite')}</Text>
           </Pressable>
 
+          {/* Same reasoning as the invite row above: a driver whose dispatcher
+              read them a reset code over the phone has nowhere else to type it.
+              The screen handles a bare code as well as a full link. */}
+          <Pressable
+            onPress={() => router.push('/(auth)/driver-reset')}
+            hitSlop={8}
+            style={styles.inviteRow}
+            accessibilityRole="button"
+          >
+            <Icon name="key" size={15} color={colors.teal} />
+            <Text style={styles.inviteLink}>{t('auth.haveResetCode')}</Text>
+          </Pressable>
+
           <Text style={styles.help}>{t('auth.troubleSigningIn')}</Text>
         </ScrollView>
       </KeyboardAvoidingView>

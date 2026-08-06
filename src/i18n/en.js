@@ -671,8 +671,53 @@ export const en = {
     sessionExpired: 'Your session expired — please sign in again.',
     accountRemoved: 'Your dispatcher removed you from this fleet. Contact them if this is a mistake.',
     haveInvite: 'Invited by a dispatcher? Open your invite',
+    haveResetCode: 'Have a password reset link or code?',
   },
 
+  reset: {
+    title: 'Set a new password',
+    body: 'Choose a new password for your HitchLink account.',
+    greeting: 'Hi {name} — choose a new password for your HitchLink account.',
+    usernameIntro: "You'll sign in with this username:",
+    checking: 'Checking your link…',
+    newPassword: 'New password',
+    confirmPassword: 'Confirm new password',
+    hint: 'At least {n} characters.',
+    action: 'Save new password',
+    saving: 'Saving…',
+    signsOutOthers: 'Any other device signed in to this account will be signed out.',
+    backToSignIn: 'Go to sign in',
+    expired: {
+      title: 'This link has expired',
+      body: 'Reset links last 12 hours. Ask your dispatcher to send you a new one.',
+    },
+    used: {
+      title: 'This link has already been used',
+      body: 'Your password was already changed. Sign in with your new one, or ask your dispatcher for another link.',
+    },
+    notFound: {
+      title: "We couldn't find that link",
+      body: 'It may have been replaced by a newer one. Ask your dispatcher to send the latest link.',
+    },
+    needLink: {
+      title: 'Open your reset link',
+      body: 'Paste the link your dispatcher sent, or type the 8-character code they read out.',
+      placeholder: 'Link or code',
+      action: 'Continue',
+    },
+    signedIn: {
+      title: "You're already signed in",
+      body: "This phone is signed in as {current}, and this link is for {target}. Sign out to use it.",
+      signOut: 'Sign out and continue',
+      stay: 'Stay signed in',
+    },
+    error: {
+      generic: 'Something went wrong. Please try again.',
+      offlineTitle: "Couldn't check your link",
+      tooShort: 'Use at least {n} characters.',
+      mismatch: "Those passwords don't match.",
+    },
+  },
   invite: {
     title: 'Set up your account',
     subtitle: 'Fill in your details to get started.',

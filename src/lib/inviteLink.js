@@ -9,6 +9,16 @@
 // invite just does nothing, with no error on either side).
 
 const ROUTE = 'driver-register';
+const RESET_ROUTE = 'driver-reset';
+
+// Both inbound link types, keyed by the path the server builds. Kept in one
+// table so the router and the two screens cannot disagree about which path
+// means what — the whole failure mode of this feature is a link that silently
+// does nothing.
+const ROUTES = {
+  [ROUTE]: { kind: 'invite', pathname: '/(auth)/driver-register' },
+  [RESET_ROUTE]: { kind: 'reset', pathname: '/(auth)/driver-reset' },
+};
 
 /**
  * Splits a URL into its path segments and query string, handling both forms:
@@ -59,13 +69,33 @@ function queryParam(query, name) {
  * isn't an invite.
  */
 export function parseInviteUrl(url) {
+  const link = parseDeepLink(url);
+  return link?.kind === 'invite' ? link.token : null;
+}
+
+/**
+ * Any inbound HitchLink link the app knows how to open, or null.
+ *
+ *   { kind: 'invite' | 'reset', token, pathname }
+ *
+ * Returned together rather than as two parsers because the router has to decide
+ * between them from one URL, and a second parser is a second place for the path
+ * strings to drift.
+ */
+export function parseDeepLink(url) {
   if (!url || typeof url !== 'string') return null;
 
   const parts = split(url.trim());
-  if (!parts || parts.path !== ROUTE) return null;
+  if (!parts) return null;
+
+  const route = ROUTES[parts.path];
+  if (!route) return null;
 
   const token = queryParam(parts.query, 'token');
-  return token ? token.trim() || null : null;
+  const trimmed = token ? token.trim() : '';
+  if (!trimmed) return null;
+
+  return { kind: route.kind, pathname: route.pathname, token: trimmed };
 }
 
 /**
@@ -77,5 +107,8 @@ export function parseInviteUrl(url) {
 export function extractToken(raw) {
   const value = (raw ?? '').trim();
   if (!value) return '';
-  return parseInviteUrl(value) ?? value;
+  // Either link type: a driver pasting into the reset box may well paste an
+  // invite link by mistake, and letting the server say "not found" beats
+  // refusing to read something that plainly contains a token.
+  return parseDeepLink(value)?.token ?? value;
 }

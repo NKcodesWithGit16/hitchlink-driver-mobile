@@ -70,3 +70,46 @@ describe('extractToken', () => {
     expect(extractToken(null)).toBe('');
   });
 });
+
+// ── Password reset links ────────────────────────────────────────────────────
+// Same shape as an invite, different path. The router picks between them from
+// one URL, so the discrimination is worth pinning down.
+describe('parseDeepLink', () => {
+  const { parseDeepLink } = require('../src/lib/inviteLink');
+
+  test('reads a reset link over https', () => {
+    expect(parseDeepLink('https://staging.gethitchlink.com/driver-reset?token=abc123')).toEqual({
+      kind: 'reset',
+      pathname: '/(auth)/driver-reset',
+      token: 'abc123',
+    });
+  });
+
+  test('reads a reset link over the custom scheme', () => {
+    expect(parseDeepLink('hitchlinkdriver://driver-reset?token=abc123')?.kind).toBe('reset');
+  });
+
+  test('still reads an invite link', () => {
+    const link = parseDeepLink('https://app.gethitchlink.com/driver-register?token=xyz');
+    expect(link).toEqual({
+      kind: 'invite',
+      pathname: '/(auth)/driver-register',
+      token: 'xyz',
+    });
+  });
+
+  test('an unknown path is not a deep link', () => {
+    expect(parseDeepLink('https://app.gethitchlink.com/loadboard?token=abc')).toBeNull();
+  });
+
+  test('a reset link with no token is not a deep link', () => {
+    expect(parseDeepLink('https://app.gethitchlink.com/driver-reset')).toBeNull();
+  });
+
+  // parseInviteUrl feeds the invite router; a reset link must not be mistaken
+  // for an invite or the driver lands on a registration form for an account
+  // they already have.
+  test('parseInviteUrl rejects a reset link', () => {
+    expect(parseInviteUrl('https://app.gethitchlink.com/driver-reset?token=abc')).toBeNull();
+  });
+});

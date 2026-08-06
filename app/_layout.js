@@ -3,7 +3,7 @@ import { View, useWindowDimensions, Text, Pressable } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
-import { parseInviteUrl } from '../src/lib/inviteLink';
+import { parseDeepLink } from '../src/lib/inviteLink';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
 import { setAudioModeAsync } from 'expo-audio';
@@ -117,10 +117,13 @@ function DeepLinkRouter() {
 
     const handle = (url) => {
       if (!url || !alive || url === lastUrl.current) return;
-      const token = parseInviteUrl(url);
-      if (!token) return;
+      // One parser for both link types — the destination comes back with the
+      // token, so adding a third link later cannot leave the router and the
+      // screens disagreeing about which path means what.
+      const link = parseDeepLink(url);
+      if (!link) return;
       lastUrl.current = url;
-      router.replace({ pathname: '/(auth)/driver-register', params: { token } });
+      router.replace({ pathname: link.pathname, params: { token: link.token } });
     };
 
     Linking.getInitialURL().then(handle).catch(() => {});
@@ -153,7 +156,8 @@ function RouteGate() {
     // when it signs a driver in, so it must navigate itself. Registration used to
     // assume RouteGate would do it and left the driver sitting on a Continue
     // button that ran but appeared dead.
-    const onInvite = inAuth && segments[1] === 'driver-register';
+    const onInvite = inAuth
+      && (segments[1] === 'driver-register' || segments[1] === 'driver-reset');
     if (signedIn) {
       if ((inAuth && !onInvite) || inIntro) router.replace('/(tabs)');
     } else if (!onboarded) {
