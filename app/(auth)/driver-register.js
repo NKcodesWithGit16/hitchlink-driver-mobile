@@ -3,7 +3,6 @@ import {
   View, Text, TextInput, Pressable, StyleSheet,
   KeyboardAvoidingView, ScrollView, ActivityIndicator,
 } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -34,6 +33,23 @@ const BRAND_BAND = ['#04285A', '#063C6E', '#0B6F82'];
 
 const EMAIL_RE = /^[^@\s]+@[^@\s.]+\.[^@\s]+$/;
 const USERNAME_RE = /^[a-zA-Z0-9_]+$/;
+
+// expo-clipboard is a native module, so it is require()d lazily rather than
+// imported: a dev client built before the dependency landed would otherwise
+// throw the moment this route is reached, taking the registration screen down
+// on exactly the build being used to test it. Same reasoning as the lazy
+// expo-image-manipulator require in src/api/main.js.
+//
+// When it isn't there the screen still works — the username is `selectable`, so
+// a long press copies it — and the Copy button simply isn't rendered rather
+// than being offered and failing.
+function getClipboard() {
+  try {
+    return require('expo-clipboard');
+  } catch {
+    return null;
+  }
+}
 
 const ORDER = ['firstName', 'lastName', 'email', 'phone', 'username', 'password', 'confirmPassword'];
 
@@ -134,6 +150,9 @@ export default function DriverRegister() {
   // The signed-in session, held back until the driver has seen their username.
   const [pending, setPending] = useState(null);
   const [copied, setCopied] = useState(false);
+  // Resolved once, not per render — require() is cheap after the first call but
+  // this also keeps the null case stable across re-renders.
+  const clipboard = useMemo(getClipboard, []);
   const [switching, setSwitching] = useState(false);
 
   const inputs = {
@@ -357,27 +376,29 @@ export default function DriverRegister() {
                   driver reading it aloud to their dispatcher wants to highlight it. */}
               <Text style={styles.credentialValue} selectable>{username}</Text>
             </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t('invite.saved.copy')}
-              hitSlop={8}
-              onPress={async () => {
-                try {
-                  await Clipboard.setStringAsync(username);
-                  haptics.success();
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                } catch {
-                  haptics.error();
-                }
-              }}
-              style={styles.copyBtn}
-            >
-              <Icon name={copied ? 'check' : 'copy'} size={18} color={copied ? colors.go : colors.teal} />
-              <Text style={[styles.copyText, { color: copied ? colors.go : colors.teal }]}>
-                {copied ? t('invite.saved.copied') : t('invite.saved.copy')}
-              </Text>
-            </Pressable>
+            {clipboard ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('invite.saved.copy')}
+                hitSlop={8}
+                onPress={async () => {
+                  try {
+                    await clipboard.setStringAsync(username);
+                    haptics.success();
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  } catch {
+                    haptics.error();
+                  }
+                }}
+                style={styles.copyBtn}
+              >
+                <Icon name={copied ? 'check' : 'copy'} size={18} color={copied ? colors.go : colors.teal} />
+                <Text style={[styles.copyText, { color: copied ? colors.go : colors.teal }]}>
+                  {copied ? t('invite.saved.copied') : t('invite.saved.copy')}
+                </Text>
+              </Pressable>
+            ) : null}
           </View>
 
           <Text style={styles.sub}>{t('invite.saved.password')}</Text>
