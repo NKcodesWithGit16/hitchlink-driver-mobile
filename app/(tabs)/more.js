@@ -23,13 +23,23 @@ import { space, type, radius, elevation, toneOf, FONT, shadow, ACCENT_PRESETS, B
 import { TAB_BAR_CLEARANCE } from './_layout';
 import { useCallBannerInset } from '../../src/components/call/CallOverlay';
 
-// The support channels a driver can actually reach. The email is the same one
-// published in the web app's Terms and Privacy (companyInfo.js) — one address
-// everywhere, or the legal pages promise a mailbox the app never mentions.
+// Support is email only, and deliberately so: the number behind it is Georgian
+// and the drivers are not, so offering "Call" would put an international call
+// on their bill to reach a phone in the wrong time zone. Email costs them
+// nothing from anywhere and is answerable whenever it arrives.
+//
+// The address is the same one published in the web app's Terms and Privacy
+// (companyInfo.js) — one address everywhere, or the legal pages promise a
+// mailbox the app never mentions.
 const SUPPORT_EMAIL = 'support@gethitchlink.com';
-// tel: wants no spaces. Country code included because a driver may be roaming.
-const SUPPORT_PHONE = '+995599084098';
-const SUPPORT_PHONE_DISPLAY = '+995 599 084 098';
+
+// Native module, so require()d lazily rather than imported — the same reasoning
+// as getClipboard in (auth)/driver-register.js. It is only needed if the mail
+// app cannot be opened at all, which is the one case where a driver has to copy
+// the address down by hand.
+function getClipboard() {
+  try { return require('expo-clipboard'); } catch { return null; }
+}
 
 export default function MoreScreen() {
   const insets = useSafeAreaInsets();
@@ -150,12 +160,10 @@ export default function MoreScreen() {
     return h < 12 ? t('more.greetingMorning') : h < 18 ? t('more.greetingAfternoon') : t('more.greetingEvening');
   }, [t]);
 
-  // Email first, call second — deliberately. Support is a Georgian number and
-  // the drivers are not, so a tap on "Call" can be an international call at
-  // their expense. Email is free from anywhere and arrives with the version and
-  // account already filled in, which is most of what a support reply needs.
-  const contactSupport = () => {
-    const subject = `HitchLink Driver support`;
+  // One channel, so no menu to pick from — the tap opens the mail app straight
+  // away. The draft carries the version, platform and account id already, which
+  // is most of what a first reply would otherwise have to ask for.
+  const contactSupport = async () => {
     const body = [
       '',
       '',
@@ -165,18 +173,29 @@ export default function MoreScreen() {
       userId ? `Account: ${userId}` : null,
     ].filter(Boolean).join('\n');
     const mailto = `mailto:${SUPPORT_EMAIL}`
-      + `?subject=${encodeURIComponent(subject)}`
+      + `?subject=${encodeURIComponent('HitchLink Driver support')}`
       + `&body=${encodeURIComponent(body)}`;
 
-    Alert.alert(
-      t('more.contactSupport'),
-      t('more.supportAlertBody', { email: SUPPORT_EMAIL, phone: SUPPORT_PHONE_DISPLAY }),
-      [
-        { text: t('more.supportEmailBtn'), onPress: () => Linking.openURL(mailto).catch(() => {}) },
-        { text: t('more.supportCallBtn'), onPress: () => Linking.openURL(`tel:${SUPPORT_PHONE}`).catch(() => {}) },
-        { text: t('common.cancel'), style: 'cancel' },
-      ],
-    );
+    try {
+      await Linking.openURL(mailto);
+    } catch {
+      // No mail app configured — a real state on a work phone that has only
+      // ever been signed into a fleet account. Falling back to nothing would
+      // leave the driver with no way to reach us at all, so show the address
+      // and offer to put it on the clipboard.
+      const Clipboard = getClipboard();
+      Alert.alert(
+        t('more.contactSupport'),
+        t('more.supportNoMailApp', { email: SUPPORT_EMAIL }),
+        [
+          ...(Clipboard ? [{
+            text: t('more.supportCopyEmail'),
+            onPress: () => Clipboard.setStringAsync(SUPPORT_EMAIL).catch(() => {}),
+          }] : []),
+          { text: t('common.ok'), style: 'cancel' },
+        ],
+      );
+    }
   };
 
   const onRow = (row) => {
