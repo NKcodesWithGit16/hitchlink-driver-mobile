@@ -81,7 +81,7 @@ export default function MoreScreen() {
     { icon: 'message-circle', label: t('more.support'),  sub: t('more.supportSub'),  tone: 'blue',
       onPress: () => contactSupport() },
     { icon: 'star',           label: t('more.feedback'), sub: t('more.feedbackSub'), tone: 'purple',
-      onPress: () => Alert.alert(t('more.feedback'), t('more.feedbackAlertBody')) },
+      onPress: () => router.push('/feedback') },
   ];
 
   const languageLabel = lang === 'ka' ? t('more.languageGeorgian') : t('more.languageEnglish');
@@ -131,7 +131,7 @@ export default function MoreScreen() {
       rows: [
         { icon: 'help-circle', label: t('more.helpCenter'),     tone: 'teal'   },
         { icon: 'mail',        label: t('more.contactSupport'), tone: 'green',  meta: t('more.supportMeta'), key: 'support' },
-        { icon: 'star',        label: t('more.rateApp'),        tone: 'orange' },
+        { icon: 'star',        label: t('more.rateApp'),        tone: 'orange', route: '/feedback' },
         { icon: 'shield',      label: t('more.termsPrivacy'),   tone: 'purple' },
       ],
     },

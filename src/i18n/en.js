@@ -183,7 +183,6 @@ export const en = {
     supportCopyEmail: 'Copy address',
     feedback: 'Feedback',
     feedbackSub: 'Rate the app',
-    feedbackAlertBody: 'Thank you! Rating coming soon.',
     groupAccount: 'Account',
     profile: 'Profile',
     truckInfo: 'Truck info',
@@ -242,6 +241,22 @@ export const en = {
     deleteAccount: 'Delete my account',
     deleteAccountA11y: 'Delete my HitchLink account permanently',
     version: 'HitchLink Driver · v{version}',
+  },
+
+  feedback: {
+    title: 'Feedback',
+    intro: 'Tell us how the app is working for you. Stars, a message, or both — whatever you have time for.',
+    ratingLabel: 'How is the app?',
+    optional: 'Optional',
+    ratingClearHint: 'Tap the same star again to clear it',
+    starA11y: '{n} stars',
+    commentLabel: 'Anything you want to tell us?',
+    commentPlaceholder: "What's working, what isn't, what's missing…",
+    send: 'Send feedback',
+    needSomething: 'Add a rating or a message to send',
+    failed: "Couldn't send that. Check your signal and try again — your message is still here.",
+    thanksTitle: 'Thank you',
+    thanksBody: 'We read every one of these. It genuinely helps.',
   },
 
   deleteAccount: {

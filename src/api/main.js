@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import { File, Paths } from 'expo-file-system';
 import * as LegacyFS from 'expo-file-system/legacy';
 import { apiFetch, apiUpload, apiFetchRaw, USE_MOCK, BASE } from './client';
@@ -1097,4 +1098,25 @@ export async function dismissNotification(id) {
 export async function deleteOwnAccount() {
   if (USE_MOCK) { await wait(400); return { ok: true }; }
   return apiFetch('/drivers/me', { method: 'DELETE', allow404: true });
+}
+
+// App feedback from More › Feedback. Rating and comment are each optional on
+// their own but the screen will not submit with neither — the server rejects
+// that too, so an empty row cannot be created by any client.
+//
+// The version and platform are attached here rather than typed by anyone:
+// "the app is slow" is not actionable, and the same sentence with a build
+// number is. Matters especially with OTA updates, where two drivers on the
+// same store build can be running different JS.
+export async function submitFeedback({ rating, comment }) {
+  if (USE_MOCK) { await wait(400); return { id: 'mock-feedback' }; }
+  return apiFetch('/feedback', {
+    method: 'POST',
+    body: JSON.stringify({
+      rating: rating || null,
+      comment: comment?.trim() ? comment.trim() : null,
+      appVersion: Constants.expoConfig?.version ?? null,
+      platform: Platform.OS,
+    }),
+  });
 }

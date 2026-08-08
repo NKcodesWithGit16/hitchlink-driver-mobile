@@ -186,7 +186,6 @@ export const ka = {
     supportCopyEmail: 'მისამართის კოპირება',
     feedback: 'გამოხმაურება',
     feedbackSub: 'შეაფასეთ აპლიკაცია',
-    feedbackAlertBody: 'გმადლობთ! შეფასების ფუნქცია მალე დაემატება.',
     groupAccount: 'ანგარიში',
     profile: 'პროფილი',
     truckInfo: 'სატვირთოს ინფო',
@@ -244,6 +243,22 @@ export const ka = {
     deleteAccount: 'ანგარიშის წაშლა',
     deleteAccountA11y: 'HitchLink-ის ანგარიშის სამუდამოდ წაშლა',
     version: 'HitchLink Driver · v{version}',
+  },
+
+  feedback: {
+    title: 'გამოხმაურება',
+    intro: 'გვითხარით, როგორ მუშაობს აპლიკაცია. ვარსკვლავები, შეტყობინება ან ორივე — როგორც მოგესურვებათ.',
+    ratingLabel: 'როგორია აპლიკაცია?',
+    optional: 'არასავალდებულო',
+    ratingClearHint: 'იმავე ვარსკვლავზე ხელახლა შეხებით გასუფთავდება',
+    starA11y: '{n} ვარსკვლავი',
+    commentLabel: 'გსურთ რამის თქმა?',
+    commentPlaceholder: 'რა მუშაობს, რა არა, რა აკლია…',
+    send: 'გამოხმაურების გაგზავნა',
+    needSomething: 'გასაგზავნად დაამატეთ შეფასება ან შეტყობინება',
+    failed: 'გაგზავნა ვერ მოხერხდა. შეამოწმეთ კავშირი და სცადეთ ხელახლა — თქვენი ტექსტი შენახულია.',
+    thanksTitle: 'გმადლობთ',
+    thanksBody: 'ჩვენ ყველა გამოხმაურებას ვკითხულობთ. ეს ნამდვილად გვეხმარება.',
   },
 
   deleteAccount: {
