@@ -854,7 +854,9 @@ driver's CDL expiry.
   source. **Both run through the bridgeless interop layer, and do work there** — in-app calling and the
   speaker toggle were both verified on a physical iPhone under Fabric. The local `hitchlink-voip` and
   `hitchlink-quicklook` modules are fine either way (Expo Modules API supports both architectures).
-  Still unverified under Fabric: a CallKit call answered from the **lock screen** (the VoIP-push path).
-  Test that on a physical device before shipping a production build.
+  A CallKit call answered from the **lock screen** (the VoIP-push path) was the last hold-out here and
+  **was verified on a physical device on 2026-08-08** — the whole calling stack is now confirmed working
+  under Fabric. Re-test it after any change to `hitchlink-voip`, `react-native-callkeep` or the APNs
+  configuration, since bridgeless interop is the part with no compile-time guarantee.
 - `README.md` in this repo is stale (still describes auth/voice/offline-queue as unimplemented placeholders)
   — trust this file and the code over it.
