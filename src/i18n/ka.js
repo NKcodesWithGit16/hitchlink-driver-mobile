@@ -241,7 +241,7 @@ export const ka = {
     signOutConfirmBody: 'გსურთ HitchLink-დან გასვლა?',
     deleteAccount: 'ანგარიშის წაშლა',
     deleteAccountA11y: 'HitchLink-ის ანგარიშის სამუდამოდ წაშლა',
-    version: 'HitchLink Driver · v1.0.0',
+    version: 'HitchLink Driver · v{version}',
   },
 
   deleteAccount: {

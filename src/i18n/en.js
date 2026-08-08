@@ -239,7 +239,7 @@ export const en = {
     signOutConfirmBody: 'Sign out of HitchLink?',
     deleteAccount: 'Delete my account',
     deleteAccountA11y: 'Delete my HitchLink account permanently',
-    version: 'HitchLink Driver · v1.0.0',
+    version: 'HitchLink Driver · v{version}',
   },
 
   deleteAccount: {

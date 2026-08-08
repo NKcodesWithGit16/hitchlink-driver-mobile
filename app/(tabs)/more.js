@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Switch, Image, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import Constants from 'expo-constants';
 import ScreenFade from '../../src/components/ui/ScreenFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../../src/components/ui/Icon';
@@ -493,7 +494,13 @@ export default function MoreScreen() {
             </Text>
           </Pressable>
 
-          <Text style={[styles.version, { color: colors.textMuted }]}>{t('more.version')}</Text>
+          {/* Read from the app config, never typed into the translations. A
+              hardcoded version is wrong the moment it ships and nobody notices
+              — this said v1.0.0 while the app was on 1.2.3. It is also the
+              first thing support asks a driver for, so it has to be true. */}
+          <Text style={[styles.version, { color: colors.textMuted }]}>
+            {t('more.version', { version: Constants.expoConfig?.version ?? '—' })}
+          </Text>
         </FadeInView>
 
       </ScrollView>
