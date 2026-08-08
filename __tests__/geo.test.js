@@ -54,8 +54,24 @@ describe('deriveSpeedKph', () => {
 });
 
 describe('isAcceptableFix', () => {
-  test('accepts the first fix so sharing can cold-start (even if coarse)', () => {
-    expect(isAcceptableFix(null, fix(40, -74, { accuracy: 500 }))).toBe(true);
+  test('accepts a good first fix so sharing can cold-start', () => {
+    expect(isAcceptableFix(null, fix(40, -74, { accuracy: 12 }))).toBe(true);
+  });
+  test('rejects a COARSE first fix — the cold-start hole that put a driver in Beijing', () => {
+    // At cold start the phone has no GPS lock and the OS answers from wifi,
+    // cell or the IP address. That fix used to be accepted unchecked because it
+    // was first, and the server's teleport guard only looks inside a 2-minute
+    // window — so a network guess from another continent sailed through both.
+    expect(isAcceptableFix(null, fix(39.88, 116.48, { accuracy: 500 }))).toBe(false);
+    expect(isAcceptableFix(null, fix(40, -74, { accuracy: MAX_ACCURACY_M + 1 }))).toBe(false);
+  });
+  test('accepts a first fix at exactly the accuracy limit', () => {
+    expect(isAcceptableFix(null, fix(40, -74, { accuracy: MAX_ACCURACY_M }))).toBe(true);
+  });
+  test('accepts a first fix that reports no accuracy at all', () => {
+    // Nothing to judge it by. Refusing these would strand devices that simply
+    // do not populate the field.
+    expect(isAcceptableFix(null, { timestamp: 1, coords: { latitude: 40, longitude: -74 } })).toBe(true);
   });
   test('rejects a coarse/cached fix once we have a prior good one', () => {
     const prev = fix(40, -74, { t: 0, accuracy: 8 });

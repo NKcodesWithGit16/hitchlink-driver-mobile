@@ -108,8 +108,25 @@ export function odometerSegmentMeters(prevFix, curFix, opts = {}) {
 /**
  * Whether to accept a fix as the driver's live position. Rejects coarse/cached
  * fixes (poor reported accuracy) and short-window teleports (implausible implied
- * speed). Always accepts the first fix so the loop can cold-start, and never
- * rejects on the teleport rule once the time gap is large.
+ * speed), and never rejects on the teleport rule once the time gap is large.
+ *
+ * The FIRST fix of a session is checked for accuracy like any other, and that
+ * matters more than it sounds. This used to accept it unconditionally so
+ * sharing could cold-start, which meant the one fix exempt from every check was
+ * the one most likely to be wrong: at cold start the phone has no GPS lock yet
+ * and the OS answers from wifi, cell towers or the IP address instead.
+ *
+ * A driver running Montana to Washington was shown parked at Beijing Capital
+ * Airport because of exactly that — a network-derived first fix, accepted
+ * unchecked, and then held because the server's own teleport guard only looks
+ * at jumps inside a 2-minute window and this one arrived after a long gap.
+ * Every guard in the chain was bypassed by the same cold start.
+ *
+ * The trade is real but one-sided: sharing may begin a few seconds later while
+ * the receiver gets a proper lock. A late position corrects itself; a confident
+ * wrong one does not, and a dispatcher has no way to tell it from the truth.
+ * Coarse fixes are worth roughly 1 km at best (cell) and a whole country at
+ * worst (IP), so nothing of value is being given up.
  */
 export function isAcceptableFix(prevFix, curFix, opts = {}) {
   const maxAccuracy = opts.maxAccuracyM ?? MAX_ACCURACY_M;
@@ -119,11 +136,17 @@ export function isAcceptableFix(prevFix, curFix, opts = {}) {
   const coords = curFix?.coords;
   if (!coords || !isFinite(coords.latitude) || !isFinite(coords.longitude)) return false;
 
-  // No prior good fix yet — take whatever we can so sharing can start.
-  if (!prevFix) return true;
-
+  // Accuracy first, and above the first-fix shortcut on purpose — see the note
+  // on this function. A fix with no accuracy reported at all still passes:
+  // there is nothing to judge it by, and refusing every such fix would strand
+  // devices that simply do not populate the field.
   const acc = coords.accuracy;
   if (typeof acc === 'number' && isFinite(acc) && acc > maxAccuracy) return false;
+
+  // No prior fix, so no elapsed time and no implied speed to test. Accept —
+  // the accuracy check above has already established this is a real GPS fix
+  // rather than a network guess.
+  if (!prevFix) return true;
 
   const dt = dtSeconds(prevFix, curFix);
   if (dt > 0 && dt < windowSec) {

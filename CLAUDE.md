@@ -220,7 +220,11 @@ While signed in, `src/hooks/useLocationSharing.js` (foreground watch) and `src/l
 (a headless `expo-task-manager` task, imported once at the top of `app/_layout.js`) stream fixes to
 `POST /drivers/:id/heartbeat`; the server replies with `nextHeartbeatSeconds` to pace the cadence.
 `src/lib/geo.js` is the pure fix math — Haversine (mirrors the backend's `GeoMath`), speed derivation
-(Android often reports `coords.speed` as null), and `isAcceptableFix` (drops cached/teleport fixes). Off
+(Android often reports `coords.speed` as null), and `isAcceptableFix` (drops cached/teleport fixes —
+including the **first** fix of a session, which until 2026-08-08 was accepted unchecked and is the one most
+likely to be a network guess rather than GPS; that hole showed a Montana→Washington driver parked in
+Beijing, because the server's own teleport guard only inspects jumps inside a 2-minute window and a cold
+start always arrives after a longer gap). Off
 that same accepted-fix stream, `src/lib/odometer.js` accumulates per-load **actual miles** into deadhead vs.
 loaded buckets (phase from `loadPhase` in `src/lib/load.js`), persists them in AsyncStorage keyed by load,
 and freezes a record on delivery; `src/lib/loadStats.js` merges planned + actual into the numbers shown on
