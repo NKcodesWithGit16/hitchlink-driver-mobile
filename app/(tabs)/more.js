@@ -482,7 +482,7 @@ export default function MoreScreen() {
               thumb aiming for that could otherwise land on it. The screen it
               opens is where the real safeguards are. */}
           <Pressable
-            onPress={() => { haptics.tap(); router.push('/delete-account'); }}
+            onPress={() => router.push('/delete-account')}
             hitSlop={6}
             style={styles.deleteAccountBtn}
             accessibilityRole="button"
