@@ -833,6 +833,22 @@ These need no backend and fire with no signal. Identifiers are stable so re-sche
 stacks; `cancelAllLocalReminders()` runs on sign-out so a shared cab phone doesn't announce the previous
 driver's CDL expiry.
 
+**Account deletion spans three repos and is an App Store requirement, not a feature request.** Apple
+rejects any app offering in-app account creation without in-app deletion, and `(auth)/driver-register.js`
+is reachable straight from the sign-in screen. `app/delete-account.js` is the screen; it is reached by a
+deliberately quiet text link under Sign out in More. The safeguards are all on the screen — a checkbox, a
+**3-second press-and-hold** (not a "type DELETE" box, which would make a Georgian-locale driver type an
+English word to close their own account), then the OS alert. The client calls one endpoint,
+`DELETE /drivers/me`; `HitchLink.Main` scrubs its own copy of the driver and their personal documents and
+*then* asks Identity to erase the login (`DELETE /api/Auth/Me`) — that order matters, because a failure at
+the Identity step leaves an account that can still sign in and retry, whereas the reverse leaves a
+locked-out driver whose details we still hold. Delivered loads survive by design: they are the carrier's
+records for pay, tax and DOT, so the driver row stays, scrubbed and inactive. Two traps worth knowing:
+the screen deregisters push **before** deleting and then calls `signOut({ skipRemote: true })`, because a
+post-deletion 401 fails the token refresh and greets the driver with "your dispatcher removed your access";
+and unlike `DeleteDriverCommand` (the dispatcher removing someone), self-deletion does **not** refuse on an
+active load — refusing is the obstacle Apple disallows, so the load is a warning on the screen instead.
+
 ## Known limitations (not bugs to "fix" reflexively)
 
 - HOS is a best-effort estimate; certified logs would require a real ELD integration.

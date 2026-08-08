@@ -1082,3 +1082,19 @@ export async function dismissNotification(id) {
   if (USE_MOCK) { await wait(80); return { ok: true }; }
   return apiFetch(`/notifications/${id}`, { method: 'DELETE' });
 }
+
+// Closes the signed-in driver's account for good and erases them from it.
+//
+// The server takes the driver from the token, so there is nothing to pass and
+// nothing a caller could aim elsewhere. It scrubs this service's copy first
+// and only then tells Identity to close the login, which is why a failure here
+// leaves an account that can still sign in and try again rather than a
+// locked-out driver whose details we still hold.
+//
+// allow404 because a retry after a dropped connection may find the account
+// already gone — that is success, not an error to show someone who has just
+// deleted their account.
+export async function deleteOwnAccount() {
+  if (USE_MOCK) { await wait(400); return { ok: true }; }
+  return apiFetch('/drivers/me', { method: 'DELETE', allow404: true });
+}

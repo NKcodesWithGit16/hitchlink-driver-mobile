@@ -475,6 +475,24 @@ export default function MoreScreen() {
             <Icon name="log-out" size={18} color={colors.danger} />
             <Text style={[styles.signOutText, { color: colors.danger }]}>{t('more.signOut')}</Text>
           </Pressable>
+
+          {/* Deliberately a quiet text link rather than a second red button.
+              Apple requires account deletion to be easy to FIND, not easy to
+              trigger — and this sits directly under Sign out, where a tired
+              thumb aiming for that could otherwise land on it. The screen it
+              opens is where the real safeguards are. */}
+          <Pressable
+            onPress={() => { haptics.tap(); router.push('/delete-account'); }}
+            hitSlop={6}
+            style={styles.deleteAccountBtn}
+            accessibilityRole="button"
+            accessibilityLabel={t('more.deleteAccountA11y')}
+          >
+            <Text style={[styles.deleteAccountText, { color: colors.textMuted }]}>
+              {t('more.deleteAccount')}
+            </Text>
+          </Pressable>
+
           <Text style={[styles.version, { color: colors.textMuted }]}>{t('more.version')}</Text>
         </FadeInView>
 
@@ -839,5 +857,9 @@ const makeStyles = (c) => StyleSheet.create({
     gap: 10, borderRadius: radius.lg, borderWidth: 1.5, paddingVertical: 16,
   },
   signOutText: { fontSize: 15, fontFamily: FONT.bold },
+  /* Muted and unboxed — present, findable, and not competing with Sign out.
+     Still 44pt tall so it stays tappable for anyone who does want it. */
+  deleteAccountBtn: { minHeight: 44, alignItems: 'center', justifyContent: 'center', marginTop: space[2] },
+  deleteAccountText: { fontSize: 13, fontFamily: FONT.medium, textDecorationLine: 'underline' },
   version: { ...type.caption, textAlign: 'center', marginTop: space[1] },
 });

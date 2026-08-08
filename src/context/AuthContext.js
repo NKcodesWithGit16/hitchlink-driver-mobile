@@ -94,12 +94,21 @@ export function AuthProvider({ children }) {
     registerForPushNotifications(claims.userId);
   };
 
-  const signOut = async () => {
+  /**
+   * `skipRemote` is for the one caller whose account no longer exists: account
+   * deletion. Everything below is local except the push deregistration, and
+   * that call would 401 against a deleted account — which fails the token
+   * refresh, which fires the session-expired path, which greets the driver at
+   * the sign-in screen with "your dispatcher removed your access". A confusing
+   * accusation to hand someone who just closed their own account deliberately.
+   * That caller deregisters push itself, first, while the token still works.
+   */
+  const signOut = async ({ skipRemote = false } = {}) => {
     // Tear down device-level channels while the token still works: stop the
     // background GPS task and deactivate this device's push token so a
     // signed-out phone doesn't keep receiving the old driver's messages.
     await stopBackgroundTracking();
-    await unregisterPushNotifications(userId);
+    if (!skipRemote) await unregisterPushNotifications(userId);
     // Locally-scheduled reminders live on the device, not the server, so
     // deactivating the push token doesn't stop them — a signed-out phone would
     // otherwise keep announcing the previous driver's break and CDL expiry.

@@ -237,7 +237,39 @@ export const en = {
     signOutA11y: 'Sign out of HitchLink',
     signOutConfirmTitle: 'Sign out',
     signOutConfirmBody: 'Sign out of HitchLink?',
+    deleteAccount: 'Delete my account',
+    deleteAccountA11y: 'Delete my HitchLink account permanently',
     version: 'HitchLink Driver · v1.0.0',
+  },
+
+  deleteAccount: {
+    title: 'Delete account',
+    heading: 'Delete your account?',
+    intro: 'This closes your HitchLink account for good. You will be signed out and will not be able to sign in again.',
+
+    erasedTitle: 'What gets erased',
+    erasedName: 'Your name, phone number and email',
+    erasedPhoto: 'Your profile photo',
+    erasedDocs: 'Documents you uploaded, like your CDL and medical card',
+    erasedLocation: 'Your last known location',
+
+    keptTitle: 'What your carrier keeps',
+    keptLoads: 'Loads you already delivered stay in your carrier\'s records — they need them for pay, tax and audits. They will no longer show your name.',
+
+    activeLoadTitle: 'You have a load in progress',
+    activeLoadBody: 'Your dispatcher is expecting this delivery. Talk to them before you delete your account.',
+
+    understand: 'I understand this cannot be undone',
+    holdToDelete: 'Hold to delete',
+    holdingCancelled: 'Keep holding to delete',
+    deleting: 'Deleting your account…',
+
+    confirmTitle: 'Delete your account?',
+    confirmBody: 'This cannot be undone. Your account will be closed and your details erased.',
+    confirmCta: 'Delete for good',
+
+    failedTitle: 'Could not delete your account',
+    failedBody: 'Nothing was changed. Check your connection and try again.',
   },
 
   messages: {
