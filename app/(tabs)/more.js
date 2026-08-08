@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Switch, Image, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Switch, Image, Platform, Linking } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
@@ -22,6 +22,14 @@ import { computeStanding } from '../../src/lib/standing';
 import { space, type, radius, elevation, toneOf, FONT, shadow, ACCENT_PRESETS, BG_PRESETS_NIGHT } from '../../src/theme/tokens';
 import { TAB_BAR_CLEARANCE } from './_layout';
 import { useCallBannerInset } from '../../src/components/call/CallOverlay';
+
+// The support channels a driver can actually reach. The email is the same one
+// published in the web app's Terms and Privacy (companyInfo.js) — one address
+// everywhere, or the legal pages promise a mailbox the app never mentions.
+const SUPPORT_EMAIL = 'support@gethitchlink.com';
+// tel: wants no spaces. Country code included because a driver may be roaming.
+const SUPPORT_PHONE = '+995599084098';
+const SUPPORT_PHONE_DISPLAY = '+995 599 084 098';
 
 export default function MoreScreen() {
   const insets = useSafeAreaInsets();
@@ -61,7 +69,7 @@ export default function MoreScreen() {
     { icon: 'zap',            label: t('more.eld'),      sub: t('more.eldSub'),      tone: 'teal',
       onPress: () => Alert.alert(t('more.eldAlertTitle'), t('more.eldAlertBody')) },
     { icon: 'message-circle', label: t('more.support'),  sub: t('more.supportSub'),  tone: 'blue',
-      onPress: () => Alert.alert(t('more.support'), t('more.supportAlertBody')) },
+      onPress: () => contactSupport() },
     { icon: 'star',           label: t('more.feedback'), sub: t('more.feedbackSub'), tone: 'purple',
       onPress: () => Alert.alert(t('more.feedback'), t('more.feedbackAlertBody')) },
   ];
@@ -112,7 +120,7 @@ export default function MoreScreen() {
       title: t('more.groupSupport'),
       rows: [
         { icon: 'help-circle', label: t('more.helpCenter'),     tone: 'teal'   },
-        { icon: 'phone',       label: t('more.contactSupport'), tone: 'green',  meta: '1-800-HITCH' },
+        { icon: 'mail',        label: t('more.contactSupport'), tone: 'green',  meta: t('more.supportMeta'), key: 'support' },
         { icon: 'star',        label: t('more.rateApp'),        tone: 'orange' },
         { icon: 'shield',      label: t('more.termsPrivacy'),   tone: 'purple' },
       ],
@@ -142,7 +150,37 @@ export default function MoreScreen() {
     return h < 12 ? t('more.greetingMorning') : h < 18 ? t('more.greetingAfternoon') : t('more.greetingEvening');
   }, [t]);
 
+  // Email first, call second — deliberately. Support is a Georgian number and
+  // the drivers are not, so a tap on "Call" can be an international call at
+  // their expense. Email is free from anywhere and arrives with the version and
+  // account already filled in, which is most of what a support reply needs.
+  const contactSupport = () => {
+    const subject = `HitchLink Driver support`;
+    const body = [
+      '',
+      '',
+      '---',
+      `App version: ${Constants.expoConfig?.version ?? 'unknown'}`,
+      `Platform: ${Platform.OS}`,
+      userId ? `Account: ${userId}` : null,
+    ].filter(Boolean).join('\n');
+    const mailto = `mailto:${SUPPORT_EMAIL}`
+      + `?subject=${encodeURIComponent(subject)}`
+      + `&body=${encodeURIComponent(body)}`;
+
+    Alert.alert(
+      t('more.contactSupport'),
+      t('more.supportAlertBody', { email: SUPPORT_EMAIL, phone: SUPPORT_PHONE_DISPLAY }),
+      [
+        { text: t('more.supportEmailBtn'), onPress: () => Linking.openURL(mailto).catch(() => {}) },
+        { text: t('more.supportCallBtn'), onPress: () => Linking.openURL(`tel:${SUPPORT_PHONE}`).catch(() => {}) },
+        { text: t('common.cancel'), style: 'cancel' },
+      ],
+    );
+  };
+
   const onRow = (row) => {
+    if (row.key === 'support') { contactSupport(); return; }
     if (row.key === 'language') {
       Alert.alert(t('more.language'), undefined, [
         { text: t('more.languageEnglish'), onPress: () => setLang('en') },
